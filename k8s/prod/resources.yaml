@@ -1,34 +1,38 @@
 ---
-# API — Deployment (staging)
-apiVersion: apps/v1
-kind: Deployment
+# API — Argo Rollout com BlueGreen (prod)
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: catalogo
   annotations:
     secrets.infisical.com/auto-reload: "true"
 spec:
+  replicas: 2
+  revisionHistoryLimit: 3
   selector:
     matchLabels:
       app: catalogo
   strategy:
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
-  minReadySeconds: 5
+    blueGreen:
+      activeService: catalogo
+      previewService: catalogo-preview
+      autoPromotionEnabled: false
+      scaleDownDelaySeconds: 30
+      previewReplicaCount: 1
   template:
     metadata:
       labels:
         app: catalogo
       annotations:
-        sidecar.istio.io/proxyCPU: "50m"
-        sidecar.istio.io/proxyCPULimit: "500m"
-        sidecar.istio.io/proxyMemory: "256Mi"
-        sidecar.istio.io/proxyMemoryLimit: "512Mi"
+        sidecar.istio.io/proxyCPU: "100m"
+        sidecar.istio.io/proxyCPULimit: "1000m"
+        sidecar.istio.io/proxyMemory: "512Mi"
+        sidecar.istio.io/proxyMemoryLimit: "1Gi"
     spec:
       automountServiceAccountToken: false
       containers:
         - name: catalogo
-          image: ghcr.io/prefeitura-rio/app-catalogo:latest
+          image: ghcr.io/prefeitura-rio/app-catalogo:stable
           command: ["./api"]
           ports:
             - containerPort: 8080
@@ -48,12 +52,12 @@ spec:
                 name: catalogo-secrets
           resources:
             requests:
-              cpu: 250m
-              memory: 256Mi
+              cpu: 500m
+              memory: 512Mi
               ephemeral-storage: 100Mi
             limits:
-              cpu: 1000m
-              memory: 512Mi
+              cpu: 2000m
+              memory: 1Gi
           livenessProbe:
             httpGet:
               path: /health
@@ -75,7 +79,7 @@ spec:
       restartPolicy: Always
 
 ---
-# Worker (sync de fontes de dados) — Deployment (staging)
+# Worker (sync de fontes de dados) — Deployment (prod)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -98,27 +102,27 @@ spec:
       labels:
         app: catalogo-worker
       annotations:
-        sidecar.istio.io/proxyCPU: "25m"
-        sidecar.istio.io/proxyCPULimit: "200m"
-        sidecar.istio.io/proxyMemory: "128Mi"
-        sidecar.istio.io/proxyMemoryLimit: "256Mi"
+        sidecar.istio.io/proxyCPU: "50m"
+        sidecar.istio.io/proxyCPULimit: "500m"
+        sidecar.istio.io/proxyMemory: "256Mi"
+        sidecar.istio.io/proxyMemoryLimit: "512Mi"
     spec:
       automountServiceAccountToken: false
       containers:
         - name: catalogo-worker
-          image: ghcr.io/prefeitura-rio/app-catalogo:latest
+          image: ghcr.io/prefeitura-rio/app-catalogo:stable
           command: ["./worker"]
           envFrom:
             - secretRef:
                 name: catalogo-secrets
           resources:
             requests:
-              cpu: 100m
-              memory: 128Mi
+              cpu: 200m
+              memory: 256Mi
               ephemeral-storage: 50Mi
             limits:
-              cpu: 500m
-              memory: 256Mi
+              cpu: 1000m
+              memory: 512Mi
       restartPolicy: Always
 
 ---
@@ -144,20 +148,23 @@ spec:
       app: catalogo-worker
 
 ---
+# KEDA aponta para o Rollout (não para Deployment)
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
   name: catalogo-scaled-object
 spec:
   scaleTargetRef:
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout
     name: catalogo
-  minReplicaCount: 1
-  maxReplicaCount: 20
+  minReplicaCount: 2
+  maxReplicaCount: 30
   cooldownPeriod: 30
   pollingInterval: 10
   fallback:
     failureThreshold: 3
-    replicas: 1
+    replicas: 2
   advanced:
     horizontalPodAutoscalerConfig:
       behavior:
@@ -186,15 +193,31 @@ spec:
       metadata:
         serverAddress: http://prometheus.istio-system.svc.cluster.local:9090
         metricName: http_requests_total
-        threshold: "100"
+        threshold: "200"
         query: sum(rate(istio_requests_total{destination_workload="catalogo"}[30s]))
-        activationThreshold: "65"
+        activationThreshold: "150"
 
 ---
+# Service ativo (recebe tráfego real)
 apiVersion: v1
 kind: Service
 metadata:
   name: catalogo
+spec:
+  selector:
+    app: catalogo
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+
+---
+# Service de preview (nova versão antes da promoção)
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalogo-preview
 spec:
   selector:
     app: catalogo
