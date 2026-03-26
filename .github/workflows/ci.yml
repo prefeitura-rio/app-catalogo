@@ -1,10 +1,13 @@
 name: CI
 
 on:
-  push:
-    branches: [main, staging]
   pull_request:
     branches: [main, staging]
+
+# Cancela runs anteriores do mesmo PR/branch automaticamente
+concurrency:
+  group: ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -15,7 +18,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod   # lê a versão direto do go.mod (1.25.0)
+          go-version-file: go.mod
           cache: true
 
       - name: Build
