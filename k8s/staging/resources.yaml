@@ -1,20 +1,25 @@
 ---
-# API — Deployment (staging)
-apiVersion: apps/v1
-kind: Deployment
+# API — Argo Rollout com BlueGreen (staging)
+# Fluxo: novo deploy → preview pod → smoke tests via port-forward → promote ou abort
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
 metadata:
   name: catalogo
   annotations:
     secrets.infisical.com/auto-reload: "true"
 spec:
+  replicas: 1
+  revisionHistoryLimit: 3
   selector:
     matchLabels:
       app: catalogo
   strategy:
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
-  minReadySeconds: 5
+    blueGreen:
+      activeService: catalogo
+      previewService: catalogo-preview
+      autoPromotionEnabled: false   # promoção feita pelo CI após smoke tests
+      scaleDownDelaySeconds: 30
+      previewReplicaCount: 1
   template:
     metadata:
       labels:
@@ -61,7 +66,6 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 30
             timeoutSeconds: 5
-            successThreshold: 1
             failureThreshold: 3
           readinessProbe:
             httpGet:
@@ -70,12 +74,11 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 2
-            successThreshold: 1
             failureThreshold: 3
       restartPolicy: Always
 
 ---
-# Worker (sync de fontes de dados) — Deployment (staging)
+# Worker — Deployment simples (não precisa de blue-green)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -144,12 +147,15 @@ spec:
       app: catalogo-worker
 
 ---
+# KEDA aponta para o Rollout
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
   name: catalogo-scaled-object
 spec:
   scaleTargetRef:
+    apiVersion: argoproj.io/v1alpha1
+    kind: Rollout
     name: catalogo
   minReplicaCount: 1
   maxReplicaCount: 20
@@ -191,10 +197,26 @@ spec:
         activationThreshold: "65"
 
 ---
+# Service ativo (recebe tráfego real)
 apiVersion: v1
 kind: Service
 metadata:
   name: catalogo
+spec:
+  selector:
+    app: catalogo
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+
+---
+# Service de preview (nova versão antes dos smoke tests)
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalogo-preview
 spec:
   selector:
     app: catalogo

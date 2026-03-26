@@ -1,5 +1,45 @@
 ---
-# API — Argo Rollout com BlueGreen (prod)
+# AnalysisTemplate — verifica taxa de sucesso e latência durante o canary
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: catalogo-success-rate
+spec:
+  args:
+    - name: service-name
+  metrics:
+    - name: success-rate
+      interval: 30s
+      failureLimit: 2
+      successCondition: result[0] >= 0.98   # >= 98% de respostas 2xx/3xx
+      provider:
+        prometheus:
+          address: http://prometheus.istio-system.svc.cluster.local:9090
+          query: |
+            sum(rate(istio_requests_total{
+              destination_workload="{{args.service-name}}",
+              response_code!~"5.*"
+            }[1m])) /
+            sum(rate(istio_requests_total{
+              destination_workload="{{args.service-name}}"
+            }[1m]))
+
+    - name: p99-latency
+      interval: 30s
+      failureLimit: 2
+      successCondition: result[0] <= 0.5    # p99 <= 500ms
+      provider:
+        prometheus:
+          address: http://prometheus.istio-system.svc.cluster.local:9090
+          query: |
+            histogram_quantile(0.99, sum(rate(
+              istio_request_duration_milliseconds_bucket{
+                destination_workload="{{args.service-name}}"
+              }[1m]
+            )) by (le)) / 1000
+
+---
+# API — Argo Rollout com Canary + Istio traffic shifting (prod)
 apiVersion: argoproj.io/v1alpha1
 kind: Rollout
 metadata:
@@ -13,12 +53,33 @@ spec:
     matchLabels:
       app: catalogo
   strategy:
-    blueGreen:
-      activeService: catalogo
-      previewService: catalogo-preview
-      autoPromotionEnabled: false
-      scaleDownDelaySeconds: 30
-      previewReplicaCount: 1
+    canary:
+      canaryService: catalogo-canary
+      stableService: catalogo-stable
+      trafficRouting:
+        istio:
+          virtualService:
+            name: catalogo-vs
+          destinationRule:
+            name: catalogo-dr
+            canarySubsetName: canary
+            stableSubsetName: stable
+      analysis:
+        templates:
+          - templateName: catalogo-success-rate
+        args:
+          - name: service-name
+            value: catalogo
+      steps:
+        - setWeight: 10
+        - pause: {duration: 2m}
+        - setWeight: 25
+        - pause: {duration: 5m}
+        - setWeight: 50
+        - pause: {duration: 5m}
+        - setWeight: 75
+        - pause: {duration: 5m}
+        - setWeight: 100
   template:
     metadata:
       labels:
@@ -65,7 +126,6 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 30
             timeoutSeconds: 5
-            successThreshold: 1
             failureThreshold: 3
           readinessProbe:
             httpGet:
@@ -74,12 +134,11 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 2
-            successThreshold: 1
             failureThreshold: 3
       restartPolicy: Always
 
 ---
-# Worker (sync de fontes de dados) — Deployment (prod)
+# Worker — Deployment simples (não precisa de canary)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -126,6 +185,44 @@ spec:
       restartPolicy: Always
 
 ---
+# Istio VirtualService — controla o split de tráfego stable/canary
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: catalogo-vs
+spec:
+  hosts:
+    - catalogo
+  http:
+    - route:
+        - destination:
+            host: catalogo-stable
+            port:
+              number: 80
+          weight: 100
+        - destination:
+            host: catalogo-canary
+            port:
+              number: 80
+          weight: 0
+
+---
+# Istio DestinationRule — define os subsets stable e canary
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: catalogo-dr
+spec:
+  host: catalogo
+  subsets:
+    - name: stable
+      labels:
+        app: catalogo
+    - name: canary
+      labels:
+        app: catalogo
+
+---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -148,7 +245,7 @@ spec:
       app: catalogo-worker
 
 ---
-# KEDA aponta para o Rollout (não para Deployment)
+# KEDA aponta para o Rollout
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
@@ -198,11 +295,11 @@ spec:
         activationThreshold: "150"
 
 ---
-# Service ativo (recebe tráfego real)
+# Service stable (recebe tráfego principal)
 apiVersion: v1
 kind: Service
 metadata:
-  name: catalogo
+  name: catalogo-stable
 spec:
   selector:
     app: catalogo
@@ -213,11 +310,26 @@ spec:
   type: ClusterIP
 
 ---
-# Service de preview (nova versão antes da promoção)
+# Service canary (recebe fatia do tráfego durante o rollout)
 apiVersion: v1
 kind: Service
 metadata:
-  name: catalogo-preview
+  name: catalogo-canary
+spec:
+  selector:
+    app: catalogo
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+
+---
+# Service principal (entrada — aponta para o VirtualService)
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalogo
 spec:
   selector:
     app: catalogo
