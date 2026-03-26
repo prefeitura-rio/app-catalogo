@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]    # → :latest  (staging consome)
     tags: ["v*"]        # → :stable + :<version>  (prod consome)
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Tag/versão a buildar (ex: v0.1.0). Deixe vazio para usar o commit atual como :latest"
+        required: false
+        default: ""
 
 jobs:
   docker:
@@ -34,7 +40,19 @@ jobs:
           echo "COMMIT_URL=$COMMIT_URL"         >> $GITHUB_ENV
 
           # Tags da imagem
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          # workflow_dispatch com version preenchido → trata como release
+          MANUAL_VERSION="${{ github.event.inputs.version }}"
+
+          if [[ -n "$MANUAL_VERSION" ]]; then
+            VERSION="$MANUAL_VERSION"
+            VERSION_NO_V="${VERSION#v}"
+            RELEASE_URL="https://github.com/${{ github.repository }}/releases/tag/$VERSION"
+            echo "IS_RELEASE=true"              >> $GITHUB_ENV
+            echo "VERSION=$VERSION"             >> $GITHUB_ENV
+            echo "VERSION_NO_V=$VERSION_NO_V"   >> $GITHUB_ENV
+            echo "RELEASE_URL=$RELEASE_URL"     >> $GITHUB_ENV
+            echo "TAGS=$IMAGE_NAME:stable,$IMAGE_NAME:$VERSION,$IMAGE_NAME:$VERSION_NO_V" >> $GITHUB_ENV
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]] || [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "IS_RELEASE=false"             >> $GITHUB_ENV
             echo "TAGS=$IMAGE_NAME:latest"      >> $GITHUB_ENV
           else
