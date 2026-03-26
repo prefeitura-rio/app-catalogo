@@ -12,15 +12,24 @@ up:
 down:
     @docker-compose down
 
-# Run API server in dev mode
+# Run API + worker com hot reload (requer air)
 dev:
-    @just up
-    go run cmd/api/main.go
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just up
+    trap 'kill 0' EXIT
+    air -c .air.api.toml & air -c .air.worker.toml &
+    wait
 
-# Run worker in dev mode
+# Run só a API com hot reload
+dev-api:
+    @just up
+    air -c .air.api.toml
+
+# Run só o worker com hot reload
 dev-worker:
     @just up
-    go run cmd/worker/main.go
+    air -c .air.worker.toml
 
 # Run migrations
 migrate:

@@ -1,0 +1,25 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - misspell
+    - unconvert
+    - unparam
+
+linters-settings:
+  goimports:
+    local-prefixes: github.com/prefeitura-rio/app-catalogo
+
+issues:
+  exclude-rules:
+    # Testes podem ter erros não verificados
+    - path: _test\.go
+      linters: [errcheck]

@@ -1,0 +1,25 @@
+root = "."
+tmp_dir = "tmp/api"
+
+[build]
+  cmd = "go build -o tmp/api/main ./cmd/api"
+  bin = "tmp/api/main"
+  delay = 500
+  exclude_dir = ["tmp", "vendor", "docs", ".git"]
+  exclude_regex = ["_test\\.go$"]
+  include_ext = ["go", "toml", "env"]
+  kill_delay = "200ms"
+  send_interrupt = true
+
+[log]
+  level = "info"
+  time = false
+
+[color]
+  main = "yellow"
+  watcher = "cyan"
+  build = "green"
+  runner = "magenta"
+
+[misc]
+  clean_on_exit = true
