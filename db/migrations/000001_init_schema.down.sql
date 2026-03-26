@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS salesforce_sync_cursor;
+DROP TABLE IF EXISTS sync_events;
+DROP TABLE IF EXISTS demographic_clusters;
+DROP TABLE IF EXISTS citizen_profiles;
+DROP TABLE IF EXISTS catalog_items;
+DROP FUNCTION IF EXISTS update_updated_at;
+DROP TYPE IF EXISTS item_type;
+DROP TYPE IF EXISTS item_source;
+DROP EXTENSION IF EXISTS unaccent;
+DROP EXTENSION IF EXISTS pg_trgm;
+DROP EXTENSION IF EXISTS "uuid-ossp";

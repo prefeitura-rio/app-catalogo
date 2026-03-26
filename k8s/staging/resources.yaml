@@ -1,0 +1,130 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalogo
+  annotations:
+    secrets.infisical.com/auto-reload: "true"
+spec:
+  selector:
+    matchLabels:
+      app: catalogo
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: catalogo
+    spec:
+      containers:
+        - name: catalogo
+          image: ghcr.io/prefeitura-rio/app-catalogo:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TRACING_ENABLED
+              value: "true"
+            - name: TRACING_ENDPOINT
+              value: "signoz-otel-collector.signoz.svc.cluster.local:4317"
+            - name: TRACING_SERVICE_NAME
+              value: "app-catalogo"
+            - name: TRACING_SERVICE_VERSION
+              value: "v1.0.0"
+            - name: RUN_MIGRATIONS
+              value: "true"
+          envFrom:
+            - secretRef:
+                name: catalogo-secrets
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 30
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 30
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+      restartPolicy: Always
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: catalogo-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: catalogo
+
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: catalogo-scaled-object
+spec:
+  scaleTargetRef:
+    name: catalogo
+  minReplicaCount: 1
+  maxReplicaCount: 20
+  cooldownPeriod: 30
+  pollingInterval: 10
+  fallback:
+    failureThreshold: 3
+    replicas: 1
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 60
+          policies:
+            - type: Percent
+              value: 100
+              periodSeconds: 15
+            - type: Pods
+              value: 2
+              periodSeconds: 15
+          selectPolicy: Max
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Percent
+              value: 10
+              periodSeconds: 60
+            - type: Pods
+              value: 1
+              periodSeconds: 60
+          selectPolicy: Max
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus.istio-system.svc.cluster.local:9090
+        metricName: http_requests_total
+        threshold: "100"
+        query: sum(rate(istio_requests_total{destination_workload="catalogo"}[30s]))
+        activationThreshold: "65"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalogo
+spec:
+  selector:
+    app: catalogo
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP

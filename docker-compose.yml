@@ -1,0 +1,33 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: always
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: ${DB_USER:-catalogo}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-catalogo}
+      POSTGRES_DB: ${DB_NAME:-catalogo}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [backend]
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6380:6379"
+    networks: [backend]
+
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - "8083:8080"
+    networks: [backend]
+
+networks:
+  backend:
+
+volumes:
+  pgdata:

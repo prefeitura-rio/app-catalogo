@@ -1,0 +1,32 @@
+# Binários
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Output de testes
+*.test
+*.out
+coverage.out
+
+# Gerado
+docs/
+
+# Ambiente
+.env
+*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Air (hot reload)
+tmp/
