@@ -1,0 +1,1206 @@
+openapi: "3.1.0"
+
+info:
+  title: app-catalogo
+  description: |
+    Discovery layer unificada da Prefeitura do Rio de Janeiro.
+    Indexa serviços públicos (Carta de Serviços via SalesForce), cursos, vagas de emprego
+    e oportunidades MEI com busca full-text e recomendação personalizada por perfil de cidadão.
+
+    ## Autenticação
+
+    O Istio valida o JWT e injeta o header `X-Auth-Request-Token` (Bearer JWT).
+    O claim `preferred_username` no JWT contém o CPF do cidadão (apenas dígitos).
+
+    Rotas marcadas com `bearerAuth` requerem esse header.
+    Rotas marcadas com `adminAuth` requerem adicionalmente a role `admin` ou `go:admin`
+    no claim `resource_access.superapp.roles`.
+
+    ## Rate Limiting
+
+    Limite global de **300 requisições/minuto por IP**. Excedido, retorna `429`.
+
+    ## Headers de Resposta
+
+    Todas as respostas incluem `X-Request-ID` com um UUID único por requisição.
+  version: "1.0.0"
+  contact:
+    name: Prefeitura do Rio de Janeiro
+    url: https://github.com/prefeitura-rio/app-catalogo
+
+servers:
+  - url: https://api.example.com
+    description: Produção
+  - url: http://localhost:8080
+    description: Local
+
+tags:
+  - name: Busca
+    description: Busca no catálogo de serviços, cursos, vagas e MEI
+  - name: Recomendações
+    description: Recomendações personalizadas ou anônimas
+  - name: Catálogo
+    description: Detalhes de itens individuais do catálogo
+  - name: Admin
+    description: Operações administrativas de sincronização
+  - name: Infra
+    description: Health checks, métricas e webhooks
+
+security: []
+
+paths:
+
+  # ---------------------------------------------------------------------------
+  # BUSCA
+  # ---------------------------------------------------------------------------
+
+  /api/v1/search:
+    post:
+      tags: [Busca]
+      summary: Busca autenticada
+      description: |
+        Busca no catálogo com JWT. Atualmente usa o mesmo ranking FTS do endpoint público.
+        Futuramente receberá personalização por perfil do cidadão.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+            examples:
+              busca_simples:
+                summary: Busca simples por texto
+                value:
+                  q: "curso gratuito"
+                  page: 1
+                  per_page: 20
+              busca_filtrada:
+                summary: Busca com filtros
+                value:
+                  q: "empreendedorismo"
+                  types: ["course", "mei_opportunity"]
+                  filters:
+                    gratuito: true
+                    bairro: "Tijuca"
+                    turno: "noturno"
+                  page: 1
+                  per_page: 10
+      responses:
+        "200":
+          description: Resultados da busca
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/X-Request-ID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/public/search:
+    post:
+      tags: [Busca]
+      summary: Busca pública
+      description: |
+        Busca no catálogo sem autenticação. Ranking por relevância FTS
+        (`websearch_to_tsquery` + `ts_rank` com dicionário português).
+        Body vazio retorna todos os itens com paginação default.
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+            examples:
+              vazio:
+                summary: Sem filtros (lista todos)
+                value: {}
+              busca_vagas:
+                summary: Vagas de emprego PCD
+                value:
+                  q: "assistente administrativo"
+                  types: ["job"]
+                  filters:
+                    pcd: true
+                    modelo_trabalho: "hibrido"
+                  per_page: 20
+      responses:
+        "200":
+          description: Resultados da busca
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/X-Request-ID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
+  # RECOMENDAÇÕES
+  # ---------------------------------------------------------------------------
+
+  /api/v1/recommendations:
+    get:
+      tags: [Recomendações]
+      summary: Recomendações personalizadas
+      description: |
+        Recomendações baseadas no perfil do cidadão autenticado (escolaridade, renda,
+        localização, acessibilidade, faixa etária). O perfil é obtido do app-rmi
+        on-demand com refresh em background quando estale.
+
+        O campo `score_breakdown` detalha a contribuição de cada dimensão no score final.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/types"
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/context"
+      responses:
+        "200":
+          description: Recomendações personalizadas
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/X-Request-ID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationResponse"
+              examples:
+                personalizado:
+                  summary: Resposta com perfil encontrado
+                  value:
+                    personalized: true
+                    context: "homepage"
+                    items:
+                      - id: "550e8400-e29b-41d4-a716-446655440000"
+                        type: "service"
+                        source: "salesforce"
+                        title: "Bolsa Família"
+                        short_desc: "Transferência de renda para famílias em vulnerabilidade"
+                        organization: "Secretaria de Assistência Social"
+                        url: "https://prefeitura.rio/bolsa-familia"
+                        modalidade: "presencial"
+                        bairros: ["Centro", "Tijuca"]
+                        tags: ["assistência", "renda"]
+                        score: 0.82
+                        score_breakdown:
+                          escolaridade: 0.17
+                          renda: 0.20
+                          localizacao: 0.20
+                          acessibilidade: 0.15
+                          faixa_etaria: 0.08
+                          tipo: 0.02
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/public/recommendations:
+    get:
+      tags: [Recomendações]
+      summary: Recomendações anônimas
+      description: |
+        Recomendações sem autenticação. Usa scoring com valores neutros.
+        O parâmetro `cluster_hint` aceita bairro ou faixa etária para
+        leve personalização sem identificação do cidadão.
+
+        `personalized` é sempre `false` neste endpoint.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/types"
+        - $ref: "#/components/parameters/limit"
+        - $ref: "#/components/parameters/context"
+        - name: cluster_hint
+          in: query
+          required: false
+          schema:
+            type: string
+            examples:
+              - "Tijuca"
+              - "25-34"
+          description: Bairro ou faixa etária para personalização anônima
+      responses:
+        "200":
+          description: Recomendações anônimas
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/X-Request-ID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationResponse"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  # ---------------------------------------------------------------------------
+  # CATÁLOGO
+  # ---------------------------------------------------------------------------
+
+  /api/v1/catalog/{id}:
+    get:
+      tags: [Catálogo]
+      summary: Detalhe de item (autenticado)
+      description: Retorna todos os campos de um item do catálogo, incluindo `source_data` original.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/catalogId"
+      responses:
+        "200":
+          $ref: "#/components/responses/CatalogItemResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/public/catalog/{id}:
+    get:
+      tags: [Catálogo]
+      summary: Detalhe de item (público)
+      description: Retorna todos os campos de um item do catálogo sem autenticação.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/catalogId"
+      responses:
+        "200":
+          $ref: "#/components/responses/CatalogItemResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  # ---------------------------------------------------------------------------
+  # ADMIN
+  # ---------------------------------------------------------------------------
+
+  /api/v1/admin/sync/status:
+    get:
+      tags: [Admin]
+      summary: Status dos datasources
+      description: Retorna o último evento de sincronização por fonte de dados.
+      security:
+        - adminAuth: []
+      responses:
+        "200":
+          description: Status de sincronização de todas as fontes
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/X-Request-ID"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  syncs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SyncStatus"
+              examples:
+                status_misto:
+                  value:
+                    syncs:
+                      - source: "salesforce"
+                        last_event_type: "delta_sync"
+                        last_status: "completed"
+                        last_started_at: "2026-04-08T09:00:00Z"
+                        last_completed_at: "2026-04-08T09:00:45Z"
+                        items_processed: 312
+                        items_failed: 0
+                      - source: "app-go-api"
+                        last_event_type: "full_sync"
+                        last_status: "failed"
+                        last_started_at: "2026-04-08T08:30:00Z"
+                        items_processed: 0
+                        items_failed: 1
+                        error_message: "connection timeout"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/admin/sync/trigger:
+    post:
+      tags: [Admin]
+      summary: Dispara sincronização manual
+      description: |
+        Dispara uma sincronização ad-hoc em background e retorna imediatamente.
+        Se `source` for omitido, sincroniza todas as fontes.
+        Fontes inválidas são ignoradas silenciosamente (sem erro na resposta).
+      security:
+        - adminAuth: []
+      parameters:
+        - name: source
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["salesforce", "app-go-api"]
+          description: Nome da fonte. Omitir para sincronizar todas.
+      responses:
+        "202":
+          description: Sincronização disparada
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/X-Request-ID"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["triggered"]
+                  source:
+                    type: string
+                    description: Fonte disparada. String vazia = todas as fontes.
+              examples:
+                fonte_especifica:
+                  value:
+                    status: "triggered"
+                    source: "salesforce"
+                todas:
+                  value:
+                    status: "triggered"
+                    source: ""
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  # ---------------------------------------------------------------------------
+  # INFRA
+  # ---------------------------------------------------------------------------
+
+  /health:
+    get:
+      tags: [Infra]
+      summary: Liveness probe
+      description: Sempre retorna 200. Usado pelo Kubernetes para liveness check.
+      security: []
+      responses:
+        "200":
+          description: Serviço ativo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["ok"]
+              example:
+                status: "ok"
+
+  /ready:
+    get:
+      tags: [Infra]
+      summary: Readiness probe
+      description: Verifica conectividade com o banco de dados. Usado pelo Kubernetes para readiness check.
+      security: []
+      responses:
+        "200":
+          description: Serviço pronto
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["ready"]
+              example:
+                status: "ready"
+        "503":
+          description: Banco de dados indisponível
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["not ready"]
+                  error:
+                    type: string
+              example:
+                status: "not ready"
+                error: "banco de dados indisponível"
+
+  /metrics:
+    get:
+      tags: [Infra]
+      summary: Métricas Prometheus
+      description: Endpoint de métricas no formato Prometheus text exposition.
+      security: []
+      responses:
+        "200":
+          description: Métricas no formato Prometheus
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /api/webhooks/salesforce:
+    post:
+      tags: [Infra]
+      summary: Webhook SalesForce
+      description: |
+        Recebe notificações de criação/atualização de registros da Carta de Serviços.
+        A assinatura HMAC-SHA256 do body deve ser enviada no header `X-Salesforce-Signature` (hex).
+        Quando o `SALESFORCE_WEBHOOK_SECRET` não está configurado, a validação é ignorada.
+      security: []
+      parameters:
+        - name: X-Salesforce-Signature
+          in: header
+          required: false
+          schema:
+            type: string
+            pattern: "^[0-9a-f]{64}$"
+          description: HMAC-SHA256 do body em hexadecimal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SalesForceWebhookPayload"
+            example:
+              event:
+                type: "created"
+                created: "2026-04-08T10:00:00Z"
+              sobject:
+                Id: "a001Q000003ABCDE"
+                type: "Servico__c"
+      responses:
+        "200":
+          description: Webhook processado ou ignorado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: ["queued", "ignored"]
+              examples:
+                enfileirado:
+                  value:
+                    status: "queued"
+                ignorado:
+                  summary: sobject.Id vazio
+                  value:
+                    status: "ignored"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          description: Assinatura HMAC inválida
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              example:
+                error: "assinatura inválida"
+
+# =============================================================================
+# COMPONENTS
+# =============================================================================
+
+components:
+
+  # ---------------------------------------------------------------------------
+  # Security Schemes
+  # ---------------------------------------------------------------------------
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT injetado pelo Istio via header `X-Auth-Request-Token`.
+        O claim `preferred_username` deve conter o CPF do cidadão (apenas dígitos).
+    adminAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Mesmo JWT do `bearerAuth`, mas o claim `resource_access.superapp.roles`
+        deve conter `"admin"` ou `"go:admin"`.
+
+  # ---------------------------------------------------------------------------
+  # Parameters
+  # ---------------------------------------------------------------------------
+
+  parameters:
+    catalogId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: UUID v4 do item do catálogo
+
+    types:
+      name: types
+      in: query
+      required: false
+      schema:
+        type: array
+        items:
+          $ref: "#/components/schemas/ItemType"
+      style: form
+      explode: true
+      description: Filtro por tipo de item. Múltiplos valores aceitos.
+
+    limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 50
+        default: 10
+      description: Número de recomendações. Máximo 50.
+
+    context:
+      name: context
+      in: query
+      required: false
+      schema:
+        $ref: "#/components/schemas/RecommendationContext"
+      description: Contexto de uso das recomendações
+
+  # ---------------------------------------------------------------------------
+  # Headers
+  # ---------------------------------------------------------------------------
+
+  headers:
+    X-Request-ID:
+      schema:
+        type: string
+        format: uuid
+      description: UUID único da requisição para rastreabilidade
+
+  # ---------------------------------------------------------------------------
+  # Responses reutilizáveis
+  # ---------------------------------------------------------------------------
+
+  responses:
+    BadRequest:
+      description: Parâmetro ou payload inválido
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "ID inválido"
+
+    Unauthorized:
+      description: Token ausente ou inválido
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "autenticação necessária"
+
+    Forbidden:
+      description: Token válido, mas sem permissão de admin
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "acesso negado"
+
+    NotFound:
+      description: Item não encontrado
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "item não encontrado"
+
+    TooManyRequests:
+      description: Limite de 300 req/min por IP excedido
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    InternalError:
+      description: Erro interno do servidor
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    CatalogItemResponse:
+      description: Detalhe completo de um item do catálogo
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/CatalogItem"
+          example:
+            id: "550e8400-e29b-41d4-a716-446655440000"
+            external_id: "a001Q000003ABCDE"
+            source: "salesforce"
+            type: "service"
+            title: "Bolsa Família"
+            description: "Programa de transferência direta de renda para famílias em situação de pobreza."
+            short_desc: "Transferência de renda para famílias em vulnerabilidade"
+            organization: "Secretaria Municipal de Assistência Social"
+            url: "https://prefeitura.rio/bolsa-familia"
+            image_url: "https://cdn.prefeitura.rio/img/bolsa-familia.jpg"
+            target_audience:
+              escolaridade: []
+              renda: "ate-1-salario"
+              deficiencia: []
+              faixa_etaria: ["25-34", "35-44"]
+              genero: []
+            bairros: ["Centro", "Tijuca", "Madureira"]
+            modalidade: "presencial"
+            status: "active"
+            tags: ["assistência social", "renda", "família"]
+            valid_from: "2026-01-01T00:00:00Z"
+            valid_until: null
+            source_updated_at: "2026-04-07T18:00:00Z"
+            created_at: "2026-01-15T10:00:00Z"
+            updated_at: "2026-04-07T18:00:00Z"
+
+  # ---------------------------------------------------------------------------
+  # Schemas
+  # ---------------------------------------------------------------------------
+
+  schemas:
+
+    # --- Enums ---
+
+    ItemType:
+      type: string
+      enum:
+        - service
+        - course
+        - job
+        - mei_opportunity
+      description: |
+        - `service`: Serviço público da Carta de Serviços (SalesForce)
+        - `course`: Curso de capacitação (app-go-api)
+        - `job`: Vaga de emprego (app-go-api)
+        - `mei_opportunity`: Oportunidade para MEI (app-go-api)
+
+    ItemSource:
+      type: string
+      enum:
+        - salesforce
+        - courses
+        - jobs
+        - mei
+        - app-go-api
+      description: |
+        Fonte de origem do item:
+        - `salesforce`: Carta de Serviços
+        - `courses`: Cursos do app-go-api
+        - `jobs`: Vagas do app-go-api
+        - `mei`: MEI do app-go-api
+        - `app-go-api`: fonte genérica do app-go-api (não atribuída a tipo específico)
+
+    ItemStatus:
+      type: string
+      enum:
+        - active
+        - inactive
+        - draft
+
+    RecommendationContext:
+      type: string
+      enum:
+        - homepage
+        - after_search
+        - profile
+      default: homepage
+      description: |
+        Contexto de uso que influencia o scoring:
+        - `homepage`: página inicial
+        - `after_search`: após uma busca
+        - `profile`: página de perfil do cidadão
+
+    SyncEventType:
+      type: string
+      enum:
+        - full_sync
+        - delta_sync
+        - webhook
+
+    SyncEventStatus:
+      type: string
+      enum:
+        - started
+        - completed
+        - failed
+
+    # --- Erro ---
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Mensagem de erro em português
+
+    # --- Busca ---
+
+    SearchRequest:
+      type: object
+      properties:
+        q:
+          type: string
+          description: |
+            Texto livre para busca. Suporta sintaxe `websearch_to_tsquery` do PostgreSQL
+            (aspas para frase exata, `-` para exclusão, `OR` para alternativas).
+          examples:
+            - "curso gratuito"
+            - '"assistente social" OR enfermeiro'
+            - "emprego -estagio"
+        types:
+          type: array
+          items:
+            $ref: "#/components/schemas/ItemType"
+          description: Filtro por tipo. Vazio = todos os tipos.
+        filters:
+          $ref: "#/components/schemas/SearchFilters"
+        page:
+          type: integer
+          minimum: 1
+          default: 1
+          description: Página de resultados. Valores < 1 são normalizados para 1.
+        per_page:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 10
+          description: Itens por página. Valores fora do intervalo [1,100] são normalizados para 10.
+
+    SearchFilters:
+      type: object
+      description: Filtros opcionais. Campos não informados são ignorados.
+      properties:
+        modalidade:
+          type: string
+          description: Modalidade de atendimento/oferta (ex. `presencial`, `online`, `híbrido`)
+        bairro:
+          type: string
+          description: Bairro do Rio de Janeiro
+        orgao:
+          type: string
+          description: Órgão/secretaria responsável
+
+        # Cursos
+        gratuito:
+          type: boolean
+          description: "[course] Apenas cursos gratuitos"
+        turno:
+          type: string
+          description: "[course] Turno das aulas (ex. `matutino`, `vespertino`, `noturno`)"
+
+        # Vagas
+        regime_contratacao:
+          type: string
+          description: "[job] Regime de contratação (ex. `CLT`, `PJ`, `temporário`)"
+        modelo_trabalho:
+          type: string
+          description: "[job] Modelo de trabalho (ex. `presencial`, `remoto`, `hibrido`)"
+        pcd:
+          type: boolean
+          description: "[job] Apenas vagas exclusivas para PCD"
+        faixa_salarial:
+          type: string
+          description: "[job] Faixa salarial (ex. `ate-2sm`, `2-4sm`, `acima-4sm`)"
+
+        # Serviços (Carta de Serviços)
+        canal_atendimento:
+          type: string
+          description: "[service] Canal de atendimento (ex. `presencial`, `digital`, `telefone`)"
+        tema:
+          type: string
+          description: "[service] Tema do serviço (ex. `saúde`, `educação`, `habitação`)"
+
+        # MEI
+        segmento:
+          type: string
+          description: "[mei_opportunity] Segmento do negócio"
+
+    SearchResponse:
+      type: object
+      required: [total, page, per_page, items]
+      properties:
+        total:
+          type: integer
+          description: Total de itens encontrados (sem paginação)
+        page:
+          type: integer
+          description: Página atual
+        per_page:
+          type: integer
+          description: Itens por página
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchItem"
+
+    SearchItem:
+      type: object
+      required: [id, type, source, title, relevance_score]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUID do item no catálogo
+        type:
+          $ref: "#/components/schemas/ItemType"
+        source:
+          $ref: "#/components/schemas/ItemSource"
+        title:
+          type: string
+        short_desc:
+          type: string
+          description: Descrição curta do item
+        organization:
+          type: string
+          description: Órgão/secretaria/empresa responsável
+        url:
+          type: string
+          format: uri
+          description: URL de acesso ao serviço/curso/vaga
+        image_url:
+          type: string
+          format: uri
+          description: URL da imagem ilustrativa
+        modalidade:
+          type: string
+        bairros:
+          type: array
+          items:
+            type: string
+          description: Bairros atendidos ou onde ocorre
+        tags:
+          type: array
+          items:
+            type: string
+        relevance_score:
+          type: number
+          format: float
+          description: Score de relevância FTS (ts_rank). Maior = mais relevante.
+        highlights:
+          type: array
+          items:
+            type: string
+          description: |
+            Trechos do texto com o termo buscado destacado via `ts_headline`.
+            Os matches aparecem entre tags `<mark>...</mark>`.
+          examples:
+            - ["Curso de <mark>empreendedorismo</mark> para iniciantes"]
+        metadata:
+          description: |
+            Payload original da fonte de dados (`source_data`), schema livre.
+            O conteúdo varia por `source` e `type`.
+          examples:
+            - carga_horaria: 40
+              inscricoes_abertas: true
+
+    # --- Recomendações ---
+
+    RecommendationResponse:
+      type: object
+      required: [items, context, personalized]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RankedItem"
+        context:
+          $ref: "#/components/schemas/RecommendationContext"
+        personalized:
+          type: boolean
+          description: |
+            `true` quando o perfil do cidadão foi encontrado e usado no scoring.
+            `false` quando o perfil não existe ou no endpoint público.
+
+    RankedItem:
+      type: object
+      required: [id, type, source, title, score]
+      properties:
+        id:
+          type: string
+          format: uuid
+        type:
+          $ref: "#/components/schemas/ItemType"
+        source:
+          $ref: "#/components/schemas/ItemSource"
+        title:
+          type: string
+        short_desc:
+          type: string
+        organization:
+          type: string
+        url:
+          type: string
+          format: uri
+        image_url:
+          type: string
+          format: uri
+        modalidade:
+          type: string
+        bairros:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+        score:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          description: Score total de relevância/personalização, normalizado entre 0 e 1.
+        score_breakdown:
+          type: object
+          description: |
+            Contribuição de cada dimensão ao score total.
+            Útil para debug e explicabilidade da recomendação.
+          properties:
+            escolaridade:
+              type: number
+              format: float
+              description: "Peso: 0,25"
+            renda:
+              type: number
+              format: float
+              description: "Peso: 0,20"
+            localizacao:
+              type: number
+              format: float
+              description: "Peso: 0,20"
+            acessibilidade:
+              type: number
+              format: float
+              description: "Peso: 0,15 — considera PCD e necessidades especiais"
+            faixa_etaria:
+              type: number
+              format: float
+              description: "Peso: 0,10"
+            tipo:
+              type: number
+              format: float
+              description: "Peso: 0,10 — afinidade entre tipo do item e contexto da requisição"
+
+    # --- Catálogo ---
+
+    CatalogItem:
+      type: object
+      required: [id, external_id, source, type, title, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        external_id:
+          type: string
+          description: ID na fonte de origem (SalesForce ID, ID do app-go-api, etc.)
+        source:
+          $ref: "#/components/schemas/ItemSource"
+        type:
+          $ref: "#/components/schemas/ItemType"
+        title:
+          type: string
+        description:
+          type: string
+          description: Descrição completa
+        short_desc:
+          type: string
+          description: Descrição curta (máx. ~300 chars)
+        organization:
+          type: string
+        url:
+          type: string
+          format: uri
+        image_url:
+          type: string
+          format: uri
+        target_audience:
+          $ref: "#/components/schemas/TargetAudienceData"
+        bairros:
+          type: array
+          items:
+            type: string
+        modalidade:
+          type: string
+        status:
+          $ref: "#/components/schemas/ItemStatus"
+        tags:
+          type: array
+          items:
+            type: string
+        source_data:
+          description: |
+            Payload completo original da fonte de dados, sem transformação.
+            Schema livre — varia por `source` e `type`.
+        valid_from:
+          type: string
+          format: date-time
+          nullable: true
+          description: Início da vigência (RFC 3339)
+        valid_until:
+          type: string
+          format: date-time
+          nullable: true
+          description: Fim da vigência (RFC 3339). Null = sem prazo.
+        source_updated_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Última atualização registrada na fonte de dados
+        created_at:
+          type: string
+          format: date-time
+          description: Data de indexação no catálogo (RFC 3339)
+        updated_at:
+          type: string
+          format: date-time
+          description: Última atualização no catálogo (RFC 3339)
+
+    TargetAudienceData:
+      type: object
+      description: Público-alvo do item. Campos vazios = sem restrição para aquela dimensão.
+      properties:
+        escolaridade:
+          type: array
+          items:
+            type: string
+          description: Ex. `["fundamental", "medio", "superior"]`
+        renda:
+          type: string
+          description: Faixa de renda familiar. Ex. `"ate-1-salario"`, `"1-3-salarios"`
+        deficiencia:
+          type: array
+          items:
+            type: string
+          description: Tipos de deficiência atendidos. Ex. `["fisica", "visual"]`
+        etnia:
+          type: array
+          items:
+            type: string
+        faixa_etaria:
+          type: array
+          items:
+            type: string
+          description: Ex. `["menor-18", "18-24", "25-34", "35-44", "45-59", "60+"]`
+        genero:
+          type: array
+          items:
+            type: string
+
+    # --- Admin ---
+
+    SyncStatus:
+      type: object
+      required: [source, last_event_type, last_status, last_started_at, items_processed, items_failed]
+      properties:
+        source:
+          $ref: "#/components/schemas/ItemSource"
+        last_event_type:
+          $ref: "#/components/schemas/SyncEventType"
+        last_status:
+          $ref: "#/components/schemas/SyncEventStatus"
+        last_started_at:
+          type: string
+          format: date-time
+        last_completed_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Null se a sincronização ainda não terminou ou falhou antes de completar
+        items_processed:
+          type: integer
+          minimum: 0
+        items_failed:
+          type: integer
+          minimum: 0
+        error_message:
+          type: string
+          description: Mensagem de erro. Presente apenas quando `last_status = failed`.
+
+    # --- Webhook ---
+
+    SalesForceWebhookPayload:
+      type: object
+      required: [event, sobject]
+      properties:
+        event:
+          type: object
+          required: [type, created]
+          properties:
+            type:
+              type: string
+              description: Tipo do evento (ex. `created`, `updated`, `deleted`)
+            created:
+              type: string
+              format: date-time
+              description: Timestamp do evento no SalesForce
+        sobject:
+          type: object
+          required: [Id, type]
+          properties:
+            Id:
+              type: string
+              description: SalesForce Record ID. Vazio = evento ignorado.
+            type:
+              type: string
+              description: Tipo do objeto SalesForce (ex. `Servico__c`)
