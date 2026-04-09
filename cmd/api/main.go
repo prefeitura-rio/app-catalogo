@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/pressly/goose/v3"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
@@ -59,6 +62,20 @@ func main() {
 				log.Error().Err(err).Msg("erro ao encerrar tracer")
 			}
 		}()
+	}
+
+	if cfg.Migrations.Run {
+		log.Info().Msg("executando migrations...")
+		sqlDB, err := sql.Open("pgx", cfg.Database.DSN())
+		if err != nil {
+			log.Fatal().Err(err).Msg("falha ao abrir conexão para migrations")
+		}
+		goose.SetDialect("postgres")
+		if err := goose.RunContext(ctx, "up", sqlDB, "db/migrations"); err != nil {
+			log.Fatal().Err(err).Msg("falha ao executar migrations")
+		}
+		sqlDB.Close()
+		log.Info().Msg("migrations concluídas")
 	}
 
 	if err := db.Connect(ctx, db.PoolConfig{
