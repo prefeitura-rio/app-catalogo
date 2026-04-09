@@ -88,6 +88,23 @@ func main() {
 		log.Warn().Msg("worker: app-go-api não configurado ou desabilitado, fonte ignorada")
 	}
 
+	// Typesense — Carta de Serviços (temporário, até migração para SalesForce)
+	if cfg.Typesense.URL != "" && cfg.Typesense.APIKey != "" && cfg.Typesense.SyncEnabled {
+		tsClient := clients.NewTypesenseClient(
+			cfg.Typesense.URL,
+			cfg.Typesense.APIKey,
+			cfg.Typesense.Collection,
+		)
+		manager.Register(datasource.NewTypesenseDataSource(
+			tsClient,
+			itemRepo,
+			cfg.Typesense.BaseServiceURL,
+			cfg.Typesense.SyncInterval,
+		))
+	} else {
+		log.Warn().Msg("worker: Typesense não configurado ou desabilitado, fonte ignorada")
+	}
+
 	// -------------------------------------------------------------------------
 	// Iniciar todos os workers
 	// -------------------------------------------------------------------------

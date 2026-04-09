@@ -17,6 +17,7 @@ const (
 	SourceJobs       ItemSource = "jobs"
 	SourceMEI        ItemSource = "mei"
 	SourceAppGoAPI   ItemSource = "app-go-api" // fonte composta: courses + jobs + mei
+	SourceTypesense  ItemSource = "typesense"  // temporário: Carta de Serviços até migração para SalesForce
 
 	TypeService        ItemType = "service"
 	TypeCourse         ItemType = "course"

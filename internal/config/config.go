@@ -28,6 +28,7 @@ type AppConfig struct {
 	CPFHashSalt  string
 	Swagger      SwaggerSettings
 	Heimdall     HeimdallSettings
+	Typesense    TypesenseSettings
 }
 
 type AppSettings struct {
@@ -157,6 +158,15 @@ type HeimdallSettings struct {
 	BaseURL string
 }
 
+type TypesenseSettings struct {
+	URL            string
+	APIKey         string
+	Collection     string
+	BaseServiceURL string
+	SyncInterval   time.Duration
+	SyncEnabled    bool
+}
+
 var (
 	instance *AppConfig
 	once     sync.Once
@@ -265,6 +275,14 @@ func Load() (*AppConfig, error) {
 		},
 		Heimdall: HeimdallSettings{
 			BaseURL: getEnv(v, "HEIMDALL_BASE_URL", ""),
+		},
+		Typesense: TypesenseSettings{
+			URL:            getEnv(v, "TYPESENSE_URL", ""),
+			APIKey:         getEnv(v, "TYPESENSE_API_KEY", ""),
+			Collection:     getEnv(v, "TYPESENSE_COLLECTION", "prefrio_services_base"),
+			BaseServiceURL: getEnv(v, "TYPESENSE_BASE_SERVICE_URL", "https://prefeitura.rio"),
+			SyncInterval:   getDuration(v, "TYPESENSE_SYNC_INTERVAL", 30*time.Minute),
+			SyncEnabled:    getBool(v, "TYPESENSE_SYNC_ENABLED", true),
 		},
 	}
 
