@@ -34,7 +34,7 @@ spec:
       containers:
         - name: catalogo
           image: ghcr.io/prefeitura-rio/app-catalogo:latest
-          command: ["./api"]
+          command: ["/docker-entrypoint.sh", "./api"]
           ports:
             - containerPort: 8080
           env:
