@@ -40,19 +40,33 @@ type Course struct {
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
+// flexString aceita string ou qualquer outro tipo JSON (objeto, null, número).
+// Quando o valor não é uma string, usa string vazia.
+type flexString string
+
+func (s *flexString) UnmarshalJSON(b []byte) error {
+	var str string
+	if err := json.Unmarshal(b, &str); err == nil {
+		*s = flexString(str)
+		return nil
+	}
+	*s = ""
+	return nil
+}
+
 // Job representa uma vaga de emprego do app-go-api.
 type Job struct {
-	ID                string    `json:"id"`
-	Title             string    `json:"title"`
-	Description       string    `json:"description"`
-	Company           string    `json:"company"`
-	Bairro            string    `json:"bairro"`
-	RegimeContratacao string    `json:"regime_contratacao"`
-	ModeloTrabalho    string    `json:"modelo_trabalho"`
-	FaixaSalarial     string    `json:"faixa_salarial"`
-	PCD               bool      `json:"pcd"`
-	URL               string    `json:"url"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                string     `json:"id"`
+	Title             string     `json:"title"`
+	Description       string     `json:"description"`
+	Company           string     `json:"company"`
+	Bairro            flexString `json:"bairro"`
+	RegimeContratacao flexString `json:"regime_contratacao"`
+	ModeloTrabalho    flexString `json:"modelo_trabalho"`
+	FaixaSalarial     flexString `json:"faixa_salarial"`
+	PCD               bool       `json:"pcd"`
+	URL               string     `json:"url"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 // MEIOpportunity representa uma oportunidade MEI.

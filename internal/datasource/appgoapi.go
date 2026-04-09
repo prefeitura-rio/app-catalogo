@@ -159,11 +159,15 @@ func mapJob(j clients.Job) *models.CatalogItem {
 	now := j.UpdatedAt
 	bairros := []string{}
 	if j.Bairro != "" {
-		bairros = append(bairros, j.Bairro)
+		bairros = append(bairros, string(j.Bairro))
 	}
 	targetAudience, _ := json.Marshal(map[string]interface{}{
 		"pcd": j.PCD,
 	})
+	tags := []string{}
+	if j.RegimeContratacao != "" {
+		tags = append(tags, string(j.RegimeContratacao))
+	}
 	return &models.CatalogItem{
 		ExternalID:      j.ID,
 		Source:          models.SourceJobs,
@@ -172,10 +176,10 @@ func mapJob(j clients.Job) *models.CatalogItem {
 		Description:     j.Description,
 		Organization:    j.Company,
 		URL:             j.URL,
-		Modalidade:      j.ModeloTrabalho,
+		Modalidade:      string(j.ModeloTrabalho),
 		Bairros:         bairros,
 		Status:          models.StatusActive,
-		Tags:            []string{j.RegimeContratacao},
+		Tags:            tags,
 		TargetAudience:  targetAudience,
 		SourceData:      sourceData,
 		SourceUpdatedAt: &now,
