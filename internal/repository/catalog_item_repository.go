@@ -183,6 +183,83 @@ func (r *CatalogItemRepository) UpsertBatch(ctx context.Context, items []*models
 	return count, tx.Commit(ctx)
 }
 
+// GetItemsWithoutEmbedding retorna itens ativos sem embedding para backfill.
+func (r *CatalogItemRepository) GetItemsWithoutEmbedding(ctx context.Context, limit int) ([]*models.CatalogItem, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id, external_id, source, type, title, description, short_desc,
+			organization, url, image_url, target_audience, bairros,
+			modalidade, status, tags, source_data,
+			valid_from, valid_until, source_updated_at, created_at, updated_at
+		FROM catalog_items
+		WHERE embedding IS NULL
+		  AND deleted_at IS NULL
+		  AND status = 'active'
+		ORDER BY updated_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*models.CatalogItem
+	for rows.Next() {
+		item, err := scanCatalogItemFromRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// UpdateEmbedding salva o embedding de um item.
+func (r *CatalogItemRepository) UpdateEmbedding(ctx context.Context, id string, vectorLiteral string) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE catalog_items SET embedding = $2::vector WHERE id = $1::uuid`,
+		id, vectorLiteral,
+	)
+	return err
+}
+
+// GetJourneyBoosts retorna um mapa de item_id → boost para itens que são vizinhos
+// de jornada dos itemIDs fornecidos. O boost é `weight * 0.20`.
+func (r *CatalogItemRepository) GetJourneyBoosts(ctx context.Context, fromItemIDs []string) (map[string]float64, error) {
+	if len(fromItemIDs) == 0 {
+		return map[string]float64{}, nil
+	}
+
+	rows, err := r.db.Query(ctx, `
+		SELECT ci.id::text, MAX(j.weight) * 0.20 AS boost
+		FROM catalog_item_journeys j
+		JOIN catalog_items from_ci
+			ON from_ci.external_id = j.from_external_id
+			AND from_ci.source::text = j.from_source
+		JOIN catalog_items ci
+			ON ci.external_id = j.to_external_id
+			AND ci.source::text = j.to_source
+		WHERE from_ci.id::text = ANY($1)
+		  AND ci.deleted_at IS NULL
+		  AND ci.status = 'active'
+		GROUP BY ci.id
+	`, fromItemIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	boosts := make(map[string]float64)
+	for rows.Next() {
+		var id string
+		var boost float64
+		if err := rows.Scan(&id, &boost); err != nil {
+			return nil, err
+		}
+		boosts[id] = boost
+	}
+	return boosts, rows.Err()
+}
+
 // SoftDelete marca um item como deletado.
 func (r *CatalogItemRepository) SoftDelete(ctx context.Context, source models.ItemSource, externalID string) error {
 	_, err := r.db.Exec(ctx,

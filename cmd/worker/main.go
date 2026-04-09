@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -103,6 +104,36 @@ func main() {
 		))
 	} else {
 		log.Warn().Msg("worker: Typesense não configurado ou desabilitado, fonte ignorada")
+	}
+
+	// Embedding backfill — gera vetores semânticos para itens sem embedding
+	if cfg.Gemini.APIKey != "" {
+		geminiClient, err := clients.NewGeminiEmbeddingClient(ctx, cfg.Gemini.APIKey)
+		if err != nil {
+			log.Warn().Err(err).Msg("worker: Gemini indisponível — backfill de embeddings desativado")
+		} else {
+			embeddingSvc := services.NewEmbeddingService(itemRepo, geminiClient)
+			go func() {
+				ticker := time.NewTicker(cfg.Embedding.BackfillInterval)
+				defer ticker.Stop()
+				log.Info().Dur("interval", cfg.Embedding.BackfillInterval).Msg("worker: iniciando backfill de embeddings")
+				n := embeddingSvc.BackfillPass(ctx)
+				log.Info().Int("processed", n).Msg("worker: backfill inicial concluído")
+				for {
+					select {
+					case <-ticker.C:
+						n := embeddingSvc.BackfillPass(ctx)
+						if n > 0 {
+							log.Info().Int("processed", n).Msg("worker: backfill de embeddings")
+						}
+					case <-ctx.Done():
+						return
+					}
+				}
+			}()
+		}
+	} else {
+		log.Warn().Msg("worker: GOOGLE_API_KEY não configurado — backfill de embeddings desativado")
 	}
 
 	// -------------------------------------------------------------------------

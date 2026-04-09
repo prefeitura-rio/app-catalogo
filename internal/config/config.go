@@ -29,6 +29,9 @@ type AppConfig struct {
 	Swagger      SwaggerSettings
 	Heimdall     HeimdallSettings
 	Typesense    TypesenseSettings
+	Gemini       GeminiSettings
+	Reranker     RerankerSettings
+	Embedding    EmbeddingSettings
 }
 
 type AppSettings struct {
@@ -167,6 +170,19 @@ type TypesenseSettings struct {
 	SyncEnabled    bool
 }
 
+type GeminiSettings struct {
+	APIKey string
+}
+
+type RerankerSettings struct {
+	URL     string
+	Timeout time.Duration
+}
+
+type EmbeddingSettings struct {
+	BackfillInterval time.Duration
+}
+
 var (
 	instance *AppConfig
 	once     sync.Once
@@ -283,6 +299,16 @@ func Load() (*AppConfig, error) {
 			BaseServiceURL: getEnv(v, "TYPESENSE_BASE_SERVICE_URL", "https://prefeitura.rio"),
 			SyncInterval:   getDuration(v, "TYPESENSE_SYNC_INTERVAL", 30*time.Minute),
 			SyncEnabled:    getBool(v, "TYPESENSE_SYNC_ENABLED", true),
+		},
+		Gemini: GeminiSettings{
+			APIKey: getEnv(v, "GOOGLE_API_KEY", ""),
+		},
+		Reranker: RerankerSettings{
+			URL:     getEnv(v, "RERANKER_URL", ""),
+			Timeout: getDuration(v, "RERANKER_TIMEOUT", 2*time.Second),
+		},
+		Embedding: EmbeddingSettings{
+			BackfillInterval: getDuration(v, "EMBEDDING_BACKFILL_INTERVAL", 5*time.Minute),
 		},
 	}
 

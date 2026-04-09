@@ -58,6 +58,7 @@ func (s *RecommendationService) Recommend(
 	}
 
 	ranked := s.rankCandidates(candidates, profile, req)
+	ranked = s.applyJourneyBoosts(ctx, ranked)
 
 	resp := &models.RecommendationResponse{
 		Items:        ranked[:min(req.Limit, len(ranked))],
@@ -83,13 +84,13 @@ func (s *RecommendationService) RecommendAnonymous(
 		return &cached, nil
 	}
 
-	// Sem perfil: ranking apenas por tipo (pesos do contexto) + recência
 	candidates, err := s.itemRepo.GetCandidates(ctx, req.Types, req.Limit*3)
 	if err != nil {
 		return nil, fmt.Errorf("recommendation anonymous: %w", err)
 	}
 
 	ranked := s.rankCandidates(candidates, nil, req)
+	ranked = s.applyJourneyBoosts(ctx, ranked)
 
 	resp := &models.RecommendationResponse{
 		Items:        ranked[:min(req.Limit, len(ranked))],
@@ -99,6 +100,41 @@ func (s *RecommendationService) RecommendAnonymous(
 
 	_ = s.cache.Set(ctx, cacheKey, resp, s.clusterTTL)
 	return resp, nil
+}
+
+// applyJourneyBoosts aplica o boost de jornadas do cidadão aos itens já rankeados.
+// Pega os top-5 pelo score, consulta vizinhos de jornada e adiciona boost nos itens
+// que já estão na lista. Re-ordena após o boost.
+func (s *RecommendationService) applyJourneyBoosts(ctx context.Context, ranked []*models.RankedItem) []*models.RankedItem {
+	if len(ranked) == 0 {
+		return ranked
+	}
+
+	// Extrai IDs dos top-5 para consultar jornadas
+	topN := min(5, len(ranked))
+	fromIDs := make([]string, topN)
+	for i := 0; i < topN; i++ {
+		fromIDs[i] = ranked[i].ID
+	}
+
+	boosts, err := s.itemRepo.GetJourneyBoosts(ctx, fromIDs)
+	if err != nil || len(boosts) == 0 {
+		return ranked
+	}
+
+	for _, item := range ranked {
+		if boost, ok := boosts[item.ID]; ok {
+			item.Score = round2(item.Score + boost)
+			if item.ScoreBreakdown != nil {
+				item.ScoreBreakdown["journey"] = round2(boost)
+			}
+		}
+	}
+
+	slices.SortFunc(ranked, func(a, b *models.RankedItem) int {
+		return cmp.Compare(b.Score, a.Score)
+	})
+	return ranked
 }
 
 // rankCandidates calcula o score de cada item e ordena decrescentemente.
