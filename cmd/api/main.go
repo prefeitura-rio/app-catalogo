@@ -108,9 +108,27 @@ func main() {
 		cfg.SalesForce.ClientSecret,
 	)
 
+	// Clients opcionais — busca semântica e reranking
+	var geminiClient *clients.GeminiEmbeddingClient
+	if cfg.Gemini.APIKey != "" {
+		gc, err := clients.NewGeminiEmbeddingClient(ctx, cfg.Gemini.APIKey)
+		if err != nil {
+			log.Warn().Err(err).Msg("Gemini indisponível — busca semântica desativada")
+		} else {
+			geminiClient = gc
+			log.Info().Msg("busca semântica (Gemini) ativada")
+		}
+	}
+
+	var rerankerClient *clients.RerankerClient
+	if cfg.Reranker.URL != "" {
+		rerankerClient = clients.NewRerankerClient(cfg.Reranker.URL, cfg.Reranker.Timeout)
+		log.Info().Str("url", cfg.Reranker.URL).Msg("reranker cross-encoder ativado")
+	}
+
 	// Serviços
 	sfSyncSvc := services.NewSalesForceSyncService(sfClient, itemRepo, cfg.SalesForce.ObjectType)
-	searchSvc := services.NewSearchService(searchRepo, redisCache, cfg.Cache.SearchTTL)
+	searchSvc := services.NewSearchService(searchRepo, redisCache, cfg.Cache.SearchTTL, geminiClient, rerankerClient)
 	citizenSvc := services.NewCitizenProfileService(
 		rmiClient,
 		profileRepo,
