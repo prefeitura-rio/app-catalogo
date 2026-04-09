@@ -55,7 +55,7 @@ paths:
   # ---------------------------------------------------------------------------
 
   /api/v1/search:
-    post:
+    get:
       tags: [Busca]
       summary: Busca autenticada
       description: |
@@ -63,30 +63,23 @@ paths:
         Futuramente receberá personalização por perfil do cidadão.
       security:
         - bearerAuth: []
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SearchRequest"
-            examples:
-              busca_simples:
-                summary: Busca simples por texto
-                value:
-                  q: "curso gratuito"
-                  page: 1
-                  per_page: 20
-              busca_filtrada:
-                summary: Busca com filtros
-                value:
-                  q: "empreendedorismo"
-                  types: ["course", "mei_opportunity"]
-                  filters:
-                    gratuito: true
-                    bairro: "Tijuca"
-                    turno: "noturno"
-                  page: 1
-                  per_page: 10
+      parameters:
+        - $ref: "#/components/parameters/searchQ"
+        - $ref: "#/components/parameters/searchTypes"
+        - $ref: "#/components/parameters/searchPage"
+        - $ref: "#/components/parameters/searchPerPage"
+        - $ref: "#/components/parameters/filterModalidade"
+        - $ref: "#/components/parameters/filterBairro"
+        - $ref: "#/components/parameters/filterOrgao"
+        - $ref: "#/components/parameters/filterGratuito"
+        - $ref: "#/components/parameters/filterTurno"
+        - $ref: "#/components/parameters/filterRegimeContratacao"
+        - $ref: "#/components/parameters/filterModeloTrabalho"
+        - $ref: "#/components/parameters/filterPCD"
+        - $ref: "#/components/parameters/filterFaixaSalarial"
+        - $ref: "#/components/parameters/filterCanalAtendimento"
+        - $ref: "#/components/parameters/filterTema"
+        - $ref: "#/components/parameters/filterSegmento"
       responses:
         "200":
           description: Resultados da busca
@@ -97,39 +90,52 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SearchResponse"
+              examples:
+                busca_simples:
+                  summary: "GET /api/v1/search?q=curso+gratuito&page=1&per_page=20"
+                  value:
+                    total: 42
+                    page: 1
+                    per_page: 20
+                    items: []
+                busca_filtrada:
+                  summary: "GET /api/v1/search?q=empreendedorismo&types=course&types=mei_opportunity&gratuito=true&bairro=Tijuca&turno=noturno"
+                  value:
+                    total: 5
+                    page: 1
+                    per_page: 10
+                    items: []
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
 
   /api/public/search:
-    post:
+    get:
       tags: [Busca]
       summary: Busca pública
       description: |
         Busca no catálogo sem autenticação. Ranking por relevância FTS
         (`websearch_to_tsquery` + `ts_rank` com dicionário português).
-        Body vazio retorna todos os itens com paginação default.
+        Sem parâmetros retorna todos os itens com paginação default.
       security: []
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/SearchRequest"
-            examples:
-              vazio:
-                summary: Sem filtros (lista todos)
-                value: {}
-              busca_vagas:
-                summary: Vagas de emprego PCD
-                value:
-                  q: "assistente administrativo"
-                  types: ["job"]
-                  filters:
-                    pcd: true
-                    modelo_trabalho: "hibrido"
-                  per_page: 20
+      parameters:
+        - $ref: "#/components/parameters/searchQ"
+        - $ref: "#/components/parameters/searchTypes"
+        - $ref: "#/components/parameters/searchPage"
+        - $ref: "#/components/parameters/searchPerPage"
+        - $ref: "#/components/parameters/filterModalidade"
+        - $ref: "#/components/parameters/filterBairro"
+        - $ref: "#/components/parameters/filterOrgao"
+        - $ref: "#/components/parameters/filterGratuito"
+        - $ref: "#/components/parameters/filterTurno"
+        - $ref: "#/components/parameters/filterRegimeContratacao"
+        - $ref: "#/components/parameters/filterModeloTrabalho"
+        - $ref: "#/components/parameters/filterPCD"
+        - $ref: "#/components/parameters/filterFaixaSalarial"
+        - $ref: "#/components/parameters/filterCanalAtendimento"
+        - $ref: "#/components/parameters/filterTema"
+        - $ref: "#/components/parameters/filterSegmento"
       responses:
         "200":
           description: Resultados da busca
@@ -140,6 +146,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SearchResponse"
+              examples:
+                sem_filtros:
+                  summary: "GET /api/public/search"
+                  value:
+                    total: 1200
+                    page: 1
+                    per_page: 10
+                    items: []
+                vagas_pcd:
+                  summary: "GET /api/public/search?q=assistente+administrativo&types=job&pcd=true&modelo_trabalho=hibrido"
+                  value:
+                    total: 8
+                    page: 1
+                    per_page: 10
+                    items: []
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -562,6 +583,156 @@ components:
         format: uuid
       description: UUID v4 do item do catálogo
 
+    # --- Parâmetros de busca ---
+
+    searchQ:
+      name: q
+      in: query
+      required: false
+      schema:
+        type: string
+      description: |
+        Texto livre. Suporta sintaxe `websearch_to_tsquery` do PostgreSQL:
+        aspas para frase exata, `-` para exclusão, `OR` para alternativas.
+      examples:
+        simples:
+          value: "curso gratuito"
+        frase_exata:
+          value: '"assistente social"'
+        exclusao:
+          value: "emprego -estagio"
+
+    searchTypes:
+      name: types
+      in: query
+      required: false
+      schema:
+        type: array
+        items:
+          $ref: "#/components/schemas/ItemType"
+      style: form
+      explode: true
+      description: Filtro por tipo. Repetir o parâmetro para múltiplos valores. Omitir = todos.
+
+    searchPage:
+      name: page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+      description: Página de resultados. Valores < 1 são normalizados para 1.
+
+    searchPerPage:
+      name: per_page
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 10
+      description: Itens por página. Valores fora de [1,100] são normalizados para 10.
+
+    filterModalidade:
+      name: modalidade
+      in: query
+      required: false
+      schema:
+        type: string
+      description: "Modalidade de atendimento (ex: `presencial`, `digital`, `hibrido`)"
+
+    filterBairro:
+      name: bairro
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Bairro do Rio de Janeiro
+
+    filterOrgao:
+      name: orgao
+      in: query
+      required: false
+      schema:
+        type: string
+      description: Órgão ou secretaria responsável
+
+    filterGratuito:
+      name: gratuito
+      in: query
+      required: false
+      schema:
+        type: boolean
+      description: "[course] `true` para apenas cursos gratuitos"
+
+    filterTurno:
+      name: turno
+      in: query
+      required: false
+      schema:
+        type: string
+      description: "[course] Turno das aulas (ex: `matutino`, `vespertino`, `noturno`)"
+
+    filterRegimeContratacao:
+      name: regime_contratacao
+      in: query
+      required: false
+      schema:
+        type: string
+      description: "[job] Regime de contratação (ex: `CLT`, `PJ`, `temporario`)"
+
+    filterModeloTrabalho:
+      name: modelo_trabalho
+      in: query
+      required: false
+      schema:
+        type: string
+      description: "[job] Modelo de trabalho (ex: `presencial`, `remoto`, `hibrido`)"
+
+    filterPCD:
+      name: pcd
+      in: query
+      required: false
+      schema:
+        type: boolean
+      description: "[job] `true` para vagas exclusivas PCD"
+
+    filterFaixaSalarial:
+      name: faixa_salarial
+      in: query
+      required: false
+      schema:
+        type: string
+      description: "[job] Faixa salarial (ex: `ate-2sm`, `2-4sm`, `acima-4sm`)"
+
+    filterCanalAtendimento:
+      name: canal_atendimento
+      in: query
+      required: false
+      schema:
+        type: string
+      description: "[service] Canal de atendimento (ex: `presencial`, `digital`, `telefone`)"
+
+    filterTema:
+      name: tema
+      in: query
+      required: false
+      schema:
+        type: string
+      description: "[service] Tema do serviço (ex: `saude`, `educacao`, `habitacao`)"
+
+    filterSegmento:
+      name: segmento
+      in: query
+      required: false
+      schema:
+        type: string
+      description: "[mei_opportunity] Segmento do negócio"
+
+    # --- Parâmetros de recomendação ---
+
     types:
       name: types
       in: query
@@ -795,86 +966,6 @@ components:
           description: Mensagem de erro em português
 
     # --- Busca ---
-
-    SearchRequest:
-      type: object
-      properties:
-        q:
-          type: string
-          description: |
-            Texto livre para busca. Suporta sintaxe `websearch_to_tsquery` do PostgreSQL
-            (aspas para frase exata, `-` para exclusão, `OR` para alternativas).
-          examples:
-            - "curso gratuito"
-            - '"assistente social" OR enfermeiro'
-            - "emprego -estagio"
-        types:
-          type: array
-          items:
-            $ref: "#/components/schemas/ItemType"
-          description: Filtro por tipo. Vazio = todos os tipos.
-        filters:
-          $ref: "#/components/schemas/SearchFilters"
-        page:
-          type: integer
-          minimum: 1
-          default: 1
-          description: Página de resultados. Valores < 1 são normalizados para 1.
-        per_page:
-          type: integer
-          minimum: 1
-          maximum: 100
-          default: 10
-          description: Itens por página. Valores fora do intervalo [1,100] são normalizados para 10.
-
-    SearchFilters:
-      type: object
-      description: Filtros opcionais. Campos não informados são ignorados.
-      properties:
-        modalidade:
-          type: string
-          description: Modalidade de atendimento/oferta (ex. `presencial`, `online`, `híbrido`)
-        bairro:
-          type: string
-          description: Bairro do Rio de Janeiro
-        orgao:
-          type: string
-          description: Órgão/secretaria responsável
-
-        # Cursos
-        gratuito:
-          type: boolean
-          description: "[course] Apenas cursos gratuitos"
-        turno:
-          type: string
-          description: "[course] Turno das aulas (ex. `matutino`, `vespertino`, `noturno`)"
-
-        # Vagas
-        regime_contratacao:
-          type: string
-          description: "[job] Regime de contratação (ex. `CLT`, `PJ`, `temporário`)"
-        modelo_trabalho:
-          type: string
-          description: "[job] Modelo de trabalho (ex. `presencial`, `remoto`, `hibrido`)"
-        pcd:
-          type: boolean
-          description: "[job] Apenas vagas exclusivas para PCD"
-        faixa_salarial:
-          type: string
-          description: "[job] Faixa salarial (ex. `ate-2sm`, `2-4sm`, `acima-4sm`)"
-
-        # Serviços (Carta de Serviços)
-        canal_atendimento:
-          type: string
-          description: "[service] Canal de atendimento (ex. `presencial`, `digital`, `telefone`)"
-        tema:
-          type: string
-          description: "[service] Tema do serviço (ex. `saúde`, `educação`, `habitação`)"
-
-        # MEI
-        segmento:
-          type: string
-          description: "[mei_opportunity] Segmento do negócio"
 
     SearchResponse:
       type: object

@@ -2,6 +2,8 @@ package v1
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -18,22 +20,8 @@ func NewSearchHandler(searchSvc *services.SearchService, citizenSvc *services.Ci
 	return &SearchHandler{searchSvc: searchSvc, citizenSvc: citizenSvc}
 }
 
-// Search godoc
-// @Summary Busca global no catálogo
-// @Description Busca unificada por serviços, cursos, vagas e MEI.
-// @Tags search
-// @Accept json
-// @Produce json
-// @Param body body models.SearchRequest false "Parâmetros de busca"
-// @Success 200 {object} models.SearchResponse
-// @Router /api/v1/search [post]
-// @Router /api/public/search [post]
 func (h *SearchHandler) Search(c *gin.Context) {
-	var req models.SearchRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		// Body vazio é válido — retorna todos os itens
-		req = models.SearchRequest{}
-	}
+	req := parseSearchQuery(c)
 
 	resp, err := h.searchSvc.Search(c.Request.Context(), &req)
 	if err != nil {
@@ -42,4 +30,53 @@ func (h *SearchHandler) Search(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+func parseSearchQuery(c *gin.Context) models.SearchRequest {
+	req := models.SearchRequest{
+		Q:       c.Query("q"),
+		Page:    queryInt(c, "page", 1),
+		PerPage: queryInt(c, "per_page", 10),
+	}
+
+	for _, t := range c.QueryArray("types") {
+		req.Types = append(req.Types, models.ItemType(t))
+	}
+
+	req.Filters = models.SearchFilters{
+		Modalidade:        c.Query("modalidade"),
+		Bairro:            c.Query("bairro"),
+		Orgao:             c.Query("orgao"),
+		Gratuito:          queryBool(c, "gratuito"),
+		Turno:             c.Query("turno"),
+		RegimeContratacao: c.Query("regime_contratacao"),
+		ModeloTrabalho:    c.Query("modelo_trabalho"),
+		PCD:               queryBool(c, "pcd"),
+		FaixaSalarial:     c.Query("faixa_salarial"),
+		CanalAtendimento:  c.Query("canal_atendimento"),
+		Tema:              c.Query("tema"),
+		Segmento:          c.Query("segmento"),
+	}
+
+	return req
+}
+
+func queryInt(c *gin.Context, key string, def int) int {
+	if v := c.Query(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+// queryBool retorna nil quando o parâmetro está ausente (sem filtro),
+// e um ponteiro para bool quando presente ("true" ou "false").
+func queryBool(c *gin.Context, key string) *bool {
+	v := c.Query(key)
+	if v == "" {
+		return nil
+	}
+	b := strings.ToLower(v) == "true"
+	return &b
 }
