@@ -204,8 +204,7 @@ func Initialize() error {
 		}
 	}
 
-	_, err := Get()
-	return err
+	return nil
 }
 
 func Load() (*AppConfig, error) {
