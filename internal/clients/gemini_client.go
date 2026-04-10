@@ -10,9 +10,12 @@ import (
 
 const (
 	geminiEmbeddingModel = "gemini-embedding-001"
-	embeddingDimensions  = 3072
 	embeddingBatchSize   = 10 // máximo por chamada à API
 )
+
+// embeddingDims é a dimensionalidade dos embeddings gerados.
+// 1536: abaixo do limite HNSW do pgvector (2000) e suficiente para retrieval semântico.
+var embeddingDims int32 = 1536
 
 // GeminiEmbeddingClient gera embeddings usando o modelo gemini-embedding-001.
 type GeminiEmbeddingClient struct {
@@ -50,7 +53,8 @@ func (c *GeminiEmbeddingClient) EmbedDocuments(ctx context.Context, texts []stri
 
 		result, err := c.client.Models.EmbedContent(ctx, geminiEmbeddingModel, contents,
 			&genai.EmbedContentConfig{
-				TaskType: "RETRIEVAL_DOCUMENT",
+				TaskType:             "RETRIEVAL_DOCUMENT",
+				OutputDimensionality: &embeddingDims,
 			},
 		)
 		if err != nil {
@@ -74,7 +78,8 @@ func (c *GeminiEmbeddingClient) EmbedQuery(ctx context.Context, query string) ([
 
 	result, err := c.client.Models.EmbedContent(ctx, geminiEmbeddingModel, contents,
 		&genai.EmbedContentConfig{
-			TaskType: "RETRIEVAL_QUERY",
+			TaskType:             "RETRIEVAL_QUERY",
+			OutputDimensionality: &embeddingDims,
 		},
 	)
 	if err != nil {

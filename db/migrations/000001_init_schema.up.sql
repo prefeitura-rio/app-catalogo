@@ -22,6 +22,12 @@ CREATE TYPE item_type AS ENUM (
     'mei_opportunity'
 );
 
+-- Wrapper IMMUTABLE para unaccent (necessário em expressões de trigger e índices)
+CREATE OR REPLACE FUNCTION immutable_unaccent(text)
+RETURNS text AS $$
+  SELECT unaccent($1)
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+
 -- Tabela central do catálogo
 CREATE TABLE catalog_items (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -50,13 +56,8 @@ CREATE TABLE catalog_items (
     valid_until     TIMESTAMP WITH TIME ZONE,
     source_updated_at TIMESTAMP WITH TIME ZONE,
 
-    -- FTS: gerado automaticamente a partir dos campos textuais
-    search_vector   TSVECTOR GENERATED ALWAYS AS (
-        setweight(to_tsvector('portuguese', unaccent(coalesce(title, ''))), 'A') ||
-        setweight(to_tsvector('portuguese', unaccent(coalesce(short_desc, ''))), 'B') ||
-        setweight(to_tsvector('portuguese', unaccent(coalesce(description, ''))), 'C') ||
-        setweight(to_tsvector('portuguese', unaccent(array_to_string(coalesce(tags, '{}'), ' '))), 'D')
-    ) STORED,
+    -- FTS: atualizado via trigger (GENERATED ALWAYS AS não suporta unaccent em todos os ambientes)
+    search_vector   TSVECTOR,
 
     -- Placeholder para embeddings semânticos (v2 — pgvector)
     -- embedding vector(1536),
@@ -67,6 +68,23 @@ CREATE TABLE catalog_items (
 
     CONSTRAINT uq_catalog_items_source_external UNIQUE (source, external_id)
 );
+
+-- Trigger para manter search_vector atualizado
+CREATE OR REPLACE FUNCTION update_search_vector()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.search_vector :=
+        setweight(to_tsvector('portuguese', immutable_unaccent(coalesce(NEW.title, ''))), 'A') ||
+        setweight(to_tsvector('portuguese', immutable_unaccent(coalesce(NEW.short_desc, ''))), 'B') ||
+        setweight(to_tsvector('portuguese', immutable_unaccent(coalesce(NEW.description, ''))), 'C') ||
+        setweight(to_tsvector('portuguese', immutable_unaccent(array_to_string(coalesce(NEW.tags, '{}'), ' '))), 'D');
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_catalog_items_search_vector
+    BEFORE INSERT OR UPDATE ON catalog_items
+    FOR EACH ROW EXECUTE FUNCTION update_search_vector();
 
 CREATE INDEX idx_catalog_items_fts
     ON catalog_items USING GIN(search_vector);

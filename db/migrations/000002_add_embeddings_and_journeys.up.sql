@@ -8,9 +8,10 @@ ALTER TYPE item_source ADD VALUE IF NOT EXISTS 'app-go-api';
 -- 2. Habilitar pgvector (disponível na imagem pgvector/pgvector:pg16)
 CREATE EXTENSION IF NOT EXISTS vector;
 
--- 3. Coluna de embedding semântico (gemini-embedding-001 → 3072 dims)
+-- 3. Coluna de embedding semântico (gemini-embedding-001, OutputDimensionality=1536)
+--    1536 dims: abaixo do limite HNSW do pgvector (2000) e suficiente para retrieval
 ALTER TABLE catalog_items
-    ADD COLUMN IF NOT EXISTS embedding vector(3072);
+    ADD COLUMN IF NOT EXISTS embedding vector(1536);
 
 -- 4. Índice HNSW para busca por similaridade de cosseno
 --    m=16 e ef_construction=64 são bons defaults para catálogos de até ~100k itens
