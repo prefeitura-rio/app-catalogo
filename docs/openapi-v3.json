@@ -1,0 +1,1285 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "description": "Discovery layer unificada da Prefeitura do Rio de Janeiro. Indexa serviços públicos, cursos, vagas e oportunidades MEI com busca full-text e recomendação personalizada por perfil de cidadão.",
+    "title": "app-catalogo",
+    "contact": {
+      "name": "Prefeitura do Rio de Janeiro",
+      "url": "https://github.com/prefeitura-rio/app-catalogo"
+    },
+    "version": "1.0"
+  },
+  "paths": {
+    "/api/public/catalog/{id}": {
+      "get": {
+        "description": "Retorna todos os campos de um item incluindo source_data original.",
+        "tags": [
+          "catálogo"
+        ],
+        "summary": "Detalhe de item do catálogo",
+        "parameters": [
+          {
+            "description": "UUID v4 do item",
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.CatalogItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/public/recommendations": {
+      "get": {
+        "description": "Recomendações sem autenticação, com scoring neutro. cluster_hint aceita bairro ou faixa etária para leve personalização.",
+        "tags": [
+          "recomendações"
+        ],
+        "summary": "Recomendações anônimas",
+        "parameters": [
+          {
+            "description": "Bairro ou faixa etária (ex: Tijuca, 25-34)",
+            "name": "cluster_hint",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Tipos: service, course, job, mei_opportunity",
+            "name": "types",
+            "in": "query",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "description": "Máximo de itens, max 50 (default: 10)",
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Contexto: homepage, after_search, profile",
+            "name": "context",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.RecommendationResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/public/search": {
+      "get": {
+        "description": "Busca por serviços, cursos, vagas e oportunidades MEI. Suporta sintaxe websearch_to_tsquery: aspas para frase exata, - para exclusão, OR para alternativas.",
+        "tags": [
+          "busca"
+        ],
+        "summary": "Busca no catálogo",
+        "parameters": [
+          {
+            "description": "Texto livre de busca",
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Tipos: service, course, job, mei_opportunity",
+            "name": "types",
+            "in": "query",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "description": "Página (default: 1)",
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Itens por página, máximo 100 (default: 10)",
+            "name": "per_page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Modalidade: presencial, digital, hibrido",
+            "name": "modalidade",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bairro do Rio de Janeiro",
+            "name": "bairro",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Órgão ou secretaria responsável",
+            "name": "orgao",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "[course] Apenas cursos gratuitos",
+            "name": "gratuito",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "[course] Turno: matutino, vespertino, noturno",
+            "name": "turno",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "[job] Regime: CLT, PJ, temporario",
+            "name": "regime_contratacao",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "[job] Modelo: presencial, remoto, hibrido",
+            "name": "modelo_trabalho",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "[job] Apenas vagas exclusivas para PCD",
+            "name": "pcd",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "[job] Faixa salarial: ate-2sm, 2-4sm, acima-4sm",
+            "name": "faixa_salarial",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "[service] Canal: presencial, digital, telefone",
+            "name": "canal_atendimento",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "[service] Tema do serviço",
+            "name": "tema",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "[mei_opportunity] Segmento do negócio",
+            "name": "segmento",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.SearchResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/sync/status": {
+      "get": {
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "description": "Retorna o último evento de sincronização por fonte de dados. Requer role admin ou go:admin.",
+        "tags": [
+          "admin"
+        ],
+        "summary": "Status das sincronizações",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/models.SyncStatus"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/sync/trigger": {
+      "post": {
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "description": "Dispara sync ad-hoc em background. Retorna imediatamente. Requer role admin ou go:admin.",
+        "tags": [
+          "admin"
+        ],
+        "summary": "Dispara sincronização manual",
+        "parameters": [
+          {
+            "description": "Fonte: salesforce, app-go-api, typesense. Vazio = todas.",
+            "name": "source",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/catalog/{id}": {
+      "get": {
+        "description": "Retorna todos os campos de um item incluindo source_data original.",
+        "tags": [
+          "catálogo"
+        ],
+        "summary": "Detalhe de item do catálogo",
+        "parameters": [
+          {
+            "description": "UUID v4 do item",
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.CatalogItem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recommendations": {
+      "get": {
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "description": "Recomendações baseadas no perfil do cidadão autenticado (escolaridade, renda, localização, acessibilidade, faixa etária).",
+        "tags": [
+          "recomendações"
+        ],
+        "summary": "Recomendações personalizadas",
+        "parameters": [
+          {
+            "description": "Tipos: service, course, job, mei_opportunity",
+            "name": "types",
+            "in": "query",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "description": "Máximo de itens, max 50 (default: 10)",
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Contexto: homepage, after_search, profile",
+            "name": "context",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.RecommendationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/search": {
+      "get": {
+        "description": "Busca por serviços, cursos, vagas e oportunidades MEI. Suporta sintaxe websearch_to_tsquery: aspas para frase exata, - para exclusão, OR para alternativas.",
+        "tags": [
+          "busca"
+        ],
+        "summary": "Busca no catálogo",
+        "parameters": [
+          {
+            "description": "Texto livre de busca",
+            "name": "q",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Tipos: service, course, job, mei_opportunity",
+            "name": "types",
+            "in": "query",
+            "explode": true,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "description": "Página (default: 1)",
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Itens por página, máximo 100 (default: 10)",
+            "name": "per_page",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Modalidade: presencial, digital, hibrido",
+            "name": "modalidade",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bairro do Rio de Janeiro",
+            "name": "bairro",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Órgão ou secretaria responsável",
+            "name": "orgao",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "[course] Apenas cursos gratuitos",
+            "name": "gratuito",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "[course] Turno: matutino, vespertino, noturno",
+            "name": "turno",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "[job] Regime: CLT, PJ, temporario",
+            "name": "regime_contratacao",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "[job] Modelo: presencial, remoto, hibrido",
+            "name": "modelo_trabalho",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "[job] Apenas vagas exclusivas para PCD",
+            "name": "pcd",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "[job] Faixa salarial: ate-2sm, 2-4sm, acima-4sm",
+            "name": "faixa_salarial",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "[service] Canal: presencial, digital, telefone",
+            "name": "canal_atendimento",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "[service] Tema do serviço",
+            "name": "tema",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "[mei_opportunity] Segmento do negócio",
+            "name": "segmento",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.SearchResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/webhooks/salesforce": {
+      "post": {
+        "description": "Recebe notificações de criação/atualização da Carta de Serviços. Valida assinatura HMAC-SHA256 via header X-Salesforce-Signature.",
+        "tags": [
+          "webhooks"
+        ],
+        "summary": "Webhook SalesForce (Change Data Capture)",
+        "parameters": [
+          {
+            "description": "HMAC-SHA256 do body em hex",
+            "name": "X-Salesforce-Signature",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/v1.sfWebhookPayload"
+              }
+            }
+          },
+          "description": "Payload do evento",
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "Sempre retorna 200. Usado pelo Kubernetes para liveness check.",
+        "tags": [
+          "infra"
+        ],
+        "summary": "Liveness probe",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ready": {
+      "get": {
+        "description": "Verifica conectividade com o banco de dados.",
+        "tags": [
+          "infra"
+        ],
+        "summary": "Readiness probe",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "https://services.staging.app.dados.rio/catalogo",
+      "description": "Staging"
+    },
+    {
+      "url": "https://services.pref.rio/catalogo",
+      "description": "Produção"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "description": "JWT injetado pelo Istio via header X-Auth-Request-Token",
+        "type": "apiKey",
+        "name": "Authorization",
+        "in": "header"
+      }
+    },
+    "schemas": {
+      "models.CatalogItem": {
+        "type": "object",
+        "properties": {
+          "bairros": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "image_url": {
+            "type": "string"
+          },
+          "modalidade": {
+            "type": "string"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "short_desc": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/models.ItemSource"
+          },
+          "source_data": {
+            "type": "object"
+          },
+          "source_updated_at": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/models.ItemStatus"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "target_audience": {
+            "type": "object"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/models.ItemType"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "valid_from": {
+            "type": "string"
+          },
+          "valid_until": {
+            "type": "string"
+          }
+        }
+      },
+      "models.ItemSource": {
+        "type": "string",
+        "enum": [
+          "salesforce",
+          "courses",
+          "jobs",
+          "mei",
+          "app-go-api",
+          "typesense"
+        ],
+        "x-enum-comments": {
+          "SourceAppGoAPI": "fonte composta: courses + jobs + mei",
+          "SourceTypesense": "temporário: Carta de Serviços até migração para SalesForce"
+        },
+        "x-enum-descriptions": [
+          "",
+          "",
+          "",
+          "",
+          "fonte composta: courses + jobs + mei",
+          "temporário: Carta de Serviços até migração para SalesForce"
+        ],
+        "x-enum-varnames": [
+          "SourceSalesForce",
+          "SourceCourses",
+          "SourceJobs",
+          "SourceMEI",
+          "SourceAppGoAPI",
+          "SourceTypesense"
+        ]
+      },
+      "models.ItemStatus": {
+        "type": "string",
+        "enum": [
+          "active",
+          "inactive",
+          "draft"
+        ],
+        "x-enum-varnames": [
+          "StatusActive",
+          "StatusInactive",
+          "StatusDraft"
+        ]
+      },
+      "models.ItemType": {
+        "type": "string",
+        "enum": [
+          "service",
+          "course",
+          "job",
+          "mei_opportunity"
+        ],
+        "x-enum-varnames": [
+          "TypeService",
+          "TypeCourse",
+          "TypeJob",
+          "TypeMEIOpportunity"
+        ]
+      },
+      "models.RankedItem": {
+        "type": "object",
+        "properties": {
+          "bairros": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "image_url": {
+            "type": "string"
+          },
+          "modalidade": {
+            "type": "string"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          },
+          "score_breakdown": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "number",
+              "format": "float64"
+            }
+          },
+          "short_desc": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/models.ItemSource"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/models.ItemType"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "models.RecommendationContext": {
+        "type": "string",
+        "enum": [
+          "homepage",
+          "after_search",
+          "profile"
+        ],
+        "x-enum-varnames": [
+          "ContextHomepage",
+          "ContextAfterSearch",
+          "ContextProfile"
+        ]
+      },
+      "models.RecommendationResponse": {
+        "type": "object",
+        "properties": {
+          "context": {
+            "$ref": "#/components/schemas/models.RecommendationContext"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/models.RankedItem"
+            }
+          },
+          "personalized": {
+            "type": "boolean"
+          }
+        }
+      },
+      "models.SearchItem": {
+        "type": "object",
+        "properties": {
+          "bairros": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "highlights": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "image_url": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "modalidade": {
+            "type": "string"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "relevance_score": {
+            "type": "number"
+          },
+          "short_desc": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/models.ItemSource"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/models.ItemType"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "models.SearchResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/models.SearchItem"
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "per_page": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "models.SyncEventStatus": {
+        "type": "string",
+        "enum": [
+          "started",
+          "completed",
+          "failed"
+        ],
+        "x-enum-varnames": [
+          "SyncStatusStarted",
+          "SyncStatusCompleted",
+          "SyncStatusFailed"
+        ]
+      },
+      "models.SyncEventType": {
+        "type": "string",
+        "enum": [
+          "full_sync",
+          "delta_sync",
+          "webhook"
+        ],
+        "x-enum-varnames": [
+          "SyncTypeFullSync",
+          "SyncTypeDeltaSync",
+          "SyncTypeWebhook"
+        ]
+      },
+      "models.SyncStatus": {
+        "type": "object",
+        "properties": {
+          "error_message": {
+            "type": "string"
+          },
+          "items_failed": {
+            "type": "integer"
+          },
+          "items_processed": {
+            "type": "integer"
+          },
+          "last_completed_at": {
+            "type": "string"
+          },
+          "last_event_type": {
+            "$ref": "#/components/schemas/models.SyncEventType"
+          },
+          "last_started_at": {
+            "type": "string"
+          },
+          "last_status": {
+            "$ref": "#/components/schemas/models.SyncEventStatus"
+          },
+          "source": {
+            "$ref": "#/components/schemas/models.ItemSource"
+          }
+        }
+      },
+      "v1.sfWebhookPayload": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "type": "object",
+            "properties": {
+              "created": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            }
+          },
+          "sobject": {
+            "type": "object",
+            "properties": {
+              "Id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
