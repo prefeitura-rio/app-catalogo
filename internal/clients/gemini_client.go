@@ -112,7 +112,7 @@ func (c *GeminiEmbeddingClient) GenerateHyDE(ctx context.Context, query string) 
 		genai.NewContentFromText(prompt, genai.RoleUser),
 	}
 
-	result, err := c.client.Models.GenerateContent(ctx, "gemini-2.0-flash-lite", contents,
+	result, err := c.client.Models.GenerateContent(ctx, "gemini-3.1-flash-lite-preview", contents,
 		&genai.GenerateContentConfig{
 			MaxOutputTokens: 150,
 		},
