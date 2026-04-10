@@ -46,9 +46,14 @@ func (c *GeminiEmbeddingClient) EmbedDocuments(ctx context.Context, texts []stri
 		end := min(i+embeddingBatchSize, len(texts))
 		batch := texts[i:end]
 
-		contents := make([]*genai.Content, len(batch))
-		for j, t := range batch {
-			contents[j] = genai.NewContentFromText(t, genai.RoleUser)
+		// Filtra textos vazios — API Gemini rejeita conteúdo sem texto
+		var contents []*genai.Content
+		for _, t := range batch {
+			if t == "" {
+				contents = append(contents, genai.NewContentFromText("item sem descrição", genai.RoleUser))
+			} else {
+				contents = append(contents, genai.NewContentFromText(t, genai.RoleUser))
+			}
 		}
 
 		result, err := c.client.Models.EmbedContent(ctx, geminiEmbeddingModel, contents,
