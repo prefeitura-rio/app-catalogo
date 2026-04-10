@@ -93,10 +93,10 @@ func (r *SearchRepository) Search(ctx context.Context, req *models.SearchRequest
 	var rankExpr, headlineExpr, tsCondition, orderBy string
 	var queryArg interface{}
 
-	if req.Q != "" {
+	hasQuery := req.Q != ""
+
+	if hasQuery {
 		// ts_rank_cd com pesos {D,C,B,A} = {0.05, 0.1, 0.3, 2.0}
-		// O peso A (título) recebe 2.0 — boost 6.7x sobre o padrão (0.3).
-		// A similaridade por trigrama adiciona bonus para matches parciais no título.
 		rankExpr = `
 			ts_rank_cd('{0.05,0.1,0.3,2.0}', ci.search_vector,
 				websearch_to_tsquery('portuguese', unaccent($1)), 32)
@@ -117,13 +117,24 @@ func (r *SearchRepository) Search(ctx context.Context, req *models.SearchRequest
 		headlineExpr = "''"
 		tsCondition = ""
 		orderBy = "ORDER BY ci.created_at DESC"
-		queryArg = ""
 	}
 
-	// Args: $1=query, $2...$N=filtros, $N+1=limit, $N+2=offset
-	countArgs := make([]interface{}, 0, 1+len(filterArgs))
-	countArgs = append(countArgs, queryArg)
-	countArgs = append(countArgs, filterArgs...)
+	// Quando não há query, os args dos filtros começam em $1 (não há $1 reservado para a query).
+	// Quando há query, filtros começam em $2 (buildFilterClauses já foi chamado com startIdx=2).
+	var countArgs []interface{}
+	if hasQuery {
+		countArgs = append([]interface{}{queryArg}, filterArgs...)
+	} else {
+		// Reconstrói filtros a partir de $1 já que não há queryArg
+		filterSQL, filterArgs, nextIdx = buildFilterClauses(req, 1)
+		baseWhere = `
+			ci.status = 'active'
+			AND ci.deleted_at IS NULL
+			AND (ci.valid_until IS NULL OR ci.valid_until > NOW())
+			` + filterSQL
+		countArgs = filterArgs
+		_ = nextIdx
+	}
 
 	countSQL := fmt.Sprintf(`
 		SELECT COUNT(*) FROM catalog_items ci
@@ -140,7 +151,8 @@ func (r *SearchRepository) Search(ctx context.Context, req *models.SearchRequest
 
 	offset := (req.Page - 1) * req.PerPage
 	mainArgs := append(countArgs, req.PerPage, offset)
-	limitClause := fmt.Sprintf("LIMIT $%d OFFSET $%d", nextIdx, nextIdx+1)
+	limitArgIdx := len(mainArgs) - 1 // índice do LIMIT (1-based)
+	limitClause := fmt.Sprintf("LIMIT $%d OFFSET $%d", limitArgIdx, limitArgIdx+1)
 
 	mainSQL := fmt.Sprintf(`
 		SELECT
