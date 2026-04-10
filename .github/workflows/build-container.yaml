@@ -21,7 +21,7 @@ jobs:
       - name: Check if k8s-only changes
         id: check-k8s-only
         run: |
-          CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
+          CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} 2>/dev/null || echo "")
           NON_K8S_FILES=$(echo "$CHANGED_FILES" | grep -v "^k8s/" || true)
 
           if [ -z "$NON_K8S_FILES" ] && [ -n "$CHANGED_FILES" ]; then
