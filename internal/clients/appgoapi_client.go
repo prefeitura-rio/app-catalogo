@@ -24,14 +24,22 @@ func NewAppGoAPIClient(baseURL string, tokenManager *KeycloakTokenManager) *AppG
 	}
 }
 
-// flexString aceita string ou qualquer outro tipo JSON (objeto, null, número).
-// Quando o valor não é uma string, usa string vazia.
+// flexString aceita string ou número JSON.
+// Números são convertidos para sua representação em string (ex: 81 → "81").
+// Outros tipos (objeto, null) resultam em string vazia.
 type flexString string
 
 func (s *flexString) UnmarshalJSON(b []byte) error {
+	// Tenta string primeiro
 	var str string
 	if err := json.Unmarshal(b, &str); err == nil {
 		*s = flexString(str)
+		return nil
+	}
+	// Tenta número e converte para string (IDs inteiros da API)
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err == nil {
+		*s = flexString(n.String())
 		return nil
 	}
 	*s = ""
