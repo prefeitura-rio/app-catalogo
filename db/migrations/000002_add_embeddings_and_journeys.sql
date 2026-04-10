@@ -1,4 +1,5 @@
 -- +goose NO TRANSACTION
+-- +goose Up
 -- Migration: busca semântica (pgvector) + citizen journeys + novos item_source
 
 -- 1. Novos valores no enum item_source
@@ -88,3 +89,9 @@ VALUES
     ('segunda-via-rg',                 'typesense', 'cpf-cadastro',                         'typesense', 'related',      0.7),
     ('carteira-de-trabalho',           'typesense', 'sine-emprego',                         'typesense', 'sequence',     0.9)
 ON CONFLICT (from_external_id, from_source, to_external_id, to_source) DO NOTHING;
+
+-- +goose Down
+DROP TABLE IF EXISTS catalog_item_journeys;
+DROP INDEX IF EXISTS idx_catalog_items_no_embedding;
+DROP INDEX IF EXISTS idx_catalog_items_embedding;
+ALTER TABLE catalog_items DROP COLUMN IF EXISTS embedding;

@@ -1,3 +1,4 @@
+-- +goose Up
 -- app-catalogo: schema inicial
 -- Extensões necessárias para FTS pt_BR, fuzzy search e vetores semânticos (v2)
 
@@ -207,3 +208,18 @@ CREATE TABLE salesforce_sync_cursor (
 CREATE TRIGGER trg_salesforce_sync_cursor_updated_at
     BEFORE UPDATE ON salesforce_sync_cursor
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- +goose Down
+DROP TABLE IF EXISTS salesforce_sync_cursor;
+DROP TABLE IF EXISTS sync_events;
+DROP TABLE IF EXISTS demographic_clusters;
+DROP TABLE IF EXISTS citizen_profiles;
+DROP TABLE IF EXISTS catalog_items;
+DROP FUNCTION IF EXISTS update_updated_at;
+DROP FUNCTION IF EXISTS immutable_unaccent;
+DROP FUNCTION IF EXISTS update_search_vector;
+DROP TYPE IF EXISTS item_type;
+DROP TYPE IF EXISTS item_source;
+DROP EXTENSION IF EXISTS unaccent;
+DROP EXTENSION IF EXISTS pg_trgm;
+DROP EXTENSION IF EXISTS "uuid-ossp";
