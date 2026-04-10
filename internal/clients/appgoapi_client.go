@@ -24,22 +24,6 @@ func NewAppGoAPIClient(baseURL string, tokenManager *KeycloakTokenManager) *AppG
 	}
 }
 
-// Course representa um curso do app-go-api.
-type Course struct {
-	ID           string     `json:"id"`
-	Title        string     `json:"title"`
-	Description  string     `json:"description"`
-	Summary      string     `json:"summary"`
-	Organization string     `json:"orgao"`
-	Modalidade   string     `json:"modalidade"`
-	Turno        string     `json:"turno"`
-	Theme        string     `json:"theme"`
-	URL          string     `json:"enrollment_url"`
-	ImageURL     string     `json:"image_url"`
-	Gratuito     bool       `json:"is_free"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-}
-
 // flexString aceita string ou qualquer outro tipo JSON (objeto, null, número).
 // Quando o valor não é uma string, usa string vazia.
 type flexString string
@@ -54,7 +38,33 @@ func (s *flexString) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// Course representa um curso do app-go-api.
+// Estrutura real: GET /api/public/courses → {"data": {"courses": [...], "pagination": {...}}}
+type Course struct {
+	ID          flexString `json:"id"`
+	Title       string     `json:"title"`
+	Description string     `json:"description"`
+	Organization string    `json:"organization"`
+	Modalidade  string     `json:"modalidade"`
+	Turno       string     `json:"turno"`
+	Theme       string     `json:"theme"`
+	URL         string     `json:"link_inscricao"`
+	ImageURL    string     `json:"cover_image"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+type coursesPageResponse struct {
+	Data struct {
+		Courses    []Course `json:"courses"`
+		Pagination struct {
+			Total int `json:"total"`
+			Page  int `json:"page"`
+		} `json:"pagination"`
+	} `json:"data"`
+}
+
 // Job representa uma vaga de emprego do app-go-api.
+// Estrutura: GET /api/public/empregabilidade/vagas → {"data": [...], "total": N, ...}
 type Job struct {
 	ID                string     `json:"id"`
 	Title             string     `json:"title"`
@@ -70,14 +80,24 @@ type Job struct {
 }
 
 // MEIOpportunity representa uma oportunidade MEI.
+// Estrutura real: GET /api/public/oportunidades-mei → {"data": [...], "meta": {"total": N, ...}}
 type MEIOpportunity struct {
-	ID           string    `json:"id"`
-	Title        string    `json:"title"`
-	Description  string    `json:"description"`
-	Organization string    `json:"organization"`
-	Segmento     string    `json:"segmento"`
-	URL          string    `json:"url"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID          flexString `json:"id"`
+	Title       string     `json:"titulo"`           // campo real é "titulo"
+	Description string     `json:"descricao_servico"` // campo real é "descricao_servico"
+	Organization string    `json:"orgao_id"`
+	Segmento    string     `json:"outras_informacoes"`
+	ImageURL    string     `json:"cover_image"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+type meiPageResponse struct {
+	Data []MEIOpportunity `json:"data"`
+	Meta struct {
+		Total    int `json:"total"`
+		Page     int `json:"page"`
+		PageSize int `json:"page_size"`
+	} `json:"meta"`
 }
 
 type paginatedResponse[T any] struct {
@@ -114,18 +134,18 @@ func (c *AppGoAPIClient) doGet(ctx context.Context, path string, dest interface{
 	return json.Unmarshal(body, dest)
 }
 
-// GetCourses retorna cursos paginados. updatedSince zero retorna todos.
+// GetCourses retorna cursos paginados.
 func (c *AppGoAPIClient) GetCourses(ctx context.Context, page int, updatedSince time.Time) ([]Course, int, error) {
 	path := fmt.Sprintf("/api/public/courses?page=%d&per_page=100", page)
 	if !updatedSince.IsZero() {
 		path += "&updated_since=" + updatedSince.UTC().Format(time.RFC3339)
 	}
 
-	var resp paginatedResponse[Course]
+	var resp coursesPageResponse
 	if err := c.doGet(ctx, path, &resp); err != nil {
 		return nil, 0, err
 	}
-	return resp.Data, resp.Total, nil
+	return resp.Data.Courses, resp.Data.Pagination.Total, nil
 }
 
 // GetJobs retorna vagas de emprego paginadas.
@@ -149,9 +169,9 @@ func (c *AppGoAPIClient) GetMEIOpportunities(ctx context.Context, page int, upda
 		path += "&updated_since=" + updatedSince.UTC().Format(time.RFC3339)
 	}
 
-	var resp paginatedResponse[MEIOpportunity]
+	var resp meiPageResponse
 	if err := c.doGet(ctx, path, &resp); err != nil {
 		return nil, 0, err
 	}
-	return resp.Data, resp.Total, nil
+	return resp.Data, resp.Meta.Total, nil
 }

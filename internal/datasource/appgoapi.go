@@ -136,12 +136,11 @@ func mapCourse(c clients.Course) *models.CatalogItem {
 		tags = append(tags, c.Theme)
 	}
 	return &models.CatalogItem{
-		ExternalID:      c.ID,
+		ExternalID:      string(c.ID),
 		Source:          models.SourceCourses,
 		Type:            models.TypeCourse,
 		Title:           c.Title,
 		Description:     c.Description,
-		ShortDesc:       c.Summary,
 		Organization:    c.Organization,
 		URL:             c.URL,
 		ImageURL:        c.ImageURL,
@@ -194,13 +193,13 @@ func mapMEI(m clients.MEIOpportunity) *models.CatalogItem {
 		tags = append(tags, m.Segmento)
 	}
 	return &models.CatalogItem{
-		ExternalID:      m.ID,
+		ExternalID:      string(m.ID),
 		Source:          models.SourceMEI,
 		Type:            models.TypeMEIOpportunity,
 		Title:           m.Title,
 		Description:     m.Description,
 		Organization:    m.Organization,
-		URL:             m.URL,
+		ImageURL:        m.ImageURL,
 		Status:          models.StatusActive,
 		Tags:            tags,
 		TargetAudience:  json.RawMessage("{}"),
