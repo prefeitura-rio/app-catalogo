@@ -163,7 +163,11 @@ jobs:
           kubectl patch application catalogo -n argocd --type=merge \
             -p="{\"spec\":{\"source\":{\"kustomize\":{\"images\":[\"$IMAGE_NAME:$COMMIT_HASH@$DIGEST\"]}}}}"
 
-          echo "✅ ArgoCD Application updated"
+          # Força sync imediato (sem isso, ArgoCD pode ficar em Synced sem re-aplicar)
+          kubectl annotate application catalogo -n argocd \
+            argocd.argoproj.io/refresh=hard --overwrite
+
+          echo "✅ ArgoCD Application updated and refresh triggered"
 
       - name: Wait for ArgoCD sync and blue-green preview
         if: steps.check-k8s-only.outputs.k8s_only != 'true'
