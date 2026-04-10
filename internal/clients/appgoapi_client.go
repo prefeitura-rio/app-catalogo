@@ -72,19 +72,29 @@ type coursesPageResponse struct {
 }
 
 // Job representa uma vaga de emprego do app-go-api.
-// Estrutura: GET /api/public/empregabilidade/vagas → {"data": [...], "total": N, ...}
+// Estrutura real: GET /api/public/empregabilidade/vagas → {"data": [...], "meta": {"total": N, ...}}
 type Job struct {
-	ID                string     `json:"id"`
-	Title             string     `json:"title"`
-	Description       string     `json:"description"`
-	Company           string     `json:"company"`
-	Bairro            flexString `json:"bairro"`
-	RegimeContratacao flexString `json:"regime_contratacao"`
-	ModeloTrabalho    flexString `json:"modelo_trabalho"`
-	FaixaSalarial     flexString `json:"faixa_salarial"`
-	PCD               bool       `json:"pcd"`
-	URL               string     `json:"url"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	ID               string    `json:"id"`
+	Title            string    `json:"titulo"`
+	Description      string    `json:"descricao"`
+	ValorVaga        float64   `json:"valor_vaga"`
+	Bairro           string    `json:"bairro"`
+	AcessibilidadePCD string   `json:"acessibilidade_pcd"`
+	Contratante      struct {
+		NomeFantasia string `json:"nome_fantasia"`
+		URLLogo      string `json:"url_logo"`
+	} `json:"contratante"`
+	RegimeContratacao struct {
+		Descricao string `json:"descricao"`
+	} `json:"regime_contratacao"`
+	ModeloTrabalho struct {
+		Descricao string `json:"descricao"`
+	} `json:"modelo_trabalho"`
+	OrgaoParceiro *struct {
+		Name  string `json:"name"`
+		Sigla string `json:"sigla"`
+	} `json:"orgao_parceiro"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // MEIOpportunity representa uma oportunidade MEI.
@@ -101,6 +111,15 @@ type MEIOpportunity struct {
 
 type meiPageResponse struct {
 	Data []MEIOpportunity `json:"data"`
+	Meta struct {
+		Total    int `json:"total"`
+		Page     int `json:"page"`
+		PageSize int `json:"page_size"`
+	} `json:"meta"`
+}
+
+type jobsPageResponse struct {
+	Data []Job `json:"data"`
 	Meta struct {
 		Total    int `json:"total"`
 		Page     int `json:"page"`
@@ -163,11 +182,11 @@ func (c *AppGoAPIClient) GetJobs(ctx context.Context, page int, updatedSince tim
 		path += "&updated_since=" + updatedSince.UTC().Format(time.RFC3339)
 	}
 
-	var resp paginatedResponse[Job]
+	var resp jobsPageResponse
 	if err := c.doGet(ctx, path, &resp); err != nil {
 		return nil, 0, err
 	}
-	return resp.Data, resp.Total, nil
+	return resp.Data, resp.Meta.Total, nil
 }
 
 // GetMEIOpportunities retorna oportunidades MEI paginadas.

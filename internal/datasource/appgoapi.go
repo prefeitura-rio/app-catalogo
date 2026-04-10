@@ -156,26 +156,48 @@ func mapCourse(c clients.Course) *models.CatalogItem {
 func mapJob(j clients.Job) *models.CatalogItem {
 	sourceData, _ := json.Marshal(j)
 	now := j.UpdatedAt
+
 	bairros := []string{}
 	if j.Bairro != "" {
-		bairros = append(bairros, string(j.Bairro))
+		bairros = append(bairros, j.Bairro)
 	}
+
+	// Tags: regime, PCD
+	var tags []string
+	if j.RegimeContratacao.Descricao != "" {
+		tags = append(tags, j.RegimeContratacao.Descricao)
+	}
+	if j.AcessibilidadePCD != "" && j.AcessibilidadePCD != "sem_restricao" {
+		tags = append(tags, j.AcessibilidadePCD)
+	}
+
+	// TargetAudience: inclui informações de PCD
 	targetAudience, _ := json.Marshal(map[string]interface{}{
-		"pcd": j.PCD,
+		"pcd": j.AcessibilidadePCD,
 	})
-	tags := []string{}
-	if j.RegimeContratacao != "" {
-		tags = append(tags, string(j.RegimeContratacao))
+
+	// Organização: nome fantasia do contratante
+	org := j.Contratante.NomeFantasia
+	if org == "" && j.OrgaoParceiro != nil {
+		org = j.OrgaoParceiro.Name
 	}
+
+	// ShortDesc: primeiros 300 chars da descrição
+	shortDesc := j.Description
+	if len(shortDesc) > 300 {
+		shortDesc = shortDesc[:300]
+	}
+
 	return &models.CatalogItem{
 		ExternalID:      j.ID,
 		Source:          models.SourceJobs,
 		Type:            models.TypeJob,
 		Title:           j.Title,
 		Description:     j.Description,
-		Organization:    j.Company,
-		URL:             j.URL,
-		Modalidade:      string(j.ModeloTrabalho),
+		ShortDesc:       shortDesc,
+		Organization:    org,
+		ImageURL:        j.Contratante.URLLogo,
+		Modalidade:      j.ModeloTrabalho.Descricao,
 		Bairros:         bairros,
 		Status:          models.StatusActive,
 		Tags:            tags,
