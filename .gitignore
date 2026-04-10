@@ -11,8 +11,10 @@ bin/
 *.out
 coverage.out
 
-# Gerado
-docs/
+# Gerado (swagger.json e swagger.yaml são ignorados, openapi-v3.json é commitado)
+docs/swagger.json
+docs/swagger.yaml
+docs/docs.go
 
 # Ambiente
 .env
