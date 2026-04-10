@@ -73,20 +73,64 @@ func (s *SearchService) Search(ctx context.Context, req *models.SearchRequest) (
 	var err error
 
 	if originalQ != "" && s.gemini != nil {
-		// Embedding usa a query original (sem expansão) para preservar o intent semântico
-		embedCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-		embedding, embedErr := s.gemini.EmbedQuery(embedCtx, originalQ)
-		cancel()
+		// Gera embedding da query E documento HyDE em paralelo (timeout 4s)
+		type embedResult struct {
+			vec []float32
+			err error
+		}
+		type hydeResult struct {
+			vec []float32
+			err error
+		}
 
-		if embedErr == nil {
-			results, total, err = s.searchRepo.SearchHybrid(ctx, req, clients.VectorLiteral(embedding))
+		embedCh := make(chan embedResult, 1)
+		hydeCh := make(chan hydeResult, 1)
+
+		parallelCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
+		defer cancel()
+
+		// Goroutine 1: embedding da query original
+		go func() {
+			v, err := s.gemini.EmbedQuery(parallelCtx, originalQ)
+			embedCh <- embedResult{v, err}
+		}()
+
+		// Goroutine 2: HyDE — gera documento hipotético e embeda
+		go func() {
+			hydeDoc, genErr := s.gemini.GenerateHyDE(parallelCtx, originalQ)
+			if genErr != nil {
+				hydeCh <- hydeResult{nil, genErr}
+				return
+			}
+			hydeVec, embedErr := s.gemini.EmbedQuery(parallelCtx, hydeDoc)
+			hydeCh <- hydeResult{hydeVec, embedErr}
+		}()
+
+		embedRes := <-embedCh
+		hydeRes := <-hydeCh
+
+		if embedRes.err != nil {
+			log.Warn().Err(embedRes.err).Msg("search: embedding indisponível, usando FTS")
+			results, total, err = s.searchRepo.Search(ctx, req)
+		} else if hydeRes.err != nil {
+			// HyDE falhou — fallback para busca híbrida sem HyDE
+			log.Debug().Err(hydeRes.err).Msg("search: hyde indisponível, usando hybrid sem hyde")
+			results, total, err = s.searchRepo.SearchHybrid(ctx, req, clients.VectorLiteral(embedRes.vec))
 			if err != nil {
 				log.Warn().Err(err).Msg("search: hybrid falhou, caindo para FTS")
 				results, total, err = s.searchRepo.Search(ctx, req)
 			}
 		} else {
-			log.Warn().Err(embedErr).Msg("search: embedding indisponível, usando FTS")
-			results, total, err = s.searchRepo.Search(ctx, req)
+			// Caminho ideal: FTS + query_vec + hyde_vec (3 listas RRF)
+			results, total, err = s.searchRepo.SearchHybridWithHyDE(
+				ctx, req,
+				clients.VectorLiteral(embedRes.vec),
+				clients.VectorLiteral(hydeRes.vec),
+			)
+			if err != nil {
+				log.Warn().Err(err).Msg("search: hyde hybrid falhou, caindo para hybrid")
+				results, total, err = s.searchRepo.SearchHybrid(ctx, req, clients.VectorLiteral(embedRes.vec))
+			}
 		}
 	} else {
 		results, total, err = s.searchRepo.Search(ctx, req)

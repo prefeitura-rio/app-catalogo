@@ -96,6 +96,40 @@ func (c *GeminiEmbeddingClient) EmbedQuery(ctx context.Context, query string) ([
 	return result.Embeddings[0].Values, nil
 }
 
+// hydePromptTemplate é o prompt para geração do documento hipotético.
+// Instrui o modelo a produzir texto que se pareça com um item real do catálogo.
+const hydePromptTemplate = `Você é um assistente de busca de serviços públicos do Rio de Janeiro.
+Um cidadão pesquisou por: "%s"
+
+Escreva 2 a 3 frases descrevendo um serviço público municipal relevante para essa pesquisa, como se fosse o resumo de um item do catálogo oficial. Use linguagem direta e termos que aparecem em documentos de serviços públicos (ex: "o cidadão pode solicitar", "basta comparecer", "disponível online"). Não mencione "hipotético" nem cite a pesquisa.`
+
+// GenerateHyDE gera um documento hipotético (Hypothetical Document Embedding).
+// O texto gerado descreve como seria um item real do catálogo que responde à query.
+// O embedding desse texto é mais próximo dos documentos relevantes do que o embedding da própria query.
+func (c *GeminiEmbeddingClient) GenerateHyDE(ctx context.Context, query string) (string, error) {
+	prompt := fmt.Sprintf(hydePromptTemplate, query)
+	contents := []*genai.Content{
+		genai.NewContentFromText(prompt, genai.RoleUser),
+	}
+
+	result, err := c.client.Models.GenerateContent(ctx, "gemini-2.0-flash-lite", contents,
+		&genai.GenerateContentConfig{
+			MaxOutputTokens: 150,
+		},
+	)
+	if err != nil {
+		return "", fmt.Errorf("gemini: hyde generation: %w", err)
+	}
+	if len(result.Candidates) == 0 || result.Candidates[0].Content == nil {
+		return "", fmt.Errorf("gemini: hyde: resposta sem candidatos")
+	}
+	text := result.Text()
+	if text == "" {
+		return "", fmt.Errorf("gemini: hyde: texto vazio")
+	}
+	return strings.TrimSpace(text), nil
+}
+
 // VectorLiteral converte um slice de float32 no formato literal do pgvector: "[f1,f2,...,fn]".
 func VectorLiteral(v []float32) string {
 	if len(v) == 0 {

@@ -292,6 +292,127 @@ func (r *SearchRepository) SearchHybrid(ctx context.Context, req *models.SearchR
 	return results, total, nil
 }
 
+// SearchHybridWithHyDE executa busca com 3 listas no RRF: FTS + query_vec + hyde_vec.
+// hydeEmbedding é o embedding do documento hipotético gerado pelo HyDE.
+// Pesos: FTS=1.0, query_vec=2.0, hyde_vec=1.5
+func (r *SearchRepository) SearchHybridWithHyDE(ctx context.Context, req *models.SearchRequest, queryEmbedding, hydeEmbedding string) ([]*SearchResult, int, error) {
+	// Args: $1=expandedQ, $2=rawQ(trigram), $3=queryVec, $4=hydeVec, $5...$N=filtros
+	filterSQL, filterArgs, nextIdx := buildFilterClauses(req, 5)
+
+	baseWhere := `
+		ci.status = 'active'
+		AND ci.deleted_at IS NULL
+		AND (ci.valid_until IS NULL OR ci.valid_until > NOW())
+		` + filterSQL
+
+	// Count via FTS
+	countFilterSQL, countFilterArgs, _ := buildFilterClauses(req, 2)
+	countWhere := `
+		ci.status = 'active'
+		AND ci.deleted_at IS NULL
+		AND (ci.valid_until IS NULL OR ci.valid_until > NOW())
+		` + countFilterSQL
+	countArgs := append([]interface{}{req.Q}, countFilterArgs...)
+	countSQL := fmt.Sprintf(`
+		SELECT COUNT(*) FROM catalog_items ci
+		WHERE %s
+		  AND ci.search_vector @@ websearch_to_tsquery('portuguese', unaccent($1))
+	`, countWhere)
+
+	var total int
+	if err := r.db.QueryRow(ctx, countSQL, countArgs...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("hyde search count: %w", err)
+	}
+
+	offset := (req.Page - 1) * req.PerPage
+	mainArgs := make([]interface{}, 0, 4+len(filterArgs)+2)
+	mainArgs = append(mainArgs, req.Q, req.Q, queryEmbedding, hydeEmbedding)
+	mainArgs = append(mainArgs, filterArgs...)
+	mainArgs = append(mainArgs, req.PerPage, offset)
+
+	limitClause := fmt.Sprintf("LIMIT $%d OFFSET $%d", nextIdx, nextIdx+1)
+
+	mainSQL := fmt.Sprintf(`
+		WITH
+		fts AS (
+			SELECT
+				ci.id,
+				ts_rank_cd('{0.05,0.1,0.3,1.0}', ci.search_vector,
+					websearch_to_tsquery('portuguese', unaccent($1)), 32)
+				+ similarity(unaccent(lower(ci.title)), unaccent(lower($2))) * 0.3 AS score,
+				ts_headline('portuguese',
+					ci.title || ' ' || COALESCE(ci.short_desc, ''),
+					websearch_to_tsquery('portuguese', unaccent($1)),
+					'StartSel=<mark>,StopSel=</mark>,MaxFragments=2,MaxWords=15,MinWords=5'
+				) AS headline,
+				ROW_NUMBER() OVER (
+					ORDER BY
+						ts_rank_cd('{0.05,0.1,0.3,1.0}', ci.search_vector,
+							websearch_to_tsquery('portuguese', unaccent($1)), 32)
+						+ similarity(unaccent(lower(ci.title)), unaccent(lower($2))) * 0.3 DESC
+				) AS rn
+			FROM catalog_items ci
+			WHERE ci.search_vector @@ websearch_to_tsquery('portuguese', unaccent($1))
+			  AND %s
+			LIMIT 50
+		),
+		sem AS (
+			SELECT
+				ci.id,
+				1.0 - (ci.embedding <=> $3::vector) AS score,
+				ROW_NUMBER() OVER (ORDER BY ci.embedding <=> $3::vector) AS rn
+			FROM catalog_items ci
+			WHERE ci.embedding IS NOT NULL
+			  AND %s
+			ORDER BY ci.embedding <=> $3::vector
+			LIMIT 50
+		),
+		hyde AS (
+			SELECT
+				ci.id,
+				1.0 - (ci.embedding <=> $4::vector) AS score,
+				ROW_NUMBER() OVER (ORDER BY ci.embedding <=> $4::vector) AS rn
+			FROM catalog_items ci
+			WHERE ci.embedding IS NOT NULL
+			  AND %s
+			ORDER BY ci.embedding <=> $4::vector
+			LIMIT 50
+		),
+		rrf AS (
+			SELECT
+				COALESCE(f.id, s.id, h.id) AS id,
+				COALESCE(f.headline, '')   AS headline,
+				COALESCE(1.0 / (60.0 + f.rn), 0.0) * 1.0   -- FTS
+				+ COALESCE(1.0 / (60.0 + s.rn), 0.0) * 2.0  -- query vec
+				+ COALESCE(1.0 / (60.0 + h.rn), 0.0) * 1.5  -- hyde vec
+				AS rrf_score
+			FROM fts f
+			FULL OUTER JOIN sem s ON f.id = s.id
+			FULL OUTER JOIN hyde h ON COALESCE(f.id, s.id) = h.id
+		)
+		SELECT
+			ci.id, ci.external_id, ci.source, ci.type,
+			ci.title, ci.description, ci.short_desc,
+			ci.organization, ci.url, ci.image_url,
+			ci.target_audience, ci.bairros, ci.modalidade,
+			ci.status, ci.tags, ci.source_data,
+			ci.valid_from, ci.valid_until, ci.source_updated_at,
+			ci.created_at, ci.updated_at,
+			r.rrf_score AS rank,
+			r.headline
+		FROM rrf r
+		JOIN catalog_items ci ON ci.id = r.id
+		ORDER BY r.rrf_score DESC
+		%s
+	`, baseWhere, baseWhere, baseWhere, limitClause)
+
+	results, _, err := r.scanResults(ctx, mainSQL, mainArgs)
+	if err != nil {
+		return nil, 0, err
+	}
+	return results, total, nil
+}
+
 func (r *SearchRepository) scanResults(ctx context.Context, sql string, args []interface{}) ([]*SearchResult, int, error) {
 	rows, err := r.db.Query(ctx, sql, args...)
 	if err != nil {
