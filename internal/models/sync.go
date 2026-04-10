@@ -29,7 +29,7 @@ type SyncEvent struct {
 	DurationMs     int             `json:"duration_ms,omitempty"`
 	StartedAt      time.Time       `json:"started_at"`
 	CompletedAt    *time.Time      `json:"completed_at,omitempty"`
-	Metadata       json.RawMessage `json:"metadata,omitempty"`
+	Metadata       json.RawMessage `json:"metadata,omitempty" swaggertype:"object"`
 }
 
 type SalesForceSyncCursor struct {

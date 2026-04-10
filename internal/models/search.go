@@ -69,5 +69,5 @@ type SearchItem struct {
 	Tags           []string        `json:"tags,omitempty"`
 	RelevanceScore float64         `json:"relevance_score"`
 	Highlights     []string        `json:"highlights,omitempty"`
-	Metadata       json.RawMessage `json:"metadata,omitempty"`
+	Metadata       json.RawMessage `json:"metadata,omitempty" swaggertype:"object"`
 }

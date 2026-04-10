@@ -40,12 +40,12 @@ type CatalogItem struct {
 	Organization string          `json:"organization,omitempty"`
 	URL          string          `json:"url,omitempty"`
 	ImageURL     string          `json:"image_url,omitempty"`
-	TargetAudience json.RawMessage `json:"target_audience,omitempty"`
+	TargetAudience json.RawMessage `json:"target_audience,omitempty" swaggertype:"object"`
 	Bairros      []string        `json:"bairros,omitempty"`
 	Modalidade   string          `json:"modalidade,omitempty"`
 	Status       ItemStatus      `json:"status"`
 	Tags         []string        `json:"tags,omitempty"`
-	SourceData   json.RawMessage `json:"source_data,omitempty"`
+	SourceData   json.RawMessage `json:"source_data,omitempty" swaggertype:"object"`
 	ValidFrom    *time.Time      `json:"valid_from,omitempty"`
 	ValidUntil   *time.Time      `json:"valid_until,omitempty"`
 	SourceUpdatedAt *time.Time   `json:"source_updated_at,omitempty"`
