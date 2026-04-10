@@ -171,7 +171,11 @@ func (r *SearchRepository) Search(ctx context.Context, req *models.SearchRequest
 		%s
 	`, rankExpr, headlineExpr, baseWhere, tsCondition, orderBy, limitClause)
 
-	return r.scanResults(ctx, mainSQL, mainArgs)
+	results, _, err := r.scanResults(ctx, mainSQL, mainArgs)
+	if err != nil {
+		return nil, 0, err
+	}
+	return results, total, nil
 }
 
 // SearchHybrid executa busca híbrida: RRF entre FTS melhorado e busca vetorial.
