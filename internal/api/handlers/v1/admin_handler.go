@@ -8,8 +8,12 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/datasource"
+	"github.com/prefeitura-rio/app-catalogo/internal/models"
 	"github.com/prefeitura-rio/app-catalogo/internal/repository"
 )
+
+// swag import para que models.SyncStatus e models.CatalogItem sejam reconhecidos
+var _ = models.SyncStatus{}
 
 type AdminHandler struct {
 	repo    *repository.CatalogItemRepository
@@ -21,12 +25,16 @@ func NewAdminHandler(repo *repository.CatalogItemRepository, manager *datasource
 }
 
 // SyncStatus godoc
-// @Summary Status das últimas sincronizações por fonte
-// @Tags admin
-// @Security BearerAuth
-// @Produce json
-// @Success 200 {object} map[string]interface{}
-// @Router /api/v1/admin/sync/status [get]
+// @Summary      Status das sincronizações
+// @Description  Retorna o último evento de sincronização por fonte de dados. Requer role admin ou go:admin.
+// @Tags         admin
+// @Security     BearerAuth
+// @Produce      json
+// @Success      200  {object}  map[string][]models.SyncStatus
+// @Failure      401  {object}  map[string]string
+// @Failure      403  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
+// @Router       /api/v1/admin/sync/status [get]
 func (h *AdminHandler) SyncStatus(c *gin.Context) {
 	statuses, err := h.repo.GetLastSyncEvents(c.Request.Context())
 	if err != nil {
@@ -37,13 +45,16 @@ func (h *AdminHandler) SyncStatus(c *gin.Context) {
 }
 
 // TriggerSync godoc
-// @Summary Dispara sincronização manual de qualquer fonte registrada
-// @Tags admin
-// @Security BearerAuth
-// @Param source query string false "Nome da fonte (ex: salesforce, app-go-api). Vazio = todas."
-// @Produce json
-// @Success 202 {object} map[string]string
-// @Router /api/v1/admin/sync/trigger [post]
+// @Summary      Dispara sincronização manual
+// @Description  Dispara sync ad-hoc em background. Retorna imediatamente. Requer role admin ou go:admin.
+// @Tags         admin
+// @Security     BearerAuth
+// @Param        source  query  string  false  "Fonte: salesforce, app-go-api, typesense. Vazio = todas."
+// @Produce      json
+// @Success      202  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Failure      403  {object}  map[string]string
+// @Router       /api/v1/admin/sync/trigger [post]
 func (h *AdminHandler) TriggerSync(c *gin.Context) {
 	source := c.Query("source")
 
@@ -62,12 +73,16 @@ func (h *AdminHandler) TriggerSync(c *gin.Context) {
 }
 
 // GetCatalogItem godoc
-// @Summary Busca item do catálogo por ID
-// @Tags catalog
-// @Produce json
-// @Param id path string true "UUID do item"
-// @Success 200 {object} models.CatalogItem
-// @Router /api/v1/catalog/{id} [get]
+// @Summary      Detalhe de item do catálogo
+// @Description  Retorna todos os campos de um item incluindo source_data original.
+// @Tags         catálogo
+// @Produce      json
+// @Param        id  path  string  true  "UUID v4 do item"
+// @Success      200  {object}  models.CatalogItem
+// @Failure      400  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Router       /api/v1/catalog/{id} [get]
+// @Router       /api/public/catalog/{id} [get]
 func (h *AdminHandler) GetCatalogItem(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {

@@ -1,3 +1,14 @@
+// @title           app-catalogo
+// @version         1.0
+// @description     Discovery layer unificada da Prefeitura do Rio de Janeiro. Indexa serviços públicos, cursos, vagas e oportunidades MEI com busca full-text e recomendação personalizada por perfil de cidadão.
+// @contact.name    Prefeitura do Rio de Janeiro
+// @contact.url     https://github.com/prefeitura-rio/app-catalogo
+// @BasePath        /
+// @securityDefinitions.apikey BearerAuth
+// @in              header
+// @name            Authorization
+// @description     JWT injetado pelo Istio via header X-Auth-Request-Token
+
 package main
 
 import (

@@ -10,7 +10,7 @@ jobs:
     name: Build & Push :latest
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -30,6 +30,53 @@ jobs:
           else
             echo "k8s_only=false" >> $GITHUB_OUTPUT
           fi
+
+      - name: Set up Go
+        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24'
+
+      - name: Install swag
+        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        run: |
+          mkdir -p bin
+          GOBIN="$PWD/bin" go install github.com/swaggo/swag/cmd/swag@latest
+          echo "$PWD/bin" >> $GITHUB_PATH
+
+      - name: Generate Swagger docs
+        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        run: swag init -g cmd/api/main.go --output docs
+
+      - name: Install swagger2openapi
+        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        run: npm install -g swagger2openapi
+
+      - name: Convert to OpenAPI v3
+        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        run: swagger2openapi docs/swagger.json -o docs/openapi-v3.json
+
+      - name: Post-process OpenAPI v3
+        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        run: |
+          jq '.servers = [
+              {"url": "https://services.staging.app.dados.rio/catalogo", "description": "Staging"},
+              {"url": "https://services.pref.rio/catalogo", "description": "Produção"}
+            ]' docs/openapi-v3.json > docs/openapi-v3.json.tmp && \
+          mv docs/openapi-v3.json.tmp docs/openapi-v3.json
+
+      - name: Configure Git
+        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        run: |
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'github-actions@github.com'
+
+      - name: Commit and push OpenAPI v3
+        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        run: |
+          git add docs/openapi-v3.json
+          git commit -m "chore: atualiza documentação OpenAPI v3" || echo "Sem alterações"
+          git push
 
       - name: Login to GHCR
         if: steps.check-k8s-only.outputs.k8s_only != 'true'

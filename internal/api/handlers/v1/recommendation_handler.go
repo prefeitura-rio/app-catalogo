@@ -21,15 +21,18 @@ func NewRecommendationHandler(recomSvc *services.RecommendationService, citizenS
 }
 
 // Authenticated godoc
-// @Summary Recomendações personalizadas (autenticado)
-// @Tags recommendations
-// @Security BearerAuth
-// @Produce json
-// @Param types query []string false "Tipos: service,course,job,mei_opportunity"
-// @Param limit query int false "Limite (default 10, max 50)"
-// @Param context query string false "Contexto: homepage, after_search, profile"
-// @Success 200 {object} models.RecommendationResponse
-// @Router /api/v1/recommendations [get]
+// @Summary      Recomendações personalizadas
+// @Description  Recomendações baseadas no perfil do cidadão autenticado (escolaridade, renda, localização, acessibilidade, faixa etária).
+// @Tags         recomendações
+// @Security     BearerAuth
+// @Produce      json
+// @Param        types    query  []string  false  "Tipos: service, course, job, mei_opportunity"  collectionFormat(multi)
+// @Param        limit    query  int       false  "Máximo de itens, max 50 (default: 10)"
+// @Param        context  query  string    false  "Contexto: homepage, after_search, profile"
+// @Success      200  {object}  models.RecommendationResponse
+// @Failure      401  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
+// @Router       /api/v1/recommendations [get]
 func (h *RecommendationHandler) Authenticated(c *gin.Context) {
 	cpf := middleware.GetUserCPF(c)
 	if cpf == "" {
@@ -61,14 +64,17 @@ func (h *RecommendationHandler) Authenticated(c *gin.Context) {
 }
 
 // Anonymous godoc
-// @Summary Recomendações por cluster demográfico (público)
-// @Tags recommendations
-// @Produce json
-// @Param cluster_hint query string false "Bairro ou faixa etária para personalização anônima"
-// @Param types query []string false "Tipos: service,course,job,mei_opportunity"
-// @Param limit query int false "Limite (default 10, max 50)"
-// @Success 200 {object} models.RecommendationResponse
-// @Router /api/public/recommendations [get]
+// @Summary      Recomendações anônimas
+// @Description  Recomendações sem autenticação, com scoring neutro. cluster_hint aceita bairro ou faixa etária para leve personalização.
+// @Tags         recomendações
+// @Produce      json
+// @Param        cluster_hint  query  string    false  "Bairro ou faixa etária (ex: Tijuca, 25-34)"
+// @Param        types         query  []string  false  "Tipos: service, course, job, mei_opportunity"  collectionFormat(multi)
+// @Param        limit         query  int       false  "Máximo de itens, max 50 (default: 10)"
+// @Param        context       query  string    false  "Contexto: homepage, after_search, profile"
+// @Success      200  {object}  models.RecommendationResponse
+// @Failure      500  {object}  map[string]string
+// @Router       /api/public/recommendations [get]
 func (h *RecommendationHandler) Anonymous(c *gin.Context) {
 	req := h.parseRequest(c)
 	req.ClusterHint = c.Query("cluster_hint")

@@ -35,12 +35,17 @@ type sfWebhookPayload struct {
 }
 
 // SalesForce godoc
-// @Summary Webhook do SalesForce (Change Data Capture)
-// @Tags webhooks
-// @Accept json
-// @Produce json
-// @Success 200 {object} map[string]string
-// @Router /api/webhooks/salesforce [post]
+// @Summary      Webhook SalesForce (Change Data Capture)
+// @Description  Recebe notificações de criação/atualização da Carta de Serviços. Valida assinatura HMAC-SHA256 via header X-Salesforce-Signature.
+// @Tags         webhooks
+// @Accept       json
+// @Produce      json
+// @Param        X-Salesforce-Signature  header  string                 false  "HMAC-SHA256 do body em hex"
+// @Param        payload                 body    sfWebhookPayload        true   "Payload do evento"
+// @Success      200  {object}  map[string]string
+// @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
+// @Router       /api/webhooks/salesforce [post]
 func (h *WebhookHandler) SalesForce(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {

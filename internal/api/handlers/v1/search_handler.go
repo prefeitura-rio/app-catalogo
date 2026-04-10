@@ -20,6 +20,31 @@ func NewSearchHandler(searchSvc *services.SearchService, citizenSvc *services.Ci
 	return &SearchHandler{searchSvc: searchSvc, citizenSvc: citizenSvc}
 }
 
+// Search godoc
+// @Summary      Busca no catálogo
+// @Description  Busca por serviços, cursos, vagas e oportunidades MEI. Suporta sintaxe websearch_to_tsquery: aspas para frase exata, - para exclusão, OR para alternativas.
+// @Tags         busca
+// @Produce      json
+// @Param        q                  query  string    false  "Texto livre de busca"
+// @Param        types              query  []string  false  "Tipos: service, course, job, mei_opportunity"  collectionFormat(multi)
+// @Param        page               query  int       false  "Página (default: 1)"
+// @Param        per_page           query  int       false  "Itens por página, máximo 100 (default: 10)"
+// @Param        modalidade         query  string    false  "Modalidade: presencial, digital, hibrido"
+// @Param        bairro             query  string    false  "Bairro do Rio de Janeiro"
+// @Param        orgao              query  string    false  "Órgão ou secretaria responsável"
+// @Param        gratuito           query  bool      false  "[course] Apenas cursos gratuitos"
+// @Param        turno              query  string    false  "[course] Turno: matutino, vespertino, noturno"
+// @Param        regime_contratacao query  string    false  "[job] Regime: CLT, PJ, temporario"
+// @Param        modelo_trabalho    query  string    false  "[job] Modelo: presencial, remoto, hibrido"
+// @Param        pcd                query  bool      false  "[job] Apenas vagas exclusivas para PCD"
+// @Param        faixa_salarial     query  string    false  "[job] Faixa salarial: ate-2sm, 2-4sm, acima-4sm"
+// @Param        canal_atendimento  query  string    false  "[service] Canal: presencial, digital, telefone"
+// @Param        tema               query  string    false  "[service] Tema do serviço"
+// @Param        segmento           query  string    false  "[mei_opportunity] Segmento do negócio"
+// @Success      200                {object}  models.SearchResponse
+// @Failure      500                {object}  map[string]string
+// @Router       /api/v1/search [get]
+// @Router       /api/public/search [get]
 func (h *SearchHandler) Search(c *gin.Context) {
 	req := parseSearchQuery(c)
 
