@@ -184,13 +184,21 @@ jobs:
 
             echo "Attempt $i/60: Image=$CURRENT_IMAGE, ArgoCD Sync=$SYNC_STATUS"
 
-            if [[ "$CURRENT_IMAGE" == "$IMAGE_NAME:$COMMIT_HASH@$DIGEST" ]]; then
-              echo "✅ Rollout spec updated with new image!"
+            # Aceita a imagem em dois formatos:
+            # 1. IMAGE_NAME:COMMIT_HASH@DIGEST  (patch do CI)
+            # 2. IMAGE_NAME:*@DIGEST            (Image Updater com mesmo digest)
+            # Quando Docker cache produz o mesmo digest, o Image Updater reverte
+            # para :latest@DIGEST antes do CI patch ser aplicado.
+            if [[ "$CURRENT_IMAGE" == "$IMAGE_NAME:$COMMIT_HASH@$DIGEST" ]] || \
+               [[ "$CURRENT_IMAGE" == *"@$DIGEST" ]]; then
+              echo "✅ Rollout spec já está na imagem correta (digest: $DIGEST)"
               break
             fi
 
             if [ $i -eq 60 ]; then
               echo "❌ Timeout waiting for rollout image update"
+              echo "Expected digest: $DIGEST"
+              echo "Current image:   $CURRENT_IMAGE"
               exit 1
             fi
 
