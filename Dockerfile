@@ -3,7 +3,7 @@ WORKDIR /app
 COPY go.* ./
 RUN go mod download
 COPY . .
-RUN go install github.com/pressly/goose/v3/cmd/goose@v3.24.3
+RUN go install github.com/pressly/goose/v3/cmd/goose@v3.21.1
 RUN CGO_ENABLED=0 go build -o api ./cmd/api
 RUN CGO_ENABLED=0 go build -o worker ./cmd/worker
 
