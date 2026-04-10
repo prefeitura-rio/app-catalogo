@@ -98,7 +98,7 @@ func (r *SearchRepository) Search(ctx context.Context, req *models.SearchRequest
 	if hasQuery {
 		// ts_rank_cd com pesos {D,C,B,A} = {0.05, 0.1, 0.3, 2.0}
 		rankExpr = `
-			ts_rank_cd('{0.05,0.1,0.3,2.0}', ci.search_vector,
+			ts_rank_cd('{0.05,0.1,0.3,1.0}', ci.search_vector,
 				websearch_to_tsquery('portuguese', unaccent($1)), 32)
 			+ similarity(unaccent(lower(ci.title)), unaccent(lower($1))) * 0.3
 		`
@@ -226,7 +226,7 @@ func (r *SearchRepository) SearchHybrid(ctx context.Context, req *models.SearchR
 		fts AS (
 			SELECT
 				ci.id,
-				ts_rank_cd('{0.05,0.1,0.3,2.0}', ci.search_vector,
+				ts_rank_cd('{0.05,0.1,0.3,1.0}', ci.search_vector,
 					websearch_to_tsquery('portuguese', unaccent($1)), 32)
 				+ similarity(unaccent(lower(ci.title)), unaccent(lower($2))) * 0.3 AS score,
 				ts_headline('portuguese',
@@ -236,7 +236,7 @@ func (r *SearchRepository) SearchHybrid(ctx context.Context, req *models.SearchR
 				) AS headline,
 				ROW_NUMBER() OVER (
 					ORDER BY
-						ts_rank_cd('{0.05,0.1,0.3,2.0}', ci.search_vector,
+						ts_rank_cd('{0.05,0.1,0.3,1.0}', ci.search_vector,
 							websearch_to_tsquery('portuguese', unaccent($1)), 32)
 						+ similarity(unaccent(lower(ci.title)), unaccent(lower($2))) * 0.3 DESC
 				) AS rn
