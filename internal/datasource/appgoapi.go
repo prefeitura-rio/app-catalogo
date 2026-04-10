@@ -69,12 +69,17 @@ func (s *AppGoAPIDataSource) syncCourses(ctx context.Context) error {
 	}
 
 	items := make([]*models.CatalogItem, 0, len(allCourses))
+	skipped := 0
 	for _, c := range allCourses {
+		if !courseIsIndexable(c) {
+			skipped++
+			continue
+		}
 		items = append(items, mapCourse(c))
 	}
 
 	processed, err := s.repo.UpsertBatch(ctx, items)
-	log.Info().Int("processed", processed).Msg("appgoapi: cursos sincronizados")
+	log.Info().Int("processed", processed).Int("skipped_non_visible", skipped).Msg("appgoapi: cursos sincronizados")
 	return err
 }
 
@@ -128,19 +133,56 @@ func (s *AppGoAPIDataSource) syncMEI(ctx context.Context) error {
 	return err
 }
 
+// courseIsIndexable retorna true apenas para cursos publicados e visíveis.
+func courseIsIndexable(c clients.Course) bool {
+	if !c.IsVisible {
+		return false
+	}
+	switch c.Status {
+	case "published", "approved", "opened", "":
+		return true
+	default:
+		return false // "canceled", "draft", etc.
+	}
+}
+
 func mapCourse(c clients.Course) *models.CatalogItem {
 	sourceData, _ := json.Marshal(c)
 	now := c.UpdatedAt
-	tags := []string{}
+
+	// Tags: tema + categorias + carga horária + certificado
+	var tags []string
 	if c.Theme != "" {
 		tags = append(tags, c.Theme)
 	}
+	for _, cat := range c.Categorias {
+		if cat.Nome != "" && cat.Nome != c.Theme {
+			tags = append(tags, cat.Nome)
+		}
+	}
+	if c.Turno != "" && c.Turno != "LIVRE" {
+		tags = append(tags, c.Turno)
+	}
+	if c.HasCertificate {
+		tags = append(tags, "Com certificado")
+	}
+
+	// ShortDesc: público-alvo ou início da descrição
+	shortDesc := c.TargetAudience
+	if shortDesc == "" && len(c.Description) > 0 {
+		shortDesc = c.Description
+	}
+	if len(shortDesc) > 300 {
+		shortDesc = shortDesc[:300]
+	}
+
 	return &models.CatalogItem{
 		ExternalID:      string(c.ID),
 		Source:          models.SourceCourses,
 		Type:            models.TypeCourse,
 		Title:           c.Title,
 		Description:     c.Description,
+		ShortDesc:       shortDesc,
 		Organization:    c.Organization,
 		URL:             c.URL,
 		ImageURL:        c.ImageURL,
@@ -148,6 +190,7 @@ func mapCourse(c clients.Course) *models.CatalogItem {
 		Status:          models.StatusActive,
 		Tags:            tags,
 		SourceData:      sourceData,
+		ValidUntil:      c.DataLimiteInscr,
 		TargetAudience:  json.RawMessage("{}"),
 		SourceUpdatedAt: &now,
 	}
@@ -210,20 +253,39 @@ func mapJob(j clients.Job) *models.CatalogItem {
 func mapMEI(m clients.MEIOpportunity) *models.CatalogItem {
 	sourceData, _ := json.Marshal(m)
 	now := m.UpdatedAt
-	tags := []string{}
-	if m.Segmento != "" {
-		tags = append(tags, m.Segmento)
+
+	// Tags: CNAEs + forma de pagamento
+	var tags []string
+	tags = append(tags, m.CNAEIDs...)
+	if m.FormaPagamento != "" {
+		tags = append(tags, m.FormaPagamento)
 	}
+
+	// Bairros
+	var bairros []string
+	if m.Bairro != "" {
+		bairros = append(bairros, m.Bairro)
+	}
+
+	// ShortDesc: primeiros 300 chars da descrição
+	shortDesc := m.Description
+	if len(shortDesc) > 300 {
+		shortDesc = shortDesc[:300]
+	}
+
 	return &models.CatalogItem{
 		ExternalID:      string(m.ID),
 		Source:          models.SourceMEI,
 		Type:            models.TypeMEIOpportunity,
 		Title:           m.Title,
 		Description:     m.Description,
-		Organization:    m.Organization,
+		ShortDesc:       shortDesc,
+		Organization:    m.OrgaoID, // ID do órgão (sem resolução de nome por ora)
 		ImageURL:        m.ImageURL,
+		Bairros:         bairros,
 		Status:          models.StatusActive,
 		Tags:            tags,
+		ValidUntil:      m.DataExpiracao,
 		TargetAudience:  json.RawMessage("{}"),
 		SourceData:      sourceData,
 		SourceUpdatedAt: &now,
