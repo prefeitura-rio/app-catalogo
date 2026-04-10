@@ -146,7 +146,7 @@ jobs:
             sleep 5
           done
 
-          echo "Waiting for blue-green preview pod..."
+          echo "Waiting for blue-green preview pod to be Running..."
           for i in {1..60}; do
             PREVIEW_POD=$(kubectl get pods -n catalogo -l app=catalogo \
               --field-selector=status.phase=Running \
@@ -166,6 +166,11 @@ jobs:
 
           kubectl argo rollouts get rollout catalogo -n catalogo
 
+          # Aguarda o pod de preview ficar Ready (migrations concluídas + API respondendo)
+          echo "Waiting for preview pod to be Ready (health probes passing)..."
+          kubectl wait pod -n catalogo -l app=catalogo \
+            --for=condition=Ready --timeout=300s || true
+
       - name: Set up port forward to preview service
         if: steps.check-k8s-only.outputs.k8s_only != 'true'
         run: |
@@ -173,18 +178,18 @@ jobs:
           PORT_FORWARD_PID=$!
           echo "PORT_FORWARD_PID=$PORT_FORWARD_PID" >> $GITHUB_ENV
 
-          for i in {1..30}; do
+          for i in {1..60}; do
             if curl -sf http://localhost:8080/health > /dev/null 2>&1; then
               echo "Port-forward is ready!"
               break
             fi
-            if [ $i -eq 30 ]; then
+            if [ $i -eq 60 ]; then
               echo "Port-forward failed to become ready"
               kill $PORT_FORWARD_PID 2>/dev/null || true
               exit 1
             fi
-            echo "Attempt $i/30: Waiting for port-forward..."
-            sleep 2
+            echo "Attempt $i/60: Waiting for port-forward..."
+            sleep 3
           done
 
       - name: Health check on preview
