@@ -24,10 +24,12 @@ CREATE TYPE item_type AS ENUM (
 );
 
 -- Wrapper IMMUTABLE para unaccent (necessário em expressões de trigger e índices)
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION immutable_unaccent(text)
 RETURNS text AS $$
   SELECT unaccent($1)
 $$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+-- +goose StatementEnd
 
 -- Tabela central do catálogo
 CREATE TABLE catalog_items (
@@ -71,6 +73,7 @@ CREATE TABLE catalog_items (
 );
 
 -- Trigger para manter search_vector atualizado
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION update_search_vector()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -82,6 +85,7 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+-- +goose StatementEnd
 
 CREATE TRIGGER trg_catalog_items_search_vector
     BEFORE INSERT OR UPDATE ON catalog_items
@@ -111,6 +115,7 @@ CREATE INDEX idx_catalog_items_status_active
     WHERE status = 'active' AND deleted_at IS NULL;
 
 -- Trigger para atualizar updated_at automaticamente
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION update_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -118,6 +123,7 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+-- +goose StatementEnd
 
 CREATE TRIGGER trg_catalog_items_updated_at
     BEFORE UPDATE ON catalog_items
