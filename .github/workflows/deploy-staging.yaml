@@ -46,7 +46,7 @@ jobs:
         if: steps.check-k8s-only.outputs.k8s_only != 'true'
         uses: actions/setup-go@v4
         with:
-          go-version: '1.24'
+          go-version: '1.25'
 
       - name: Install swag
         if: steps.check-k8s-only.outputs.k8s_only != 'true'
