@@ -196,12 +196,14 @@ spec:
   http:
     - route:
         - destination:
-            host: catalogo-stable
+            host: catalogo
+            subset: stable
             port:
               number: 80
           weight: 100
         - destination:
-            host: catalogo-canary
+            host: catalogo
+            subset: canary
             port:
               number: 80
           weight: 0
