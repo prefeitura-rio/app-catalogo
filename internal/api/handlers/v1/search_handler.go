@@ -64,8 +64,12 @@ func parseSearchQuery(c *gin.Context) models.SearchRequest {
 		PerPage: queryInt(c, "per_page", 10),
 	}
 
-	for _, t := range c.QueryArray("types") {
-		req.Types = append(req.Types, models.ItemType(t))
+	for _, raw := range c.QueryArray("types") {
+		for _, t := range strings.Split(raw, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				req.Types = append(req.Types, models.ItemType(t))
+			}
+		}
 	}
 
 	req.Filters = models.SearchFilters{

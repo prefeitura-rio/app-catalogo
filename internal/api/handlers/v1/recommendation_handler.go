@@ -3,6 +3,7 @@ package v1
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -94,8 +95,12 @@ func (h *RecommendationHandler) parseRequest(c *gin.Context) *models.Recommendat
 	}
 
 	// Tipos
-	for _, t := range c.QueryArray("types") {
-		req.Types = append(req.Types, models.ItemType(t))
+	for _, raw := range c.QueryArray("types") {
+		for _, t := range strings.Split(raw, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				req.Types = append(req.Types, models.ItemType(t))
+			}
+		}
 	}
 
 	// Limit
