@@ -56,6 +56,22 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Pin image digest in prod manifest
+        run: |
+          DIGEST=$(docker buildx imagetools inspect $IMAGE_NAME:stable \
+            --format '{{.Manifest.Digest}}' | grep -oE 'sha256:[a-f0-9]+' | head -n1)
+          echo "DIGEST=$DIGEST" >> $GITHUB_ENV
+
+          PINNED_IMAGE="$IMAGE_NAME:stable@$DIGEST"
+          sed -i "s|image: ghcr.io/prefeitura-rio/app-catalogo:.*  # Updated by release workflow|image: $PINNED_IMAGE  # Updated by release workflow|g" \
+            k8s/prod/resources.yaml
+
+          git config --global user.name 'GitHub Actions'
+          git config --global user.email 'github-actions@github.com'
+          git add k8s/prod/resources.yaml
+          git commit -m "chore: atualiza imagem prod para $VERSION ($DIGEST)" || echo "Sem alterações"
+          git push
+
       - name: Create deployment summary
         if: always()
         run: |

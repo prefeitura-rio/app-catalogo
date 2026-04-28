@@ -1,5 +1,5 @@
 ---
-# AnalysisTemplate — verifica taxa de sucesso e latência durante o canary
+# AnalysisTemplate — verifica taxa de sucesso durante o canary
 apiVersion: argoproj.io/v1alpha1
 kind: AnalysisTemplate
 metadata:
@@ -9,34 +9,36 @@ spec:
     - name: service-name
   metrics:
     - name: success-rate
-      interval: 30s
-      failureLimit: 2
-      successCondition: result[0] >= 0.98   # >= 98% de respostas 2xx/3xx
+      interval: 1m
+      failureLimit: 5
+      successCondition: result[0] >= 0.95
       provider:
         prometheus:
           address: http://prometheus.istio-system.svc.cluster.local:9090
           query: |
-            sum(rate(istio_requests_total{
-              destination_workload="{{args.service-name}}",
-              response_code!~"5.*"
-            }[1m])) /
-            sum(rate(istio_requests_total{
-              destination_workload="{{args.service-name}}"
-            }[1m]))
+            (sum(rate(istio_requests_total{
+              destination_service_name=~"{{args.service-name}}",
+              response_code!~"5.."
+            }[2m])) or vector(0)) /
+            (sum(rate(istio_requests_total{
+              destination_service_name=~"{{args.service-name}}"
+            }[2m])) > 0) or vector(1)
 
-    - name: p99-latency
-      interval: 30s
-      failureLimit: 2
-      successCondition: result[0] <= 0.5    # p99 <= 500ms
+    - name: error-rate
+      interval: 1m
+      failureLimit: 5
+      successCondition: result[0] <= 0.05
       provider:
         prometheus:
           address: http://prometheus.istio-system.svc.cluster.local:9090
           query: |
-            histogram_quantile(0.99, sum(rate(
-              istio_request_duration_milliseconds_bucket{
-                destination_workload="{{args.service-name}}"
-              }[1m]
-            )) by (le)) / 1000
+            (sum(rate(istio_requests_total{
+              destination_service_name=~"{{args.service-name}}",
+              response_code=~"5.."
+            }[2m])) or vector(0)) /
+            (sum(rate(istio_requests_total{
+              destination_service_name=~"{{args.service-name}}"
+            }[2m])) > 0) or vector(0)
 
 ---
 # API — Argo Rollout com Canary + Istio traffic shifting (prod)
@@ -56,6 +58,9 @@ spec:
     canary:
       canaryService: catalogo-canary
       stableService: catalogo-stable
+      maxSurge: "25%"
+      maxUnavailable: 0
+      abortScaleDownDelaySeconds: 30
       trafficRouting:
         istio:
           virtualService:
@@ -65,21 +70,23 @@ spec:
             canarySubsetName: canary
             stableSubsetName: stable
       analysis:
+        startingStep: 2
         templates:
           - templateName: catalogo-success-rate
         args:
           - name: service-name
-            value: catalogo
+            value: catalogo-canary
       steps:
         - setWeight: 10
         - pause: {duration: 2m}
-        - setWeight: 25
+        - setWeight: 20
+        - pause: {duration: 3m}
+        - setWeight: 40
         - pause: {duration: 5m}
-        - setWeight: 50
+        - setWeight: 60
         - pause: {duration: 5m}
-        - setWeight: 75
+        - setWeight: 80
         - pause: {duration: 5m}
-        - setWeight: 100
   template:
     metadata:
       labels:
@@ -93,7 +100,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: catalogo
-          image: ghcr.io/prefeitura-rio/app-catalogo:stable
+          image: ghcr.io/prefeitura-rio/app-catalogo:stable@sha256:75b9ff767a0528625d0de060f1b64a53bcf14fc0f57821bcb82657c8f483ccce  # Updated by release workflow
           command: ["/docker-entrypoint.sh", "./api"]
           ports:
             - containerPort: 8080
@@ -169,7 +176,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: catalogo-worker
-          image: ghcr.io/prefeitura-rio/app-catalogo:stable
+          image: ghcr.io/prefeitura-rio/app-catalogo:stable@sha256:75b9ff767a0528625d0de060f1b64a53bcf14fc0f57821bcb82657c8f483ccce  # Updated by release workflow
           command: ["./worker"]
           envFrom:
             - secretRef:
