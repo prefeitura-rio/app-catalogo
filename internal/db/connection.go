@@ -3,11 +3,19 @@ package db
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/rs/zerolog/log"
 )
 
 var Pool *pgxpool.Pool
+
+const (
+	maxRetries    = 7
+	retryBaseWait = 2 * time.Second
+	retryMaxWait  = 15 * time.Second
+)
 
 func Connect(ctx context.Context, cfg PoolConfig) error {
 	connStr := fmt.Sprintf(
@@ -28,11 +36,30 @@ func Connect(ctx context.Context, cfg PoolConfig) error {
 		return fmt.Errorf("falha ao criar connection pool: %w", err)
 	}
 
-	if err := pool.Ping(ctx); err != nil {
-		return fmt.Errorf("falha ao conectar ao banco: %w", err)
+	wait := retryBaseWait
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if err := pool.Ping(ctx); err == nil {
+			Pool = pool
+			return nil
+		} else if attempt == maxRetries {
+			return fmt.Errorf("falha ao conectar ao banco após %d tentativas: %w", maxRetries, err)
+		} else {
+			log.Warn().Err(err).Int("attempt", attempt).Dur("retry_in", wait).Msg("banco indisponível, aguardando...")
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("contexto cancelado aguardando banco: %w", ctx.Err())
+		case <-time.After(wait):
+		}
+		if wait < retryMaxWait {
+			wait *= 2
+			if wait > retryMaxWait {
+				wait = retryMaxWait
+			}
+		}
 	}
 
-	Pool = pool
 	return nil
 }
 
