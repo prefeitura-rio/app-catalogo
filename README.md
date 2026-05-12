@@ -103,7 +103,8 @@ GET  /metrics                    métricas Prometheus
 
 | Fonte | Entidades | Estratégia |
 |-------|-----------|------------|
-| SalesForce | Carta de Serviços | Delta sync por `LastModifiedDate` + webhooks HMAC-SHA256; fallback para full sync sem cursor |
+| Typesense | Carta de Serviços (**temporário**) | Delta sync por `last_update` (unix) a cada 30min; full sync na 1ª execução. Ativo enquanto a migração para o SalesForce não é concluída |
+| SalesForce | Carta de Serviços (**futuro**) | Delta sync por `LastModifiedDate` + webhooks HMAC-SHA256; em migração a partir do Typesense |
 | app-go-api | Cursos, Vagas, MEI | Full sync paginado (delta via `updated_since` ainda não ativado) |
 | app-rmi | Perfil do cidadão | Demand-driven: busca síncrona no primeiro acesso; refresh em background quando stale |
 
