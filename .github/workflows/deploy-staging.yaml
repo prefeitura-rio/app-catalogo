@@ -23,11 +23,13 @@ jobs:
         id: check-k8s-only
         run: |
           CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
-          NON_K8S_FILES=$(echo "$CHANGED_FILES" | grep -v "^k8s/" || true)
 
-          if [ -z "$NON_K8S_FILES" ] && [ -n "$CHANGED_FILES" ]; then
+          # Ignora arquivos que não afetam o binário: k8s/, docs/, *.md, .env.example
+          NON_DEPLOYABLE=$(echo "$CHANGED_FILES" | grep -vE "^k8s/|^docs/|\.md$|^\.env\.example$" || true)
+
+          if [ -z "$NON_DEPLOYABLE" ] && [ -n "$CHANGED_FILES" ]; then
             echo "k8s_only=true" >> $GITHUB_OUTPUT
-            echo "Only k8s/ files changed, skipping build"
+            echo "Only non-deployable files changed (k8s, docs, markdown), skipping build"
           else
             echo "k8s_only=false" >> $GITHUB_OUTPUT
           fi
