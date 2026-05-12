@@ -173,5 +173,7 @@ O `search_vector` é uma coluna `TSVECTOR GENERATED ALWAYS AS STORED` — calcul
 Manifests Kubernetes em `k8s/staging/` e `k8s/prod/`. O projeto usa KEDA para autoscaling.
 
 Fluxo de branches:
-- `feat/*` / `fix/*` → PR para `staging` → PR para `main`
-- Nunca commitar direto em `staging` ou `main`
+- `feat/*` / `fix/*` → PR para `main` (sempre a partir de `main`)
+- Merge em `main` → deploy automático para staging
+- GitHub Release → deploy para produção
+- Nunca commitar direto em `main`

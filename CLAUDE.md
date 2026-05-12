@@ -88,3 +88,15 @@ just migrate-create nome_da_migration
 - Sem mocking de API — erros reais, não stubs
 - CPF hash-only — `SHA-256(CPF + CPF_HASH_SALT)` antes de qualquer persistência
 - Webhook SalesForce: validar HMAC-SHA256 antes de processar qualquer payload
+
+## Branch Strategy
+
+```
+feat/* ou fix/* → PR para main → merge em main → deploy automático para staging
+GitHub Release  → deploy para produção
+```
+
+- Sempre criar branches a partir de **main**
+- PR direto para `main` (não há branch `staging`)
+- Merge em `main` dispara `deploy-staging.yaml` automaticamente
+- Nunca commitar direto em `main` — PRs obrigatórios
