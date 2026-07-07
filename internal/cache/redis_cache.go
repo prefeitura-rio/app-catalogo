@@ -11,6 +11,8 @@ import (
 
 var ErrCacheMiss = errors.New("cache miss")
 
+const SearchKeyPrefix = "catalogo:search:"
+
 type RedisCache struct {
 	client *redis.Client
 }
@@ -55,6 +57,50 @@ func (c *RedisCache) Set(ctx context.Context, key string, value interface{}, ttl
 // Del remove uma chave do cache.
 func (c *RedisCache) Del(ctx context.Context, keys ...string) error {
 	return c.client.Del(ctx, keys...).Err()
+}
+
+// DelByPrefix remove todas as chaves que começam com prefix usando SCAN.
+func (c *RedisCache) DelByPrefix(ctx context.Context, prefix string) (int64, error) {
+	if c == nil || c.client == nil {
+		return 0, nil
+	}
+
+	var cursor uint64
+	var deleted int64
+	batch := make([]string, 0, 100)
+	pattern := prefix + "*"
+
+	for {
+		keys, nextCursor, err := c.client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return deleted, err
+		}
+		batch = append(batch, keys...)
+
+		if len(batch) >= 100 {
+			n, err := c.client.Del(ctx, batch...).Result()
+			deleted += n
+			if err != nil {
+				return deleted, err
+			}
+			batch = batch[:0]
+		}
+
+		cursor = nextCursor
+		if cursor == 0 {
+			break
+		}
+	}
+
+	if len(batch) > 0 {
+		n, err := c.client.Del(ctx, batch...).Result()
+		deleted += n
+		if err != nil {
+			return deleted, err
+		}
+	}
+
+	return deleted, nil
 }
 
 // IsMiss verifica se o erro é cache miss.

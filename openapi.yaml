@@ -997,6 +997,9 @@ components:
           $ref: "#/components/schemas/ItemType"
         source:
           $ref: "#/components/schemas/ItemSource"
+        slug:
+          type: string
+          description: Slug da fonte de origem, quando disponível. Em vagas, identifica a URL SEO da vaga.
         title:
           type: string
         short_desc:

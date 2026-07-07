@@ -200,6 +200,7 @@ func (s *SearchService) buildResponse(results []*repository.SearchResult, total 
 			ID:             r.Item.ID.String(),
 			Type:           r.Item.Type,
 			Source:         r.Item.Source,
+			Slug:           extractSlug(r.Item.SourceData),
 			Title:          r.Item.Title,
 			ShortDesc:      r.Item.ShortDesc,
 			Organization:   r.Item.Organization,
@@ -224,6 +225,17 @@ func (s *SearchService) buildResponse(results []*repository.SearchResult, total 
 	}
 }
 
+func extractSlug(sourceData json.RawMessage) string {
+	if len(sourceData) == 0 {
+		return ""
+	}
+	var payload struct {
+		Slug string `json:"slug"`
+	}
+	_ = json.Unmarshal(sourceData, &payload)
+	return payload.Slug
+}
+
 func (s *SearchService) cacheKey(req *models.SearchRequest) string {
 	typeStrs := make([]string, len(req.Types))
 	for i, t := range req.Types {
@@ -238,5 +250,5 @@ func (s *SearchService) cacheKey(req *models.SearchRequest) string {
 		req.PerPage,
 	)
 	h := sha256.Sum256([]byte(raw))
-	return fmt.Sprintf("catalogo:search:%x", h[:8])
+	return fmt.Sprintf("%s%x", cache.SearchKeyPrefix, h[:8])
 }

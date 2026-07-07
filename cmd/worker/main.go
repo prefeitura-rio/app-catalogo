@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/prefeitura-rio/app-catalogo/internal/cache"
 	"github.com/prefeitura-rio/app-catalogo/internal/clients"
 	"github.com/prefeitura-rio/app-catalogo/internal/config"
 	"github.com/prefeitura-rio/app-catalogo/internal/datasource"
@@ -55,12 +56,25 @@ func main() {
 
 	itemRepo := repository.NewCatalogItemRepository(db.Pool)
 
+	redisCache := cache.NewRedisCache(
+		cfg.Redis.Host,
+		cfg.Redis.Port,
+		cfg.Redis.Password,
+		cfg.Redis.DB,
+		cfg.Redis.PoolSize,
+		cfg.Redis.MinIdleConns,
+	)
+	if err := redisCache.Ping(ctx); err != nil {
+		log.Warn().Err(err).Msg("worker: redis indisponível — invalidação de cache pode falhar")
+	}
+
 	// -------------------------------------------------------------------------
 	// Registrar fontes de dados no manager
 	// Para adicionar uma nova fonte: implemente datasource.DataSource e chame
 	// manager.Register(...) aqui.
 	// -------------------------------------------------------------------------
 	manager := datasource.NewManager()
+	manager.AddSyncHook(datasource.NewSearchCacheInvalidationHook(redisCache))
 
 	// SalesForce — Carta de Serviços
 	if cfg.SalesForce.InstanceURL != "" {

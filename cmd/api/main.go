@@ -156,6 +156,7 @@ func main() {
 
 	// Manager com fontes registradas (espelha o worker, mas sem tickers — só para TriggerSync)
 	dsManager := datasource.NewManager()
+	dsManager.AddSyncHook(datasource.NewSearchCacheInvalidationHook(redisCache))
 	if cfg.SalesForce.InstanceURL != "" {
 		sfDataSource := datasource.NewSalesForceDataSource(sfSyncSvc, cfg.SalesForce.SyncInterval)
 		dsManager.Register(sfDataSource)

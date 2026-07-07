@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/rs/zerolog/log"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
 	"github.com/prefeitura-rio/app-catalogo/internal/services"
@@ -50,6 +51,7 @@ func (h *SearchHandler) Search(c *gin.Context) {
 
 	resp, err := h.searchSvc.Search(c.Request.Context(), &req)
 	if err != nil {
+		log.Error().Err(err).Msg("search handler: falha na busca")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "falha na busca"})
 		return
 	}
