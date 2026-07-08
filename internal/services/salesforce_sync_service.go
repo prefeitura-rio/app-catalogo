@@ -32,7 +32,8 @@ func NewSalesForceSyncService(
 }
 
 // FullSync sincroniza todos os registros do SalesForce.
-func (s *SalesForceSyncService) FullSync(ctx context.Context) error {
+// Retorna o número de itens processados (upsertados).
+func (s *SalesForceSyncService) FullSync(ctx context.Context) (int, error) {
 	startedAt := time.Now()
 	eventID, _ := s.repo.RecordSyncEvent(ctx, &models.SyncEvent{
 		Source:    models.SourceSalesForce,
@@ -47,7 +48,7 @@ func (s *SalesForceSyncService) FullSync(ctx context.Context) error {
 	if err != nil {
 		errMsg := err.Error()
 		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, 0, 0, errMsg, int(time.Since(startedAt).Milliseconds()))
-		return err
+		return 0, err
 	}
 
 	items := make([]*models.CatalogItem, 0, len(records))
@@ -63,7 +64,7 @@ func (s *SalesForceSyncService) FullSync(ctx context.Context) error {
 
 	if err != nil {
 		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, processed, len(items)-processed, err.Error(), durationMs)
-		return err
+		return processed, err
 	}
 
 	now := time.Now()
@@ -75,11 +76,12 @@ func (s *SalesForceSyncService) FullSync(ctx context.Context) error {
 		Int("duration_ms", durationMs).
 		Msg("salesforce: full sync concluído")
 
-	return nil
+	return processed, nil
 }
 
 // DeltaSync sincroniza apenas os registros modificados desde a última sync.
-func (s *SalesForceSyncService) DeltaSync(ctx context.Context) error {
+// Retorna o número de itens processados (upsertados).
+func (s *SalesForceSyncService) DeltaSync(ctx context.Context) (int, error) {
 	cursor, err := s.repo.GetSalesForceCursor(ctx, s.objectType)
 	if err != nil || cursor.LastSyncAt == nil {
 		log.Info().Msg("salesforce: cursor não encontrado, executando full sync")
@@ -103,14 +105,14 @@ func (s *SalesForceSyncService) DeltaSync(ctx context.Context) error {
 	if err != nil {
 		errMsg := err.Error()
 		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, 0, 0, errMsg, int(time.Since(startedAt).Milliseconds()))
-		return err
+		return 0, err
 	}
 
 	if len(records) == 0 {
 		durationMs := int(time.Since(startedAt).Milliseconds())
 		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusCompleted, 0, 0, "", durationMs)
 		log.Debug().Msg("salesforce: sem registros novos no delta sync")
-		return nil
+		return 0, nil
 	}
 
 	items := make([]*models.CatalogItem, 0, len(records))
@@ -126,7 +128,7 @@ func (s *SalesForceSyncService) DeltaSync(ctx context.Context) error {
 
 	if err != nil {
 		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, processed, len(items)-processed, err.Error(), durationMs)
-		return err
+		return processed, err
 	}
 
 	now := time.Now()
@@ -138,7 +140,7 @@ func (s *SalesForceSyncService) DeltaSync(ctx context.Context) error {
 		Int("duration_ms", durationMs).
 		Msg("salesforce: delta sync concluído")
 
-	return nil
+	return processed, nil
 }
 
 // SyncRecord sincroniza um único registro (para uso em webhooks).

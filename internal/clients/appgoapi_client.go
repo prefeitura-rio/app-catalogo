@@ -88,7 +88,7 @@ type coursesPageResponse struct {
 // Estrutura real: GET /api/public/empregabilidade/vagas → {"data": [...], "meta": {"total": N, ...}}
 type Job struct {
 	ID                string  `json:"id"`
-	Slug              string  `json:"slug"`
+	Slug              string  `json:"slug,omitempty"`
 	Title             string  `json:"titulo"`
 	Description       string  `json:"descricao"`
 	ValorVaga         float64 `json:"valor_vaga"`

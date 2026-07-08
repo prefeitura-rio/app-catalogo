@@ -29,3 +29,22 @@ func TestMapJobPreservesSlugInSourceData(t *testing.T) {
 		t.Fatalf("slug em source_data = %q, esperava %q", sourceData.Slug, job.Slug)
 	}
 }
+
+func TestMapJobOmitsEmptySlugFromSourceData(t *testing.T) {
+	job := clients.Job{
+		ID:          "43",
+		Title:       "Vaga sem slug",
+		Description: "Vaga ainda sem slug atribuído",
+		UpdatedAt:   time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC),
+	}
+
+	item := mapJob(job)
+
+	var sourceData map[string]json.RawMessage
+	if err := json.Unmarshal(item.SourceData, &sourceData); err != nil {
+		t.Fatalf("source_data inválido: %v", err)
+	}
+	if _, present := sourceData["slug"]; present {
+		t.Fatalf("source_data não deveria conter a chave \"slug\" quando o slug é vazio")
+	}
+}

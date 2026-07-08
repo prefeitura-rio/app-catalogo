@@ -31,35 +31,43 @@ func NewAppGoAPIDataSource(
 	}
 }
 
-func (s *AppGoAPIDataSource) Name() string               { return "app-go-api" }
-func (s *AppGoAPIDataSource) Source() models.ItemSource  { return models.SourceAppGoAPI }
+func (s *AppGoAPIDataSource) Name() string                { return "app-go-api" }
+func (s *AppGoAPIDataSource) Source() models.ItemSource   { return models.SourceAppGoAPI }
 func (s *AppGoAPIDataSource) SyncInterval() time.Duration { return s.syncInterval }
 
 // Sync sincroniza cursos, vagas e MEI. Sempre busca desde o início (sem cursor por ora).
-func (s *AppGoAPIDataSource) Sync(ctx context.Context) error {
+// Retorna o total de itens processados (upsertados) nas três fontes.
+func (s *AppGoAPIDataSource) Sync(ctx context.Context) (int, error) {
 	startedAt := time.Now()
+	total := 0
 
-	if err := s.syncCourses(ctx); err != nil {
+	if processed, err := s.syncCourses(ctx); err != nil {
 		log.Error().Err(err).Msg("appgoapi datasource: erro ao sincronizar cursos")
+	} else {
+		total += processed
 	}
-	if err := s.syncJobs(ctx); err != nil {
+	if processed, err := s.syncJobs(ctx); err != nil {
 		log.Error().Err(err).Msg("appgoapi datasource: erro ao sincronizar vagas")
+	} else {
+		total += processed
 	}
-	if err := s.syncMEI(ctx); err != nil {
+	if processed, err := s.syncMEI(ctx); err != nil {
 		log.Error().Err(err).Msg("appgoapi datasource: erro ao sincronizar MEI")
+	} else {
+		total += processed
 	}
 
 	log.Info().Dur("duration", time.Since(startedAt)).Msg("appgoapi datasource: sync concluído")
-	return nil
+	return total, nil
 }
 
-func (s *AppGoAPIDataSource) syncCourses(ctx context.Context) error {
+func (s *AppGoAPIDataSource) syncCourses(ctx context.Context) (int, error) {
 	var allCourses []clients.Course
 	page := 1
 	for {
 		courses, total, err := s.client.GetCourses(ctx, page, time.Time{})
 		if err != nil {
-			return err
+			return 0, err
 		}
 		allCourses = append(allCourses, courses...)
 		if len(allCourses) >= total || len(courses) == 0 {
@@ -80,16 +88,16 @@ func (s *AppGoAPIDataSource) syncCourses(ctx context.Context) error {
 
 	processed, err := s.repo.UpsertBatch(ctx, items)
 	log.Info().Int("processed", processed).Int("skipped_non_visible", skipped).Msg("appgoapi: cursos sincronizados")
-	return err
+	return processed, err
 }
 
-func (s *AppGoAPIDataSource) syncJobs(ctx context.Context) error {
+func (s *AppGoAPIDataSource) syncJobs(ctx context.Context) (int, error) {
 	var allJobs []clients.Job
 	page := 1
 	for {
 		jobs, total, err := s.client.GetJobs(ctx, page, time.Time{})
 		if err != nil {
-			return err
+			return 0, err
 		}
 		allJobs = append(allJobs, jobs...)
 		if len(allJobs) >= total || len(jobs) == 0 {
@@ -105,16 +113,16 @@ func (s *AppGoAPIDataSource) syncJobs(ctx context.Context) error {
 
 	processed, err := s.repo.UpsertBatch(ctx, items)
 	log.Info().Int("processed", processed).Msg("appgoapi: vagas sincronizadas")
-	return err
+	return processed, err
 }
 
-func (s *AppGoAPIDataSource) syncMEI(ctx context.Context) error {
+func (s *AppGoAPIDataSource) syncMEI(ctx context.Context) (int, error) {
 	var allMEI []clients.MEIOpportunity
 	page := 1
 	for {
 		oportunidades, total, err := s.client.GetMEIOpportunities(ctx, page, time.Time{})
 		if err != nil {
-			return err
+			return 0, err
 		}
 		allMEI = append(allMEI, oportunidades...)
 		if len(allMEI) >= total || len(oportunidades) == 0 {
@@ -130,7 +138,7 @@ func (s *AppGoAPIDataSource) syncMEI(ctx context.Context) error {
 
 	processed, err := s.repo.UpsertBatch(ctx, items)
 	log.Info().Int("processed", processed).Msg("appgoapi: MEI sincronizado")
-	return err
+	return processed, err
 }
 
 // courseIsIndexable retorna true apenas para cursos publicados e visíveis.
