@@ -180,11 +180,10 @@ Executado contra o Typesense de staging real (após confirmar `kubectl config cu
 
 ## 11. Pendências / follow-ups
 
-1. **🔐 Rotacionar a `TYPESENSE_API_KEY` de staging** — foi exposta repetidamente durante esta investigação (chat, comandos). Rotacionar agora que o seed está feito.
-2. **Backfill de embeddings** nos 50 serviços restaurados — busca textual funciona normalmente; busca semântica/híbrida no Typesense fica degradada até um backfill (via Gemini) rodar. Fora do escopo desta recuperação.
-3. **Causa raiz de infra**: entender por que houve drift entre `.Values.replicas` do Helm e o StatefulSet real, para evitar recorrência (ex.: processo de deploy do Typesense não estar totalmente via GitOps/Helm consistente).
-4. **Considerar snapshot/backup automatizado do Typesense** — hoje não existe nenhum, e o único motivo da recuperação ter sido possível foi o app-catalogo sincronizar (sem esse ser seu propósito) uma cópia dos dados.
-5. Avisar o time (Bruno/Gabriel/Lucas) que os 50 serviços voltaram a aparecer na busca de staging.
+1. **Backfill de embeddings** nos 50 serviços restaurados — busca textual funciona normalmente; busca semântica/híbrida no Typesense fica degradada até um backfill (via Gemini) rodar. Fora do escopo desta recuperação.
+2. **Causa raiz de infra**: entender por que houve drift entre `.Values.replicas` do Helm e o StatefulSet real, para evitar recorrência (ex.: processo de deploy do Typesense não estar totalmente via GitOps/Helm consistente).
+3. **Considerar snapshot/backup automatizado do Typesense** — hoje não existe nenhum, e o único motivo da recuperação ter sido possível foi o app-catalogo sincronizar (sem esse ser seu propósito) uma cópia dos dados.
+4. Avisar o time (Bruno/Gabriel/Lucas) que os 50 serviços voltaram a aparecer na busca de staging.
 
 ---
 
