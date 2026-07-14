@@ -38,6 +38,19 @@ func TestCatalogSearchClientVerifierAcceptsFreshCanonicalSignature(t *testing.T)
 	}
 }
 
+func TestCatalogSearchClientVerifierAcceptsEveryProtectedPublicCatalogPost(t *testing.T) {
+	verifier := newCatalogSearchClientVerifierForTest(t, 2*time.Minute)
+	for requestPath := range protectedCatalogPublicPaths {
+		t.Run(requestPath, func(t *testing.T) {
+			request := signedCatalogSearchRequest(testCatalogSearchCurrentTime)
+			request.URL.Path = requestPath
+			if _, verified := verifier.VerifiedClientIdentifier(request); !verified {
+				t.Fatalf("protected request %s was not verified", requestPath)
+			}
+		})
+	}
+}
+
 func TestCatalogSearchClientVerifierAcceptsSignedDistributedLogIdentifier(t *testing.T) {
 	verifier := newCatalogSearchClientVerifierForTest(t, 2*time.Minute)
 	request := signedCatalogSearchRequest(testCatalogSearchCurrentTime)
@@ -181,7 +194,7 @@ func signedCatalogSearchRequest(signedAt time.Time) *http.Request {
 	timestamp := strconv.FormatInt(signedAt.Unix(), 10)
 	searchIdentifier := "00000000-0000-4000-8000-000000000001"
 	requestIdentifier := "123456789"
-	request := httptest.NewRequest(http.MethodPost, catalogSearchPublicPath, nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/public/search", nil)
 	request.Header.Set(CatalogSearchClientIDHeader, clientIdentifier)
 	request.Header.Set(CatalogSearchClientTimestampHeader, timestamp)
 	request.Header.Set(SearchIDHeader, searchIdentifier)
