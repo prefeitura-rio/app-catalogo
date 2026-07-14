@@ -445,6 +445,41 @@ func TestLoadSearchSettingsParsesExplicitValidValues(t *testing.T) {
 	}
 }
 
+func TestLoadSummarySettingsParsesAndBoundsResources(t *testing.T) {
+	configuration := viper.New()
+	configuration.Set("SEARCH_SUMMARY_TIMEOUT", "8s")
+	configuration.Set("CACHE_SEARCH_SUMMARY_TTL", "3m")
+	configuration.Set("SEARCH_SUMMARY_MAX_CONCURRENCY", "6")
+
+	settings, settingsError := loadSummarySettings(configuration)
+	if settingsError != nil {
+		t.Fatalf("load summary settings: %v", settingsError)
+	}
+	if settings.Timeout != 8*time.Second || settings.CacheTTL != 3*time.Minute || settings.MaximumConcurrency != 6 {
+		t.Fatalf("summary settings = %#v", settings)
+	}
+
+	for _, testCase := range []struct {
+		key   string
+		value string
+	}{
+		{key: "SEARCH_SUMMARY_TIMEOUT", value: "eventually"},
+		{key: "SEARCH_SUMMARY_TIMEOUT", value: "0s"},
+		{key: "CACHE_SEARCH_SUMMARY_TTL", value: "0s"},
+		{key: "SEARCH_SUMMARY_MAX_CONCURRENCY", value: "many"},
+		{key: "SEARCH_SUMMARY_MAX_CONCURRENCY", value: "0"},
+		{key: "SEARCH_SUMMARY_MAX_CONCURRENCY", value: "33"},
+	} {
+		t.Run(testCase.key+"="+testCase.value, func(t *testing.T) {
+			invalidConfiguration := viper.New()
+			invalidConfiguration.Set(testCase.key, testCase.value)
+			if _, invalidSettingsError := loadSummarySettings(invalidConfiguration); invalidSettingsError == nil {
+				t.Fatalf("loadSummarySettings accepted %s=%q", testCase.key, testCase.value)
+			}
+		})
+	}
+}
+
 func TestLoadEmbeddingSettingsRejectsMalformedOrNonPositiveDurations(t *testing.T) {
 	for _, testCase := range []struct {
 		name  string

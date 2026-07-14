@@ -13,36 +13,38 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
-const serviceSlugAliasMigrationPath = "../../db/migrations/000006_service_slug_aliases.sql"
+const serviceIntelligenceMigrationPath = "../../db/migrations/000007_service_intelligence.sql"
 
-func TestServiceSlugAliasMigrationContract(t *testing.T) {
-	migrationBytes, readError := os.ReadFile(serviceSlugAliasMigrationPath)
+func TestServiceIntelligenceMigrationContract(t *testing.T) {
+	migrationBytes, readError := os.ReadFile(serviceIntelligenceMigrationPath)
 	if readError != nil {
-		t.Fatalf("read service slug alias migration: %v", readError)
+		t.Fatalf("read service intelligence migration: %v", readError)
 	}
 	migrationSQL := string(migrationBytes)
 	for _, requiredFragment := range []string{
 		"-- +goose Up",
 		"-- +goose Down",
-		"CREATE TABLE IF NOT EXISTS catalog_item_slug_aliases",
-		"REFERENCES catalog_items(id) ON DELETE CASCADE",
-		"PRIMARY KEY (catalog_item_id, slug)",
-		"catalog_item_slug_aliases_slug_format",
-		"idx_catalog_item_slug_aliases_lookup",
-		"idx_catalog_item_slug_aliases_one_canonical",
-		"jsonb_array_elements_text",
-		"DROP TABLE IF EXISTS catalog_item_slug_aliases;",
+		"ADD COLUMN reason",
+		"ADD COLUMN theme",
+		"ADD COLUMN migration_origin",
+		"ON CONFLICT (from_external_id, from_source, to_external_id, to_source) DO NOTHING",
+		"CREATE CONSTRAINT TRIGGER trg_catalog_item_journeys_revision",
+		"EXECUTE FUNCTION bump_catalog_revision()",
+		"DELETE FROM catalog_item_journeys",
+		"DROP TRIGGER IF EXISTS trg_catalog_item_journeys_revision",
+		"DROP COLUMN theme",
+		"DROP COLUMN reason",
 	} {
 		if !strings.Contains(migrationSQL, requiredFragment) {
-			t.Errorf("service slug alias migration is missing %q", requiredFragment)
+			t.Errorf("service intelligence migration is missing %q", requiredFragment)
 		}
 	}
 	if strings.Contains(migrationSQL, "-- +goose NO TRANSACTION") {
-		t.Error("service slug alias migration must remain atomic")
+		t.Error("service intelligence migration must remain atomic")
 	}
 }
 
-func TestServiceSlugAliasMigrationRoundTrip(t *testing.T) {
+func TestServiceIntelligenceMigrationRoundTrip(t *testing.T) {
 	databaseURL := os.Getenv(catalogMigrationTestDatabaseURLVariable)
 	if databaseURL == "" {
 		t.Skip(catalogMigrationTestDatabaseURLVariable + " is not configured")
@@ -67,7 +69,7 @@ func TestServiceSlugAliasMigrationRoundTrip(t *testing.T) {
 		currentVersion, versionError := goose.GetDBVersionContext(cleanupContext, database)
 		if versionError == nil && currentVersion < latestCatalogMigrationVersion {
 			if restoreError := goose.UpToContext(cleanupContext, database, "../../db/migrations", latestCatalogMigrationVersion); restoreError != nil {
-				t.Errorf("restore service slug alias migration: %v", restoreError)
+				t.Errorf("restore service intelligence migration: %v", restoreError)
 			}
 		}
 		if closeError := database.Close(); closeError != nil {
@@ -85,33 +87,37 @@ func TestServiceSlugAliasMigrationRoundTrip(t *testing.T) {
 		t.Fatalf("read starting migration version: %v", versionError)
 	}
 	if startingVersion != latestCatalogMigrationVersion {
-		t.Fatalf("service slug alias round-trip requires schema version %d, got %d", latestCatalogMigrationVersion, startingVersion)
+		t.Fatalf("service intelligence round-trip requires schema version %d, got %d", latestCatalogMigrationVersion, startingVersion)
 	}
-	assertServiceSlugAliasTable(t, testContext, database, true)
-	if downError := goose.DownToContext(testContext, database, "../../db/migrations", 5); downError != nil {
-		t.Fatalf("roll back service slug alias migration: %v", downError)
+	assertServiceIntelligenceColumns(t, testContext, database, true)
+	if downError := goose.DownToContext(testContext, database, "../../db/migrations", latestCatalogMigrationVersion-1); downError != nil {
+		t.Fatalf("roll back service intelligence migration: %v", downError)
 	}
-	assertServiceSlugAliasTable(t, testContext, database, false)
+	assertServiceIntelligenceColumns(t, testContext, database, false)
 	if upError := goose.UpToContext(testContext, database, "../../db/migrations", latestCatalogMigrationVersion); upError != nil {
-		t.Fatalf("reapply service slug alias migration: %v", upError)
+		t.Fatalf("reapply service intelligence migration: %v", upError)
 	}
-	assertServiceSlugAliasTable(t, testContext, database, true)
+	assertServiceIntelligenceColumns(t, testContext, database, true)
 }
 
-func assertServiceSlugAliasTable(
+func assertServiceIntelligenceColumns(
 	testingInstance *testing.T,
 	testContext context.Context,
 	database *sql.DB,
 	expectedToExist bool,
 ) {
 	testingInstance.Helper()
-	var tableExists bool
+	var columnsExist bool
 	if scanError := database.QueryRowContext(testContext, `
-		SELECT to_regclass('public.catalog_item_slug_aliases') IS NOT NULL
-	`).Scan(&tableExists); scanError != nil {
-		testingInstance.Fatalf("inspect service slug alias table: %v", scanError)
+		SELECT COUNT(*) = 3
+		FROM information_schema.columns
+		WHERE table_schema = 'public'
+		  AND table_name = 'catalog_item_journeys'
+		  AND column_name IN ('reason', 'theme', 'migration_origin')
+	`).Scan(&columnsExist); scanError != nil {
+		testingInstance.Fatalf("inspect service intelligence columns: %v", scanError)
 	}
-	if tableExists != expectedToExist {
-		testingInstance.Fatalf("service slug alias table exists = %t, want %t", tableExists, expectedToExist)
+	if columnsExist != expectedToExist {
+		testingInstance.Fatalf("service intelligence columns exist = %t, want %t", columnsExist, expectedToExist)
 	}
 }

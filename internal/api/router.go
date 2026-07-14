@@ -21,6 +21,7 @@ type RouterDeps struct {
 	SFSyncSvc                   *services.SalesForceSyncService
 	DSManager                   *datasource.Manager
 	SearchSvc                   *services.SearchService
+	SearchSummarySvc            *services.SearchSummaryService
 	RecomSvc                    *services.RecommendationService
 	CitizenSvc                  *services.CitizenProfileService
 	ItemRepo                    *repository.CatalogItemRepository
@@ -101,6 +102,7 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) (*gin
 	adminHandler := v1.NewAdminHandler(deps.ItemRepo, deps.DSManager)
 	catalogHandler := v1.NewCatalogHandler(deps.ItemRepo)
 	searchHandler := v1.NewSearchHandler(deps.SearchSvc)
+	searchSummaryHandler := v1.NewSearchSummaryHandler(deps.SearchSummarySvc)
 
 	// API autenticada
 	apiV1 := rateLimitedRoutes.Group("/api/v1")
@@ -122,11 +124,14 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) (*gin
 	{
 		pub.GET("/search", searchHandler.Search)
 		pub.POST("/search", searchHandler.SearchJSON)
+		pub.POST("/search-summary", searchSummaryHandler.Generate)
 		pub.GET("/recommendations", v1.NewRecommendationHandler(deps.RecomSvc, deps.CitizenSvc).Anonymous)
 		pub.GET("/catalog/:id", adminHandler.GetPublicCatalogItem)
 		pub.GET("/service-categories", catalogHandler.ListPublicServiceCategories)
 		pub.GET("/service-categories/:category/subcategories", catalogHandler.ListPublicServiceSubcategories)
+		pub.POST("/suggest", catalogHandler.SuggestPublicServices)
 		pub.GET("/services", catalogHandler.ListPublicServices)
+		pub.GET("/services/:slug/relations", catalogHandler.GetPublicServiceRelations)
 		pub.GET("/services/:slug", catalogHandler.GetPublicServiceBySlug)
 	}
 

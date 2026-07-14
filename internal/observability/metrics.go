@@ -110,6 +110,19 @@ var (
 		Buckets:   []float64{0, 1, 5, 10, 20, 40, 50},
 	}, []string{"source", "stage"})
 
+	SearchSummaryRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "catalogo",
+		Name:      "search_summary_requests_total",
+		Help:      "Grounded search summary requests by bounded outcome",
+	}, []string{"outcome"})
+
+	SearchSummaryDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "catalogo",
+		Name:      "search_summary_duration_seconds",
+		Help:      "Grounded search summary latency by bounded outcome",
+		Buckets:   []float64{.025, .05, .1, .25, .5, 1, 2.5, 5, 10, 20},
+	}, []string{"outcome"})
+
 	RecommendationsDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "catalogo",
 		Name:      "recommendations_duration_seconds",
@@ -156,6 +169,8 @@ func init() {
 		SearchExternalSourceRequestsTotal,
 		SearchExternalSourceDuration,
 		SearchExternalCandidates,
+		SearchSummaryRequestsTotal,
+		SearchSummaryDuration,
 		RecommendationsDuration,
 		SyncItemsTotal,
 		SyncDuration,
