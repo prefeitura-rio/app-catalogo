@@ -4,9 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"time"
+)
+
+const (
+	maximumRerankerRequestBytes  = 512 << 10
+	maximumRerankerResponseBytes = 1 << 20
 )
 
 // RerankerClient chama um sidecar de cross-encoder para reranking de resultados.
@@ -20,13 +28,13 @@ import (
 //
 // Protocolo esperado (compatível com sidecar Python cross-encoder):
 type RerankerClient struct {
-	baseURL    string
+	rerankURL  string
 	httpClient *http.Client
 }
 
 type rerankerRequest struct {
-	Query     string              `json:"query"`
-	Documents []rerankerDocument  `json:"documents"`
+	Query     string             `json:"query"`
+	Documents []rerankerDocument `json:"documents"`
 }
 
 type rerankerDocument struct {
@@ -39,16 +47,32 @@ type RerankerResult struct {
 	Score float64 `json:"score"`
 }
 
-func NewRerankerClient(baseURL string, timeout time.Duration) *RerankerClient {
-	return &RerankerClient{
-		baseURL: baseURL,
-		httpClient: &http.Client{Timeout: timeout},
+func NewRerankerClient(baseURL string, timeout time.Duration) (*RerankerClient, error) {
+	parsedBaseURL, baseURLError := validateServiceBaseURL(baseURL, true, true)
+	if baseURLError != nil {
+		return nil, fmt.Errorf("reranker: invalid base URL: %w", baseURLError)
 	}
+	if timeout <= 0 {
+		return nil, errors.New("reranker: timeout must be positive")
+	}
+	rerankURL, joinError := url.JoinPath(parsedBaseURL.String(), "rerank")
+	if joinError != nil {
+		return nil, errors.New("reranker: build endpoint URL")
+	}
+	return &RerankerClient{
+		rerankURL: rerankURL,
+		httpClient: &http.Client{
+			Timeout: timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+	}, nil
 }
 
 // Rerank envia query + documentos ao sidecar e retorna os resultados ordenados por score.
-// A função retorna nil, nil se o sidecar estiver indisponível (erro de rede),
-// permitindo fallback gracioso no chamador.
+// Transport and contract failures are returned so the caller can observe them
+// while preserving the fused order as a graceful fallback.
 func (c *RerankerClient) Rerank(ctx context.Context, query string, docs []RerankerDocument) ([]RerankerResult, error) {
 	reqDocs := make([]rerankerDocument, len(docs))
 	for i, d := range docs {
@@ -59,8 +83,11 @@ func (c *RerankerClient) Rerank(ctx context.Context, query string, docs []Rerank
 	if err != nil {
 		return nil, fmt.Errorf("reranker: marshal: %w", err)
 	}
+	if len(body) > maximumRerankerRequestBytes {
+		return nil, errors.New("reranker: request exceeds size limit")
+	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/rerank", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.rerankURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("reranker: criar requisição: %w", err)
 	}
@@ -68,7 +95,7 @@ func (c *RerankerClient) Rerank(ctx context.Context, query string, docs []Rerank
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, nil // indisponível — fallback gracioso
+		return nil, fmt.Errorf("reranker: request: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -76,9 +103,22 @@ func (c *RerankerClient) Rerank(ctx context.Context, query string, docs []Rerank
 		return nil, fmt.Errorf("reranker: status %d", resp.StatusCode)
 	}
 
+	limitedBody := io.LimitReader(resp.Body, maximumRerankerResponseBytes+1)
+	responseBody, readError := io.ReadAll(limitedBody)
+	if readError != nil {
+		return nil, fmt.Errorf("reranker: read response: %w", readError)
+	}
+	if len(responseBody) > maximumRerankerResponseBytes {
+		return nil, fmt.Errorf("reranker: response exceeds size limit")
+	}
+	responseDecoder := json.NewDecoder(bytes.NewReader(responseBody))
 	var results []RerankerResult
-	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+	if err := responseDecoder.Decode(&results); err != nil {
 		return nil, fmt.Errorf("reranker: decode: %w", err)
+	}
+	var trailingJSON any
+	if trailingError := responseDecoder.Decode(&trailingJSON); !errors.Is(trailingError, io.EOF) {
+		return nil, fmt.Errorf("reranker: trailing JSON")
 	}
 	return results, nil
 }

@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "search-quality-policy.schema.json",
+  "title": "Search quality policy",
+  "description": "Versioned, executable acceptance policy for a search-evaluation report.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "version",
+    "requirements",
+    "assertions"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "search-quality-policy/v1"
+    },
+    "id": {
+      "$ref": "#/$defs/stableIdentifier"
+    },
+    "version": {
+      "$ref": "#/$defs/stableIdentifier"
+    },
+    "requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "complete",
+        "catalog_revision",
+        "allowed_pipelines",
+        "degraded_responses"
+      ],
+      "properties": {
+        "complete": {
+          "const": true
+        },
+        "catalog_revision": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/stableIdentifier"
+            },
+            {
+              "not": {
+                "const": "unversioned"
+              }
+            }
+          ]
+        },
+        "allowed_pipelines": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "browse",
+              "lexical",
+              "lexical_reranked",
+              "hybrid",
+              "hybrid_reranked",
+              "hybrid_hyde",
+              "hybrid_hyde_reranked"
+            ]
+          }
+        },
+        "degraded_responses": {
+          "const": 0
+        }
+      }
+    },
+    "assertions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "$ref": "#/$defs/assertion"
+      }
+    }
+  },
+  "$defs": {
+    "stableIdentifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "scope",
+        "metric",
+        "operator",
+        "value"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/stableIdentifier"
+        },
+        "scope": {
+          "enum": [
+            "overall",
+            "slice"
+          ]
+        },
+        "slice": {
+          "$ref": "#/$defs/stableIdentifier"
+        },
+        "metric": {
+          "enum": [
+            "recall",
+            "mrr",
+            "ndcg",
+            "judged_rate",
+            "zero_result_rate",
+            "failure_rate",
+            "latency_ms"
+          ]
+        },
+        "cutoff": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "quantile": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "operator": {
+          "enum": [
+            "gte",
+            "lte"
+          ]
+        },
+        "value": {
+          "type": "number"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "scope": {
+                "const": "overall"
+              }
+            },
+            "required": [
+              "scope"
+            ]
+          },
+          "then": {
+            "not": {
+              "required": [
+                "slice"
+              ]
+            }
+          },
+          "else": {
+            "required": [
+              "slice"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "metric": {
+                "enum": [
+                  "recall",
+                  "mrr",
+                  "ndcg",
+                  "judged_rate"
+                ]
+              }
+            },
+            "required": [
+              "metric"
+            ]
+          },
+          "then": {
+            "required": [
+              "cutoff"
+            ],
+            "not": {
+              "required": [
+                "quantile"
+              ]
+            },
+            "properties": {
+              "value": {
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "metric": {
+                "enum": [
+                  "zero_result_rate",
+                  "failure_rate"
+                ]
+              }
+            },
+            "required": [
+              "metric"
+            ]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "cutoff"
+                  ]
+                },
+                {
+                  "required": [
+                    "quantile"
+                  ]
+                }
+              ]
+            },
+            "properties": {
+              "value": {
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "metric": {
+                "const": "latency_ms"
+              }
+            },
+            "required": [
+              "metric"
+            ]
+          },
+          "then": {
+            "required": [
+              "quantile"
+            ],
+            "not": {
+              "required": [
+                "cutoff"
+              ]
+            },
+            "properties": {
+              "value": {
+                "minimum": 0
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

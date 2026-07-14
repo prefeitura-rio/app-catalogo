@@ -14,13 +14,13 @@ import (
 )
 
 func main() {
-	cfg, err := config.Get()
+	databaseSettings, err := config.LoadDatabaseSettings()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "falha ao carregar configurações: %v\n", err)
 		os.Exit(1)
 	}
 
-	db, err := sql.Open("pgx", cfg.Database.DSN())
+	db, err := sql.Open("pgx", databaseSettings.DSN())
 	if err != nil {
 		log.Fatal().Err(err).Msg("falha ao abrir conexão para migrations")
 	}

@@ -41,6 +41,19 @@ func (m *Manager) AddSyncHook(hook SyncHook) {
 	m.syncHooks = append(m.syncHooks, hook)
 }
 
+// HasSource reports whether a source name or canonical source identifier is
+// registered. It is safe to call while manual triggers are being served.
+func (m *Manager) HasSource(sourceName string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, source := range m.sources {
+		if matchesSource(source, sourceName) {
+			return true
+		}
+	}
+	return false
+}
+
 // Start inicia todas as fontes registradas. Bloqueia até o context ser cancelado.
 func (m *Manager) Start(ctx context.Context) {
 	m.mu.RLock()
@@ -88,7 +101,7 @@ func (m *Manager) TriggerSync(ctx context.Context, sourceName string) bool {
 	defer m.mu.RUnlock()
 
 	for _, src := range m.sources {
-		if src.Name() == sourceName || string(src.Source()) == sourceName {
+		if matchesSource(src, sourceName) {
 			go func(s DataSource) {
 				m.syncSource(ctx, s, "datasource: sync manual falhou")
 			}(src)
@@ -96,6 +109,10 @@ func (m *Manager) TriggerSync(ctx context.Context, sourceName string) bool {
 		}
 	}
 	return false
+}
+
+func matchesSource(source DataSource, sourceName string) bool {
+	return source.Name() == sourceName || string(source.Source()) == sourceName
 }
 
 func (m *Manager) runSource(ctx context.Context, s DataSource) {
@@ -120,12 +137,15 @@ func (m *Manager) runSource(ctx context.Context, s DataSource) {
 
 func (m *Manager) syncSource(ctx context.Context, s DataSource, errorMsg string) {
 	changed, err := s.Sync(ctx)
+	// Uma fonte pode confirmar alterações em um subconjunto e ainda retornar
+	// erro para outro. O cache precisa ser invalidado para toda mutação efetiva,
+	// mesmo quando a execução global é reportada como parcial/falha.
+	if changed > 0 {
+		m.runSyncHooks(ctx, s)
+	}
 	if err != nil {
 		log.Error().Err(err).Str("source", s.Name()).Msg(errorMsg)
 		return
-	}
-	if changed > 0 {
-		m.runSyncHooks(ctx, s)
 	}
 }
 

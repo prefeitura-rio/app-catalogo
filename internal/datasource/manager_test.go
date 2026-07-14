@@ -142,6 +142,31 @@ func TestManager_SyncHookDoesNotRunAfterFailedSync(t *testing.T) {
 	}
 }
 
+func TestManager_SyncHookRunsAfterPartialSyncChangedCatalog(t *testing.T) {
+	m := NewManager()
+	s := &stubSource{name: "app-go-api", changed: 2, err: errors.New("jobs sync failed")}
+	hookCalled := make(chan string, 1)
+
+	m.Register(s)
+	m.AddSyncHook(func(_ context.Context, source DataSource) error {
+		hookCalled <- source.Name()
+		return nil
+	})
+
+	if !m.TriggerSync(context.Background(), "app-go-api") {
+		t.Fatal("TriggerSync deveria retornar true para 'app-go-api'")
+	}
+
+	select {
+	case got := <-hookCalled:
+		if got != "app-go-api" {
+			t.Fatalf("hook recebeu source %q, esperava app-go-api", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("hook não foi chamado após sync parcial com alterações")
+	}
+}
+
 func TestManager_SyncHookDoesNotRunWhenNothingChanged(t *testing.T) {
 	// Sync bem-sucedida mas sem itens alterados (ex.: delta sync vazio) não
 	// deve invalidar o cache de busca — evita descartar o cache a cada tick.

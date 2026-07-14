@@ -6,8 +6,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
+
+const maximumRMIResponseBytes = 1 << 20
 
 // RMIClient consome a API do app-rmi para dados do cidadão.
 type RMIClient struct {
@@ -45,13 +49,19 @@ type CitizenData struct {
 // GetCitizen busca os dados de um cidadão pelo CPF.
 // Usa service account token — requer permissão adequada no Keycloak.
 func (c *RMIClient) GetCitizen(ctx context.Context, cpf string) (*CitizenData, error) {
+	if !isCanonicalCPF(cpf) {
+		return nil, fmt.Errorf("rmi: CPF inválido")
+	}
 	authHeader, err := c.tokenManager.BearerToken(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("rmi: falha ao obter token: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		c.baseURL+"/v1/citizen/"+cpf, nil)
+	requestURL, joinError := url.JoinPath(c.baseURL, "v1", "citizen", cpf)
+	if joinError != nil {
+		return nil, fmt.Errorf("rmi: URL base inválida: %w", joinError)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("rmi: falha ao criar request: %w", err)
 	}
@@ -68,9 +78,15 @@ func (c *RMIClient) GetCitizen(ctx context.Context, cpf string) (*CitizenData, e
 		return nil, nil
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, readError := io.ReadAll(io.LimitReader(resp.Body, maximumRMIResponseBytes+1))
+	if readError != nil {
+		return nil, fmt.Errorf("rmi: falha ao ler resposta: %w", readError)
+	}
+	if len(body) > maximumRMIResponseBytes {
+		return nil, fmt.Errorf("rmi: resposta excede o limite permitido")
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("rmi: retornou %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("rmi: retornou status %d", resp.StatusCode)
 	}
 
 	var citizen CitizenData
@@ -79,4 +95,16 @@ func (c *RMIClient) GetCitizen(ctx context.Context, cpf string) (*CitizenData, e
 	}
 
 	return &citizen, nil
+}
+
+func isCanonicalCPF(cpf string) bool {
+	if len(cpf) != 11 || strings.TrimSpace(cpf) != cpf {
+		return false
+	}
+	for _, character := range cpf {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
 }

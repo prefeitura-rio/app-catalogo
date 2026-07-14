@@ -1,9 +1,11 @@
 package middleware
 
 import (
-	"encoding/base64"
-	"encoding/json"
+	"context"
+	"errors"
+	"net/http"
 	"strings"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 )
@@ -27,57 +29,44 @@ type jwtClaims struct {
 	} `json:"resource_access"`
 }
 
-func decodeJWT(token string) *jwtClaims {
-	token = strings.TrimPrefix(token, "Bearer ")
-	token = strings.TrimSpace(token)
-
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil
-	}
-
-	payload := parts[1]
-	if l := len(payload) % 4; l > 0 {
-		payload += strings.Repeat("=", 4-l)
-	}
-
-	decoded, err := base64.URLEncoding.DecodeString(payload)
-	if err != nil {
-		return nil
-	}
-
-	var claims jwtClaims
-	if err := json.Unmarshal(decoded, &claims); err != nil {
-		return nil
-	}
-
-	return &claims
+type JWTClaimsVerifier interface {
+	Verify(context.Context, string) (*VerifiedJWTClaims, error)
 }
 
-// ExtractUserContext decodifica o JWT injetado pelo Istio (X-Auth-Request-Token).
-// A assinatura já foi validada pelo Istio — não re-validamos aqui.
-func ExtractUserContext() gin.HandlerFunc {
+const userTokenHeader = "X-Auth-Request-Token"
+
+// NewUserContextMiddleware authenticates the proxy-injected token before any
+// citizen identity or role is added to the request context.
+func NewUserContextMiddleware(verifier JWTClaimsVerifier, roleClientID string) (gin.HandlerFunc, error) {
+	if verifier == nil {
+		return nil, errors.New("JWT claims verifier is required")
+	}
+	roleClientID = strings.TrimSpace(roleClientID)
+	if roleClientID == "" || strings.IndexFunc(roleClientID, unicode.IsControl) >= 0 {
+		return nil, errors.New("JWT role client ID is required")
+	}
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("X-Auth-Request-Token")
-		if authHeader == "" {
-			authHeader = c.GetHeader("Authorization")
-		}
-
-		if authHeader == "" {
+		encodedTokens := c.Request.Header.Values(userTokenHeader)
+		if len(encodedTokens) == 0 {
 			c.Next()
 			return
 		}
-
-		claims := decodeJWT(authHeader)
-		if claims == nil {
-			c.Next()
+		if len(encodedTokens) != 1 || strings.TrimSpace(encodedTokens[0]) == "" {
+			rejectInvalidUserToken(c)
+			return
+		}
+		claims, verificationError := verifier.Verify(c.Request.Context(), encodedTokens[0])
+		if verificationError != nil || claims == nil {
+			rejectInvalidUserToken(c)
 			return
 		}
 
-		if claims.PreferredUsername != "" {
-			cpf := strings.NewReplacer(".", "", "-", "").Replace(claims.PreferredUsername)
-			c.Set(UserCPFKey, cpf)
+		cpf, validCPF := normalizeCPF(claims.PreferredUsername)
+		if !validCPF {
+			rejectInvalidUserToken(c)
+			return
 		}
+		c.Set(UserCPFKey, cpf)
 		if claims.Sub != "" {
 			c.Set(UserIDKey, claims.Sub)
 		}
@@ -89,10 +78,10 @@ func ExtractUserContext() gin.HandlerFunc {
 		}
 
 		role := "USER"
-		if superappAccess, ok := claims.ResourceAccess["superapp"]; ok {
-			c.Set(UserRolesKey, superappAccess.Roles)
-			for _, r := range superappAccess.Roles {
-				if r == "go:admin" || r == "admin" {
+		if applicationAccess, hasApplicationAccess := claims.ResourceAccess[roleClientID]; hasApplicationAccess {
+			c.Set(UserRolesKey, applicationAccess.Roles)
+			for _, roleName := range applicationAccess.Roles {
+				if roleName == "go:admin" || roleName == "admin" {
 					role = "ADMIN"
 					break
 				}
@@ -101,7 +90,28 @@ func ExtractUserContext() gin.HandlerFunc {
 		c.Set(UserRoleKey, role)
 
 		c.Next()
+	}, nil
+}
+
+func rejectInvalidUserToken(context *gin.Context) {
+	context.JSON(http.StatusUnauthorized, gin.H{
+		"error":  "token de autenticação inválido",
+		"log_id": context.GetString("request_id"),
+	})
+	context.Abort()
+}
+
+func normalizeCPF(rawCPF string) (string, bool) {
+	canonicalCPF := strings.NewReplacer(".", "", "-", "").Replace(strings.TrimSpace(rawCPF))
+	if len(canonicalCPF) != 11 {
+		return "", false
 	}
+	for _, character := range canonicalCPF {
+		if !unicode.IsDigit(character) || character > unicode.MaxASCII {
+			return "", false
+		}
+	}
+	return canonicalCPF, true
 }
 
 func GetUserCPF(c *gin.Context) string {
@@ -129,7 +139,10 @@ func IsAdmin(c *gin.Context) bool {
 func RequireAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !IsAuthenticated(c) {
-			c.JSON(401, gin.H{"error": "autenticação necessária"})
+			c.JSON(401, gin.H{
+				"error":  "autenticação necessária",
+				"log_id": c.GetString("request_id"),
+			})
 			c.Abort()
 			return
 		}
@@ -139,8 +152,19 @@ func RequireAuth() gin.HandlerFunc {
 
 func RequireAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !IsAuthenticated(c) {
+			c.JSON(401, gin.H{
+				"error":  "autenticação necessária",
+				"log_id": c.GetString("request_id"),
+			})
+			c.Abort()
+			return
+		}
 		if !IsAdmin(c) {
-			c.JSON(403, gin.H{"error": "acesso negado"})
+			c.JSON(403, gin.H{
+				"error":  "acesso negado",
+				"log_id": c.GetString("request_id"),
+			})
 			c.Abort()
 			return
 		}

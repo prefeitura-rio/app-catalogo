@@ -1,986 +1,198 @@
 {
-  "openapi": "3.0.0",
-  "info": {
-    "description": "Discovery layer unificada da Prefeitura do Rio de Janeiro. Indexa serviços públicos, cursos, vagas e oportunidades MEI com busca full-text e recomendação personalizada por perfil de cidadão.",
-    "title": "app-catalogo",
-    "contact": {
-      "name": "Prefeitura do Rio de Janeiro",
-      "url": "https://github.com/prefeitura-rio/app-catalogo"
-    },
-    "version": "1.0"
-  },
-  "paths": {
-    "/api/public/catalog/{id}": {
-      "get": {
-        "description": "Retorna todos os campos de um item incluindo source_data original.",
-        "tags": [
-          "catálogo"
-        ],
-        "summary": "Detalhe de item do catálogo",
-        "parameters": [
-          {
-            "description": "UUID v4 do item",
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/models.CatalogItem"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not Found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/public/recommendations": {
-      "get": {
-        "description": "Recomendações sem autenticação, com scoring neutro. cluster_hint aceita bairro ou faixa etária para leve personalização.",
-        "tags": [
-          "recomendações"
-        ],
-        "summary": "Recomendações anônimas",
-        "parameters": [
-          {
-            "description": "Bairro ou faixa etária (ex: Tijuca, 25-34)",
-            "name": "cluster_hint",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Tipos: service, course, job, mei_opportunity",
-            "name": "types",
-            "in": "query",
-            "explode": true,
-            "schema": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          {
-            "description": "Máximo de itens, max 50 (default: 10)",
-            "name": "limit",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Contexto: homepage, after_search, profile",
-            "name": "context",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/models.RecommendationResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/public/search": {
-      "get": {
-        "description": "Busca por serviços, cursos, vagas e oportunidades MEI. Suporta sintaxe websearch_to_tsquery: aspas para frase exata, - para exclusão, OR para alternativas.",
-        "tags": [
-          "busca"
-        ],
-        "summary": "Busca no catálogo",
-        "parameters": [
-          {
-            "description": "Texto livre de busca",
-            "name": "q",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Tipos: service, course, job, mei_opportunity",
-            "name": "types",
-            "in": "query",
-            "explode": true,
-            "schema": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          {
-            "description": "Página (default: 1)",
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Itens por página, máximo 100 (default: 10)",
-            "name": "per_page",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Modalidade: presencial, digital, hibrido",
-            "name": "modalidade",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Bairro do Rio de Janeiro",
-            "name": "bairro",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Órgão ou secretaria responsável",
-            "name": "orgao",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "[course] Apenas cursos gratuitos",
-            "name": "gratuito",
-            "in": "query",
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "description": "[course] Turno: matutino, vespertino, noturno",
-            "name": "turno",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "[job] Regime: CLT, PJ, temporario",
-            "name": "regime_contratacao",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "[job] Modelo: presencial, remoto, hibrido",
-            "name": "modelo_trabalho",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "[job] Apenas vagas exclusivas para PCD",
-            "name": "pcd",
-            "in": "query",
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "description": "[job] Faixa salarial: ate-2sm, 2-4sm, acima-4sm",
-            "name": "faixa_salarial",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "[service] Canal: presencial, digital, telefone",
-            "name": "canal_atendimento",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "[service] Tema do serviço",
-            "name": "tema",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "[mei_opportunity] Segmento do negócio",
-            "name": "segmento",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/models.SearchResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/sync/status": {
-      "get": {
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "description": "Retorna o último evento de sincronização por fonte de dados. Requer role admin ou go:admin.",
-        "tags": [
-          "admin"
-        ],
-        "summary": "Status das sincronizações",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "array",
-                    "items": {
-                      "$ref": "#/components/schemas/models.SyncStatus"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/admin/sync/trigger": {
-      "post": {
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "description": "Dispara sync ad-hoc em background. Retorna imediatamente. Requer role admin ou go:admin.",
-        "tags": [
-          "admin"
-        ],
-        "summary": "Dispara sincronização manual",
-        "parameters": [
-          {
-            "description": "Fonte: salesforce, app-go-api, typesense. Vazio = todas.",
-            "name": "source",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Accepted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/catalog/{id}": {
-      "get": {
-        "description": "Retorna todos os campos de um item incluindo source_data original.",
-        "tags": [
-          "catálogo"
-        ],
-        "summary": "Detalhe de item do catálogo",
-        "parameters": [
-          {
-            "description": "UUID v4 do item",
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/models.CatalogItem"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not Found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/recommendations": {
-      "get": {
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ],
-        "description": "Recomendações baseadas no perfil do cidadão autenticado (escolaridade, renda, localização, acessibilidade, faixa etária).",
-        "tags": [
-          "recomendações"
-        ],
-        "summary": "Recomendações personalizadas",
-        "parameters": [
-          {
-            "description": "Tipos: service, course, job, mei_opportunity",
-            "name": "types",
-            "in": "query",
-            "explode": true,
-            "schema": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          {
-            "description": "Máximo de itens, max 50 (default: 10)",
-            "name": "limit",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Contexto: homepage, after_search, profile",
-            "name": "context",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/models.RecommendationResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/search": {
-      "get": {
-        "description": "Busca por serviços, cursos, vagas e oportunidades MEI. Suporta sintaxe websearch_to_tsquery: aspas para frase exata, - para exclusão, OR para alternativas.",
-        "tags": [
-          "busca"
-        ],
-        "summary": "Busca no catálogo",
-        "parameters": [
-          {
-            "description": "Texto livre de busca",
-            "name": "q",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Tipos: service, course, job, mei_opportunity",
-            "name": "types",
-            "in": "query",
-            "explode": true,
-            "schema": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          },
-          {
-            "description": "Página (default: 1)",
-            "name": "page",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Itens por página, máximo 100 (default: 10)",
-            "name": "per_page",
-            "in": "query",
-            "schema": {
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Modalidade: presencial, digital, hibrido",
-            "name": "modalidade",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Bairro do Rio de Janeiro",
-            "name": "bairro",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Órgão ou secretaria responsável",
-            "name": "orgao",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "[course] Apenas cursos gratuitos",
-            "name": "gratuito",
-            "in": "query",
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "description": "[course] Turno: matutino, vespertino, noturno",
-            "name": "turno",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "[job] Regime: CLT, PJ, temporario",
-            "name": "regime_contratacao",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "[job] Modelo: presencial, remoto, hibrido",
-            "name": "modelo_trabalho",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "[job] Apenas vagas exclusivas para PCD",
-            "name": "pcd",
-            "in": "query",
-            "schema": {
-              "type": "boolean"
-            }
-          },
-          {
-            "description": "[job] Faixa salarial: ate-2sm, 2-4sm, acima-4sm",
-            "name": "faixa_salarial",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "[service] Canal: presencial, digital, telefone",
-            "name": "canal_atendimento",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "[service] Tema do serviço",
-            "name": "tema",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "[mei_opportunity] Segmento do negócio",
-            "name": "segmento",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/models.SearchResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal Server Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/webhooks/salesforce": {
-      "post": {
-        "description": "Recebe notificações de criação/atualização da Carta de Serviços. Valida assinatura HMAC-SHA256 via header X-Salesforce-Signature.",
-        "tags": [
-          "webhooks"
-        ],
-        "summary": "Webhook SalesForce (Change Data Capture)",
-        "parameters": [
-          {
-            "description": "HMAC-SHA256 do body em hex",
-            "name": "X-Salesforce-Signature",
-            "in": "header",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/v1.sfWebhookPayload"
-              }
-            }
-          },
-          "description": "Payload do evento",
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/health": {
-      "get": {
-        "description": "Sempre retorna 200. Usado pelo Kubernetes para liveness check.",
-        "tags": [
-          "infra"
-        ],
-        "summary": "Liveness probe",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/ready": {
-      "get": {
-        "description": "Verifica conectividade com o banco de dados.",
-        "tags": [
-          "infra"
-        ],
-        "summary": "Readiness probe",
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Service Unavailable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  },
-  "servers": [
-    {
-      "url": "https://services.staging.app.dados.rio/catalogo",
-      "description": "Staging"
-    },
-    {
-      "url": "https://services.pref.rio/catalogo",
-      "description": "Produção"
-    }
-  ],
   "components": {
-    "securitySchemes": {
-      "BearerAuth": {
-        "description": "JWT injetado pelo Istio via header X-Auth-Request-Token",
-        "type": "apiKey",
-        "name": "Authorization",
-        "in": "header"
-      }
-    },
     "schemas": {
       "models.CatalogItem": {
-        "type": "object",
         "properties": {
           "bairros": {
-            "type": "array",
             "items": {
-              "type": "string"
-            }
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "\\S"
+            },
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50
           },
           "created_at": {
+            "format": "date-time",
             "type": "string"
           },
           "description": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16000
           },
           "external_id": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "\\S"
           },
           "id": {
+            "format": "uuid",
             "type": "string"
           },
           "image_url": {
-            "type": "string"
+            "format": "uri",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\s]+($|[/?#]($|.*\\S$))"
           },
           "modalidade": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
           },
           "organization": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
           },
           "short_desc": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
           },
           "source": {
             "$ref": "#/components/schemas/models.ItemSource"
           },
           "source_data": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": true,
+            "x-max-json-bytes": 65536,
+            "properties": {
+              "canonical_id": {
+                "type": "string",
+                "nullable": true,
+                "maxLength": 500
+              },
+              "id": {
+                "type": "string",
+                "nullable": true,
+                "maxLength": 500
+              },
+              "slug": {
+                "type": "string",
+                "nullable": true,
+                "maxLength": 500
+              },
+              "tema_especifico": {
+                "type": "string",
+                "nullable": true,
+                "maxLength": 500
+              },
+              "tema_geral": {
+                "type": "string",
+                "nullable": true,
+                "maxLength": 500
+              },
+              "_catalog_object_type": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100,
+                "pattern": "\\S"
+              }
+            }
           },
           "source_updated_at": {
+            "format": "date-time",
             "type": "string"
           },
           "status": {
             "$ref": "#/components/schemas/models.ItemStatus"
           },
           "tags": {
-            "type": "array",
             "items": {
-              "type": "string"
-            }
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "\\S"
+            },
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50
           },
           "target_audience": {
-            "type": "object"
+            "$ref": "#/components/schemas/models.TargetAudienceData"
           },
           "title": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "\\S"
           },
           "type": {
             "$ref": "#/components/schemas/models.ItemType"
           },
           "updated_at": {
+            "format": "date-time",
             "type": "string"
           },
           "url": {
-            "type": "string"
+            "format": "uri",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\s]+($|[/?#]($|.*\\S$))"
           },
           "valid_from": {
+            "format": "date-time",
             "type": "string"
           },
           "valid_until": {
+            "format": "date-time",
             "type": "string"
           }
-        }
+        },
+        "required": [
+          "created_at",
+          "external_id",
+          "id",
+          "source",
+          "status",
+          "title",
+          "type",
+          "updated_at"
+        ],
+        "type": "object",
+        "additionalProperties": false,
+        "x-max-search-projection-bytes": 8192
+      },
+      "models.EmbeddingMetadata": {
+        "properties": {
+          "dimensions": {
+            "type": "integer"
+          },
+          "document_task_type": {
+            "type": "string"
+          },
+          "document_version": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "query_task_type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "version",
+          "dimensions",
+          "document_task_type",
+          "query_task_type",
+          "document_version"
+        ],
+        "type": "object",
+        "additionalProperties": false
       },
       "models.ItemSource": {
-        "type": "string",
         "enum": [
           "salesforce",
           "courses",
@@ -989,6 +201,7 @@
           "app-go-api",
           "typesense"
         ],
+        "type": "string",
         "x-enum-comments": {
           "SourceAppGoAPI": "fonte composta: courses + jobs + mei",
           "SourceTypesense": "temporário: Carta de Serviços até migração para SalesForce"
@@ -1011,12 +224,12 @@
         ]
       },
       "models.ItemStatus": {
-        "type": "string",
         "enum": [
           "active",
           "inactive",
           "draft"
         ],
+        "type": "string",
         "x-enum-varnames": [
           "StatusActive",
           "StatusInactive",
@@ -1024,13 +237,13 @@
         ]
       },
       "models.ItemType": {
-        "type": "string",
         "enum": [
           "service",
           "course",
           "job",
           "mei_opportunity"
         ],
+        "type": "string",
         "x-enum-varnames": [
           "TypeService",
           "TypeCourse",
@@ -1038,157 +251,751 @@
           "TypeMEIOpportunity"
         ]
       },
-      "models.RankedItem": {
-        "type": "object",
+      "models.PublicCatalogItem": {
         "properties": {
           "bairros": {
-            "type": "array",
             "items": {
-              "type": "string"
-            }
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "\\S"
+            },
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 16000
           },
           "id": {
+            "format": "uuid",
             "type": "string"
           },
           "image_url": {
-            "type": "string"
+            "format": "uri",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\s]+($|[/?#]($|.*\\S$))"
           },
           "modalidade": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
           },
           "organization": {
-            "type": "string"
-          },
-          "score": {
-            "type": "number"
-          },
-          "score_breakdown": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "number",
-              "format": "float64"
-            }
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
           },
           "short_desc": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
           },
           "source": {
             "$ref": "#/components/schemas/models.ItemSource"
           },
+          "source_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "\\S"
+          },
+          "source_updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
           "tags": {
-            "type": "array",
             "items": {
-              "type": "string"
-            }
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "\\S"
+            },
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50
           },
           "title": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "\\S"
           },
           "type": {
             "$ref": "#/components/schemas/models.ItemType"
           },
           "url": {
+            "format": "uri",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\s]+($|[/?#]($|.*\\S$))"
+          },
+          "valid_from": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "valid_until": {
+            "format": "date-time",
             "type": "string"
           }
-        }
+        },
+        "required": [
+          "id",
+          "source",
+          "source_id",
+          "title",
+          "type"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "models.RankedItem": {
+        "properties": {
+          "bairros": {
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "\\S"
+            },
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "image_url": {
+            "format": "uri",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\s]+($|[/?#]($|.*\\S$))"
+          },
+          "modalidade": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "organization": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "score": {
+            "type": "number"
+          },
+          "score_breakdown": {
+            "additionalProperties": {
+              "format": "float64",
+              "type": "number"
+            },
+            "type": "object"
+          },
+          "short_desc": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "source": {
+            "$ref": "#/components/schemas/models.ItemSource"
+          },
+          "tags": {
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "\\S"
+            },
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "\\S"
+          },
+          "type": {
+            "$ref": "#/components/schemas/models.ItemType"
+          },
+          "url": {
+            "format": "uri",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\s]+($|[/?#]($|.*\\S$))"
+          }
+        },
+        "required": [
+          "id",
+          "score",
+          "source",
+          "title",
+          "type"
+        ],
+        "type": "object",
+        "additionalProperties": false
       },
       "models.RecommendationContext": {
-        "type": "string",
         "enum": [
           "homepage",
           "after_search",
           "profile"
         ],
+        "type": "string",
         "x-enum-varnames": [
           "ContextHomepage",
           "ContextAfterSearch",
           "ContextProfile"
         ]
       },
-      "models.RecommendationResponse": {
+      "models.RecommendationErrorResponse": {
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "log_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "log_id"
+        ],
         "type": "object",
+        "additionalProperties": false
+      },
+      "models.RecommendationResponse": {
         "properties": {
           "context": {
             "$ref": "#/components/schemas/models.RecommendationContext"
           },
           "items": {
-            "type": "array",
             "items": {
               "$ref": "#/components/schemas/models.RankedItem"
-            }
+            },
+            "maxItems": 50,
+            "type": "array"
           },
           "personalized": {
             "type": "boolean"
           }
+        },
+        "required": [
+          "context",
+          "items",
+          "personalized"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "models.SearchExternalRetrieverDescriptor": {
+        "properties": {
+          "catalog_revision": {
+            "type": "string",
+            "minLength": 71,
+            "maxLength": 71,
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "query_expansion_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "\\S"
+          },
+          "ranker_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "\\S"
+          },
+          "retrieval_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "\\S"
+          },
+          "schema_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "\\S"
+          }
+        },
+        "required": [
+          "schema_version",
+          "catalog_revision",
+          "retrieval_version",
+          "query_expansion_version",
+          "ranker_version"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "models.SearchFacetScope": {
+        "enum": [
+          "catalog_matches",
+          "retrieval_candidates",
+          "unavailable"
+        ],
+        "type": "string",
+        "x-enum-varnames": [
+          "SearchFacetScopeCatalogMatches",
+          "SearchFacetScopeRetrievalCandidates",
+          "SearchFacetScopeUnavailable"
+        ],
+        "description": "Population used for counts. catalog_matches counts canonical entities matching the current browse filters in one database snapshot; retrieval_candidates counts the bounded, canonically deduplicated candidate union before reranking and pagination; unavailable carries only empty facet arrays."
+      },
+      "models.SearchFacetValue": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "value",
+          "label",
+          "count"
+        ],
+        "properties": {
+          "value": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Canonical round-trip filter value; oversized and unsupported values are omitted."
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "description": "Bounded public display label."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "models.SearchFacets": {
+        "type": "object",
+        "description": "Bounded facet counts sorted by count descending and canonical value ascending. Each canonical entity contributes at most once to a value. Counts apply all current filters, including the facet's own dimension.",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "scope",
+          "types",
+          "modalidades",
+          "bairros",
+          "organizations"
+        ],
+        "properties": {
+          "version": {
+            "type": "string",
+            "enum": [
+              "catalog-facets-v1"
+            ]
+          },
+          "scope": {
+            "$ref": "#/components/schemas/models.SearchFacetScope"
+          },
+          "types": {
+            "type": "array",
+            "maxItems": 30,
+            "items": {
+              "$ref": "#/components/schemas/models.SearchFacetValue"
+            }
+          },
+          "modalidades": {
+            "type": "array",
+            "maxItems": 30,
+            "items": {
+              "$ref": "#/components/schemas/models.SearchFacetValue"
+            }
+          },
+          "bairros": {
+            "type": "array",
+            "maxItems": 30,
+            "items": {
+              "$ref": "#/components/schemas/models.SearchFacetValue"
+            }
+          },
+          "organizations": {
+            "type": "array",
+            "maxItems": 30,
+            "items": {
+              "$ref": "#/components/schemas/models.SearchFacetValue"
+            }
+          }
         }
       },
       "models.SearchItem": {
-        "type": "object",
         "properties": {
           "bairros": {
-            "type": "array",
             "items": {
-              "type": "string"
-            }
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "\\S"
+            },
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50
+          },
+          "canonical_id": {
+            "type": "string",
+            "pattern": "^entity-v1:[0-9a-f]{64}$"
           },
           "highlights": {
-            "type": "array",
             "items": {
               "type": "string"
-            }
+            },
+            "type": "array"
           },
           "id": {
-            "type": "string"
+            "type": "string",
+            "format": "uuid"
           },
           "image_url": {
-            "type": "string"
+            "type": "string",
+            "format": "uri",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\s]+($|[/?#]($|.*\\S$))"
           },
           "metadata": {
-            "type": "object"
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "slug": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "tema_especifico": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "tema_geral": {
+                "type": "string",
+                "maxLength": 500
+              }
+            }
           },
           "modalidade": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
           },
           "organization": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
           },
           "relevance_score": {
             "type": "number"
           },
           "short_desc": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          },
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
           },
           "source": {
             "$ref": "#/components/schemas/models.ItemSource"
           },
-          "slug": {
-            "type": "string"
+          "source_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "pattern": "\\S"
           },
           "tags": {
-            "type": "array",
             "items": {
-              "type": "string"
-            }
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "\\S"
+            },
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50
           },
           "title": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "\\S"
           },
           "type": {
             "$ref": "#/components/schemas/models.ItemType"
           },
           "url": {
+            "type": "string",
+            "format": "uri",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\\s]+($|[/?#]($|.*\\S$))"
+          }
+        },
+        "required": [
+          "id",
+          "canonical_id",
+          "type",
+          "source",
+          "source_id",
+          "title",
+          "relevance_score"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "models.SearchPipeline": {
+        "enum": [
+          "browse",
+          "lexical",
+          "lexical_reranked",
+          "hybrid",
+          "hybrid_reranked",
+          "hybrid_hyde",
+          "hybrid_hyde_reranked"
+        ],
+        "type": "string",
+        "x-enum-varnames": [
+          "SearchPipelineBrowse",
+          "SearchPipelineLexical",
+          "SearchPipelineLexicalReranked",
+          "SearchPipelineHybrid",
+          "SearchPipelineHybridReranked",
+          "SearchPipelineHybridHyDE",
+          "SearchPipelineHybridHyDEReranked"
+        ]
+      },
+      "models.SearchRankerDescriptor": {
+        "properties": {
+          "base_version": {
             "type": "string"
+          },
+          "candidate_pool_size": {
+            "type": "integer"
+          },
+          "deduplication_version": {
+            "type": "string"
+          },
+          "embedding": {
+            "$ref": "#/components/schemas/models.EmbeddingMetadata"
+          },
+          "facilita": {
+            "$ref": "#/components/schemas/models.SearchExternalRetrieverDescriptor"
+          },
+          "hyde_candidate_count": {
+            "type": "integer"
+          },
+          "hyde_determinism_policy": {
+            "type": "string"
+          },
+          "hyde_enabled": {
+            "type": "boolean"
+          },
+          "hyde_max_output_tokens": {
+            "type": "integer"
+          },
+          "hyde_model": {
+            "type": "string"
+          },
+          "hyde_prompt_sha256": {
+            "type": "string"
+          },
+          "hyde_prompt_version": {
+            "type": "string"
+          },
+          "hyde_response_mime_type": {
+            "type": "string"
+          },
+          "hyde_seed": {
+            "type": "integer"
+          },
+          "hyde_temperature": {
+            "type": "number"
+          },
+          "maximum_semantic_distance": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 2
+          },
+          "query_expansion_version": {
+            "type": "string"
+          },
+          "reciprocal_rank_k": {
+            "type": "number"
+          },
+          "reranker_candidate_limit": {
+            "type": "integer"
+          },
+          "reranker_enabled": {
+            "type": "boolean"
+          },
+          "reranker_version": {
+            "type": "string"
+          },
+          "retrieval_version": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "semantic_enabled": {
+            "type": "boolean"
+          },
+          "semantic_overfetch_factor": {
+            "type": "integer"
+          },
+          "trigram_threshold": {
+            "type": "number"
+          },
+          "weights": {
+            "$ref": "#/components/schemas/models.SearchRetrievalWeights"
+          }
+        },
+        "required": [
+          "schema_version",
+          "base_version",
+          "retrieval_version",
+          "query_expansion_version",
+          "deduplication_version",
+          "candidate_pool_size",
+          "semantic_overfetch_factor",
+          "trigram_threshold",
+          "maximum_semantic_distance",
+          "reciprocal_rank_k",
+          "weights",
+          "semantic_enabled",
+          "hyde_enabled",
+          "reranker_enabled"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "models.SearchRequestBody": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "q": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "types": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/models.ItemType"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 1
+          },
+          "per_page": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 10
+          },
+          "modalidade": {
+            "type": "string",
+            "enum": [
+              "presencial",
+              "digital",
+              "hibrido"
+            ]
+          },
+          "bairro": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "orgao": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "turno": {
+            "type": "string",
+            "enum": [
+              "matutino",
+              "vespertino",
+              "noturno"
+            ]
+          },
+          "regime_contratacao": {
+            "type": "string",
+            "enum": [
+              "clt",
+              "pj",
+              "temporario"
+            ]
+          },
+          "modelo_trabalho": {
+            "type": "string",
+            "enum": [
+              "presencial",
+              "remoto",
+              "hibrido"
+            ]
+          },
+          "pcd": {
+            "type": "boolean"
+          },
+          "canal_atendimento": {
+            "type": "string",
+            "enum": [
+              "presencial",
+              "digital",
+              "telefone"
+            ]
+          },
+          "tema": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "segmento": {
+            "type": "string",
+            "maxLength": 100
           }
         }
       },
       "models.SearchResponse": {
-        "type": "object",
         "properties": {
+          "catalog_revision": {
+            "type": "string"
+          },
+          "degraded": {
+            "type": "boolean"
+          },
+          "effective_pipeline": {
+            "$ref": "#/components/schemas/models.SearchPipeline"
+          },
+          "facets": {
+            "$ref": "#/components/schemas/models.SearchFacets"
+          },
           "items": {
-            "type": "array",
             "items": {
               "$ref": "#/components/schemas/models.SearchItem"
-            }
+            },
+            "type": "array"
           },
           "page": {
             "type": "integer"
@@ -1196,18 +1003,177 @@
           "per_page": {
             "type": "integer"
           },
+          "ranker_descriptor": {
+            "$ref": "#/components/schemas/models.SearchRankerDescriptor"
+          },
+          "ranker_version": {
+            "type": "string"
+          },
+          "search_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "sources": {
+            "$ref": "#/components/schemas/models.SearchSources"
+          },
           "total": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Total canonical entities in the declared browse or retrieval population before pagination."
           }
-        }
+        },
+        "required": [
+          "search_id",
+          "ranker_version",
+          "ranker_descriptor",
+          "catalog_revision",
+          "effective_pipeline",
+          "degraded",
+          "sources",
+          "total",
+          "page",
+          "per_page",
+          "facets",
+          "items"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "models.SearchRetrievalWeights": {
+        "properties": {
+          "exact": {
+            "type": "number"
+          },
+          "facilita": {
+            "type": "number"
+          },
+          "full_text": {
+            "type": "number"
+          },
+          "hyde": {
+            "type": "number"
+          },
+          "semantic": {
+            "type": "number"
+          },
+          "trigram": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "exact",
+          "full_text",
+          "trigram",
+          "semantic",
+          "hyde",
+          "facilita"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "models.SearchSourceDiagnostic": {
+        "properties": {
+          "candidates_received": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 50
+          },
+          "eligible_contributions": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 50
+          },
+          "failure": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/models.SearchSourceFailure"
+              }
+            ],
+            "enum": [
+              "timeout",
+              "transport",
+              "rejected",
+              "invalid_contract"
+            ]
+          },
+          "latency_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/models.SearchExternalRetrieverDescriptor"
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/models.SearchSourceStatus"
+              }
+            ],
+            "enum": [
+              "not_applicable",
+              "unavailable",
+              "no_effect",
+              "applied"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "latency_ms",
+          "candidates_received",
+          "eligible_contributions"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "models.SearchSourceFailure": {
+        "enum": [
+          "timeout",
+          "transport",
+          "rejected",
+          "invalid_contract"
+        ],
+        "type": "string",
+        "x-enum-varnames": [
+          "SearchSourceFailureTimeout",
+          "SearchSourceFailureTransport",
+          "SearchSourceFailureRejected",
+          "SearchSourceFailureInvalidContract"
+        ]
+      },
+      "models.SearchSourceStatus": {
+        "enum": [
+          "not_applicable",
+          "unavailable",
+          "no_effect",
+          "applied"
+        ],
+        "type": "string",
+        "x-enum-varnames": [
+          "SearchSourceStatusNotApplicable",
+          "SearchSourceStatusUnavailable",
+          "SearchSourceStatusNoEffect",
+          "SearchSourceStatusApplied"
+        ]
+      },
+      "models.SearchSources": {
+        "properties": {
+          "facilita": {
+            "$ref": "#/components/schemas/models.SearchSourceDiagnostic"
+          }
+        },
+        "required": [
+          "facilita"
+        ],
+        "type": "object",
+        "additionalProperties": false
       },
       "models.SyncEventStatus": {
-        "type": "string",
         "enum": [
           "started",
           "completed",
           "failed"
         ],
+        "type": "string",
         "x-enum-varnames": [
           "SyncStatusStarted",
           "SyncStatusCompleted",
@@ -1215,12 +1181,12 @@
         ]
       },
       "models.SyncEventType": {
-        "type": "string",
         "enum": [
           "full_sync",
           "delta_sync",
           "webhook"
         ],
+        "type": "string",
         "x-enum-varnames": [
           "SyncTypeFullSync",
           "SyncTypeDeltaSync",
@@ -1228,7 +1194,6 @@
         ]
       },
       "models.SyncStatus": {
-        "type": "object",
         "properties": {
           "error_message": {
             "type": "string"
@@ -1240,12 +1205,14 @@
             "type": "integer"
           },
           "last_completed_at": {
+            "format": "date-time",
             "type": "string"
           },
           "last_event_type": {
             "$ref": "#/components/schemas/models.SyncEventType"
           },
           "last_started_at": {
+            "format": "date-time",
             "type": "string"
           },
           "last_status": {
@@ -1254,13 +1221,36 @@
           "source": {
             "$ref": "#/components/schemas/models.ItemSource"
           }
-        }
+        },
+        "required": [
+          "items_failed",
+          "items_processed",
+          "last_event_type",
+          "last_started_at",
+          "last_status",
+          "source"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "models.SyncStatusResponse": {
+        "properties": {
+          "syncs": {
+            "items": {
+              "$ref": "#/components/schemas/models.SyncStatus"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "syncs"
+        ],
+        "type": "object",
+        "additionalProperties": false
       },
       "v1.sfWebhookPayload": {
-        "type": "object",
         "properties": {
           "event": {
-            "type": "object",
             "properties": {
               "created": {
                 "type": "string"
@@ -1268,21 +1258,1800 @@
               "type": {
                 "type": "string"
               }
-            }
+            },
+            "type": "object"
           },
           "sobject": {
-            "type": "object",
             "properties": {
               "Id": {
-                "type": "string"
+                "type": "string",
+                "minLength": 1,
+                "pattern": "\\S"
               },
               "type": {
                 "type": "string"
+              }
+            },
+            "required": [
+              "Id"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "sobject"
+        ],
+        "type": "object"
+      },
+      "models.TargetAudienceData": {
+        "type": "object",
+        "additionalProperties": false,
+        "x-max-json-bytes": 16384,
+        "properties": {
+          "escolaridade": {
+            "type": "array",
+            "nullable": true,
+            "maxItems": 50,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "\\S"
+            }
+          },
+          "renda": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 500
+          },
+          "deficiencia": {
+            "type": "array",
+            "nullable": true,
+            "maxItems": 50,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "\\S"
+            }
+          },
+          "etnia": {
+            "type": "array",
+            "nullable": true,
+            "maxItems": 50,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "\\S"
+            }
+          },
+          "faixa_etaria": {
+            "type": "array",
+            "nullable": true,
+            "maxItems": 50,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "\\S"
+            }
+          },
+          "genero": {
+            "type": "array",
+            "nullable": true,
+            "maxItems": 50,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500,
+              "pattern": "\\S"
+            }
+          },
+          "pcd": {
+            "type": "boolean",
+            "nullable": true
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "description": "JWT injetado pelo Istio via header X-Auth-Request-Token",
+        "in": "header",
+        "name": "X-Auth-Request-Token",
+        "type": "apiKey"
+      }
+    },
+    "headers": {
+      "X-Request-ID": {
+        "description": "Canonical UUID used to correlate the response with application logs.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      }
+    }
+  },
+  "info": {
+    "contact": {
+      "name": "Prefeitura do Rio de Janeiro",
+      "url": "https://github.com/prefeitura-rio/app-catalogo"
+    },
+    "description": "Discovery layer unificada da Prefeitura do Rio de Janeiro. Indexa serviços públicos, cursos, vagas e oportunidades MEI com busca full-text e recomendação personalizada por perfil de cidadão.",
+    "title": "app-catalogo",
+    "version": "1.0"
+  },
+  "openapi": "3.0.0",
+  "paths": {
+    "/api/public/catalog/{id}": {
+      "get": {
+        "description": "Retorna somente campos públicos de um item ativo e vigente.",
+        "parameters": [
+          {
+            "description": "UUID v4 do item",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.PublicCatalogItem"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Not Found",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "summary": "Detalhe público de item elegível do catálogo",
+        "tags": [
+          "catálogo"
+        ]
+      }
+    },
+    "/api/public/recommendations": {
+      "get": {
+        "description": "Recomendações sem autenticação, com scoring neutro.",
+        "parameters": [
+          {
+            "description": "Tipos: service, course, job, mei_opportunity",
+            "in": "query",
+            "name": "types",
+            "schema": {
+              "items": {
+                "enum": [
+                  "service",
+                  "course",
+                  "job",
+                  "mei_opportunity"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "Máximo de itens",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 10,
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Contexto da recomendação",
+            "in": "query",
+            "name": "context",
+            "schema": {
+              "enum": [
+                "homepage",
+                "after_search",
+                "profile"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.RecommendationResponse"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.RecommendationErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.RecommendationErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "summary": "Recomendações anônimas",
+        "tags": [
+          "recomendações"
+        ]
+      }
+    },
+    "/api/public/search": {
+      "get": {
+        "description": "Busca por serviços, cursos, vagas e oportunidades MEI. Suporta sintaxe websearch_to_tsquery: aspas para frase exata, - para exclusão, OR para alternativas.",
+        "parameters": [
+          {
+            "description": "Texto livre de busca",
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Tipos: service, course, job, mei_opportunity",
+            "in": "query",
+            "name": "types",
+            "schema": {
+              "items": {
+                "enum": [
+                  "service",
+                  "course",
+                  "job",
+                  "mei_opportunity"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "Página (default: 1)",
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Itens por página, máximo 100 (default: 10)",
+            "in": "query",
+            "name": "per_page",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Modalidade: presencial, digital, hibrido",
+            "in": "query",
+            "name": "modalidade",
+            "schema": {
+              "enum": [
+                "presencial",
+                "digital",
+                "hibrido"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bairro do Rio de Janeiro",
+            "in": "query",
+            "name": "bairro",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Órgão ou secretaria responsável",
+            "in": "query",
+            "name": "orgao",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "description": "[course] Turno: matutino, vespertino, noturno",
+            "in": "query",
+            "name": "turno",
+            "schema": {
+              "enum": [
+                "matutino",
+                "vespertino",
+                "noturno"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "[job] Regime: clt, pj, temporario",
+            "in": "query",
+            "name": "regime_contratacao",
+            "schema": {
+              "enum": [
+                "clt",
+                "pj",
+                "temporario"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "[job] Modelo: presencial, remoto, hibrido",
+            "in": "query",
+            "name": "modelo_trabalho",
+            "schema": {
+              "enum": [
+                "presencial",
+                "remoto",
+                "hibrido"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "[job] true/false filtra vagas PCD; omitido não filtra",
+            "in": "query",
+            "name": "pcd",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "[service] Canal: presencial, digital, telefone",
+            "in": "query",
+            "name": "canal_atendimento",
+            "schema": {
+              "enum": [
+                "presencial",
+                "digital",
+                "telefone"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "[service] Tema do serviço",
+            "in": "query",
+            "name": "tema",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "description": "[mei_opportunity] Segmento do negócio",
+            "in": "query",
+            "name": "segmento",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.SearchResponse"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "504": {
+            "description": "Gateway Timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "summary": "Busca no catálogo",
+        "tags": [
+          "busca"
+        ]
+      },
+      "post": {
+        "description": "Executa o mesmo pipeline da busca GET usando um corpo JSON estritamente validado, sem colocar o texto livre na URL.",
+        "requestBody": {
+          "description": "Parâmetros da busca",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/models.SearchRequestBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.SearchResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "413": {
+            "description": "Request Entity Too Large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "504": {
+            "description": "Gateway Timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "summary": "Busca pública por JSON",
+        "tags": [
+          "busca"
+        ],
+        "security": []
+      }
+    },
+    "/api/v1/admin/sync/status": {
+      "get": {
+        "description": "Retorna o último evento de sincronização por fonte de dados. Requer role admin ou go:admin.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.SyncStatusResponse"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unauthorized",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Status das sincronizações",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/sync/trigger": {
+      "post": {
+        "description": "Dispara sync ad-hoc em background. Retorna imediatamente. Requer role admin ou go:admin.",
+        "parameters": [
+          {
+            "description": "Fonte: salesforce, app-go-api, typesense. Vazio = todas.",
+            "in": "query",
+            "name": "source",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Accepted",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unauthorized",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Forbidden",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Dispara sincronização manual",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/catalog/{id}": {
+      "get": {
+        "description": "Retorna todos os campos de um item incluindo source_data original.",
+        "parameters": [
+          {
+            "description": "UUID v4 do item",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.CatalogItem"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unauthorized",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Not Found",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Detalhe de item do catálogo",
+        "tags": [
+          "catálogo"
+        ]
+      }
+    },
+    "/api/v1/recommendations": {
+      "get": {
+        "description": "Recomendações baseadas no perfil do cidadão autenticado (escolaridade, renda, localização, acessibilidade, faixa etária).",
+        "parameters": [
+          {
+            "description": "Tipos: service, course, job, mei_opportunity",
+            "in": "query",
+            "name": "types",
+            "schema": {
+              "items": {
+                "enum": [
+                  "service",
+                  "course",
+                  "job",
+                  "mei_opportunity"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "Máximo de itens",
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "default": 10,
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Contexto da recomendação",
+            "in": "query",
+            "name": "context",
+            "schema": {
+              "enum": [
+                "homepage",
+                "after_search",
+                "profile"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.RecommendationResponse"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.RecommendationErrorResponse"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.RecommendationErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.RecommendationErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Recomendações personalizadas",
+        "tags": [
+          "recomendações"
+        ]
+      }
+    },
+    "/api/v1/search": {
+      "get": {
+        "description": "Busca por serviços, cursos, vagas e oportunidades MEI. Suporta sintaxe websearch_to_tsquery: aspas para frase exata, - para exclusão, OR para alternativas.",
+        "parameters": [
+          {
+            "description": "Texto livre de busca",
+            "in": "query",
+            "name": "q",
+            "schema": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Tipos: service, course, job, mei_opportunity",
+            "in": "query",
+            "name": "types",
+            "schema": {
+              "items": {
+                "enum": [
+                  "service",
+                  "course",
+                  "job",
+                  "mei_opportunity"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          {
+            "description": "Página (default: 1)",
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Itens por página, máximo 100 (default: 10)",
+            "in": "query",
+            "name": "per_page",
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Modalidade: presencial, digital, hibrido",
+            "in": "query",
+            "name": "modalidade",
+            "schema": {
+              "enum": [
+                "presencial",
+                "digital",
+                "hibrido"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "Bairro do Rio de Janeiro",
+            "in": "query",
+            "name": "bairro",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Órgão ou secretaria responsável",
+            "in": "query",
+            "name": "orgao",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "description": "[course] Turno: matutino, vespertino, noturno",
+            "in": "query",
+            "name": "turno",
+            "schema": {
+              "enum": [
+                "matutino",
+                "vespertino",
+                "noturno"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "[job] Regime: clt, pj, temporario",
+            "in": "query",
+            "name": "regime_contratacao",
+            "schema": {
+              "enum": [
+                "clt",
+                "pj",
+                "temporario"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "[job] Modelo: presencial, remoto, hibrido",
+            "in": "query",
+            "name": "modelo_trabalho",
+            "schema": {
+              "enum": [
+                "presencial",
+                "remoto",
+                "hibrido"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "[job] true/false filtra vagas PCD; omitido não filtra",
+            "in": "query",
+            "name": "pcd",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "[service] Canal: presencial, digital, telefone",
+            "in": "query",
+            "name": "canal_atendimento",
+            "schema": {
+              "enum": [
+                "presencial",
+                "digital",
+                "telefone"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "description": "[service] Tema do serviço",
+            "in": "query",
+            "name": "tema",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          },
+          {
+            "description": "[mei_opportunity] Segmento do negócio",
+            "in": "query",
+            "name": "segmento",
+            "schema": {
+              "maxLength": 100,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.SearchResponse"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "504": {
+            "description": "Gateway Timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "summary": "Busca no catálogo",
+        "tags": [
+          "busca"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      },
+      "post": {
+        "description": "Executa o mesmo pipeline da busca GET usando um corpo JSON estritamente validado, sem colocar o texto livre na URL.",
+        "requestBody": {
+          "description": "Parâmetros da busca",
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/models.SearchRequestBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.SearchResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "413": {
+            "description": "Request Entity Too Large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "429": {
+            "description": "Too Many Requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "504": {
+            "description": "Gateway Timeout",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "summary": "Busca autenticada por JSON",
+        "tags": [
+          "busca"
+        ],
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/api/webhooks/salesforce": {
+      "post": {
+        "description": "Recebe notificações de criação/atualização da Carta de Serviços. Valida assinatura HMAC-SHA256 via header X-Salesforce-Signature.",
+        "parameters": [
+          {
+            "description": "HMAC-SHA256 do body em hex",
+            "in": "header",
+            "name": "X-Salesforce-Signature",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[0-9A-Fa-f]{64}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/v1.sfWebhookPayload"
+              }
+            }
+          },
+          "description": "Payload do evento",
+          "required": true,
+          "x-max-body-bytes": 65536
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Unauthorized",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "413": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Request Entity Too Large",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Bad Gateway",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "504": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Gateway Timeout",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "summary": "Webhook SalesForce (Change Data Capture)",
+        "tags": [
+          "webhooks"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "Sempre retorna 200. Usado pelo Kubernetes para liveness check.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "summary": "Liveness probe",
+        "tags": [
+          "infra"
+        ]
+      }
+    },
+    "/ready": {
+      "get": {
+        "description": "Verifica conectividade com o banco de dados.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Service Unavailable",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "summary": "Readiness probe",
+        "tags": [
+          "infra"
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "description": "Returns metrics in Prometheus exposition format.",
+        "summary": "Prometheus metrics",
+        "tags": [
+          "infra"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
               }
             }
           }
         }
       }
     }
-  }
+  },
+  "servers": [
+    {
+      "url": "https://services.staging.app.dados.rio/catalogo",
+      "description": "Staging"
+    },
+    {
+      "url": "https://services.pref.rio/catalogo",
+      "description": "Produção"
+    }
+  ]
 }

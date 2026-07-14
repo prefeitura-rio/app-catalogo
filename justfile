@@ -58,6 +58,11 @@ build:
     go build -o bin/catalogo-worker cmd/worker/main.go
     go build -o bin/catalogo-migrate cmd/migrate/main.go
 
+# Regenerate and validate the committed OpenAPI contract
+openapi:
+    bash scripts/generate-openapi.sh
+    go test -count=1 -run '^TestGeneratedOpenAPIContract$' ./internal/api
+
 # Database shell
 db:
     docker-compose exec postgres psql -U ${DB_USER:-catalogo} -d ${DB_NAME:-catalogo}

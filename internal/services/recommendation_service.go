@@ -9,31 +9,60 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog/log"
+
 	"github.com/prefeitura-rio/app-catalogo/internal/cache"
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
 	"github.com/prefeitura-rio/app-catalogo/internal/repository"
 )
 
 type RecommendationService struct {
-	itemRepo   *repository.CatalogItemRepository
-	cache      *cache.RedisCache
-	weights    models.ScoringWeights
-	authTTL    time.Duration
-	clusterTTL time.Duration
+	itemRepo            recommendationRepository
+	cache               recommendationCache
+	weights             models.ScoringWeights
+	authTTL             time.Duration
+	anonymousTTL        time.Duration
+	rankingVersion      string
+	journeyGraphVersion string
+}
+
+const (
+	defaultRecommendationRankingVersion = "recommendation-ranker-v2"
+	defaultJourneyGraphVersion          = "journey-graph-v1"
+)
+
+type recommendationRepository interface {
+	GetCandidates(context.Context, []models.ItemType, int) ([]*models.CatalogItem, error)
+	GetJourneyBoosts(context.Context, []string) (map[string]float64, error)
+}
+
+type recommendationCache interface {
+	Get(context.Context, string, any) error
+	Set(context.Context, string, any, time.Duration) error
+}
+
+type recommendationCandidateSnapshotProvider interface {
+	GetCandidateSnapshot(
+		context.Context,
+		[]models.ItemType,
+		int,
+	) (*repository.RecommendationCandidateSnapshot, error)
 }
 
 func NewRecommendationService(
 	itemRepo *repository.CatalogItemRepository,
 	cache *cache.RedisCache,
 	weights models.ScoringWeights,
-	authTTL, clusterTTL time.Duration,
+	authTTL, anonymousTTL time.Duration,
 ) *RecommendationService {
 	return &RecommendationService{
-		itemRepo:   itemRepo,
-		cache:      cache,
-		weights:    weights,
-		authTTL:    authTTL,
-		clusterTTL: clusterTTL,
+		itemRepo:            itemRepo,
+		cache:               cache,
+		weights:             weights,
+		authTTL:             authTTL,
+		anonymousTTL:        anonymousTTL,
+		rankingVersion:      defaultRecommendationRankingVersion,
+		journeyGraphVersion: defaultJourneyGraphVersion,
 	}
 }
 
@@ -43,22 +72,39 @@ func (s *RecommendationService) Recommend(
 	profile *models.CitizenProfile,
 	req *models.RecommendationRequest,
 ) (*models.RecommendationResponse, error) {
-	req.Normalize()
-
-	cacheKey := s.authCacheKey(profile.CPFHash, req)
-
-	var cached models.RecommendationResponse
-	if err := s.cache.Get(ctx, cacheKey, &cached); err == nil {
-		return &cached, nil
+	if normalizeError := req.Normalize(); normalizeError != nil {
+		return nil, fmt.Errorf("recommendation request: %w", normalizeError)
 	}
 
-	candidates, err := s.itemRepo.GetCandidates(ctx, req.Types, req.Limit*5)
-	if err != nil {
-		return nil, fmt.Errorf("recommendation: %w", err)
+	initialSnapshot, snapshotError := s.catalogSnapshot(ctx)
+	if snapshotError != nil {
+		return nil, snapshotError
+	}
+	cacheKey := s.authCacheKey(profile.CPFHash, req, initialSnapshot.Revision)
+	if cachedResponse := s.cachedRecommendation(ctx, cacheKey); cachedResponse != nil {
+		revalidatedSnapshot, revalidationError := s.catalogSnapshot(ctx)
+		if revalidationError != nil {
+			return nil, revalidationError
+		}
+		if revalidatedSnapshot.Revision == initialSnapshot.Revision {
+			return cachedResponse, nil
+		}
+		initialSnapshot = revalidatedSnapshot
 	}
 
-	ranked := s.rankCandidates(candidates, profile, req)
-	ranked = s.applyJourneyBoosts(ctx, ranked)
+	candidateSnapshot, candidatesError := s.candidateSnapshot(ctx, req.Types, req.Limit*5, initialSnapshot)
+	if candidatesError != nil {
+		return nil, fmt.Errorf("recommendation: %w", candidatesError)
+	}
+
+	ranked, rankingError := s.rankCandidates(candidateSnapshot.Items, profile, req)
+	if rankingError != nil {
+		return nil, rankingError
+	}
+	ranked, journeyBoostError := s.applyJourneyBoosts(ctx, ranked)
+	if journeyBoostError != nil {
+		return nil, journeyBoostError
+	}
 
 	resp := &models.RecommendationResponse{
 		Items:        ranked[:min(req.Limit, len(ranked))],
@@ -66,7 +112,14 @@ func (s *RecommendationService) Recommend(
 		Personalized: true,
 	}
 
-	_ = s.cache.Set(ctx, cacheKey, resp, s.authTTL)
+	latestSnapshot, latestSnapshotError := s.catalogSnapshot(ctx)
+	if latestSnapshotError != nil {
+		return nil, latestSnapshotError
+	}
+	if latestSnapshot.Revision == candidateSnapshot.SnapshotVersion.Revision {
+		cacheKey = s.authCacheKey(profile.CPFHash, req, candidateSnapshot.SnapshotVersion.Revision)
+		s.cacheRecommendation(ctx, cacheKey, resp, s.authTTL, candidateSnapshot.SnapshotVersion)
+	}
 	return resp, nil
 }
 
@@ -75,22 +128,39 @@ func (s *RecommendationService) RecommendAnonymous(
 	ctx context.Context,
 	req *models.RecommendationRequest,
 ) (*models.RecommendationResponse, error) {
-	req.Normalize()
-
-	cacheKey := s.clusterCacheKey(req)
-
-	var cached models.RecommendationResponse
-	if err := s.cache.Get(ctx, cacheKey, &cached); err == nil {
-		return &cached, nil
+	if normalizeError := req.Normalize(); normalizeError != nil {
+		return nil, fmt.Errorf("recommendation anonymous request: %w", normalizeError)
 	}
 
-	candidates, err := s.itemRepo.GetCandidates(ctx, req.Types, req.Limit*3)
-	if err != nil {
-		return nil, fmt.Errorf("recommendation anonymous: %w", err)
+	initialSnapshot, snapshotError := s.catalogSnapshot(ctx)
+	if snapshotError != nil {
+		return nil, snapshotError
+	}
+	cacheKey := s.anonymousCacheKey(req, initialSnapshot.Revision)
+	if cachedResponse := s.cachedRecommendation(ctx, cacheKey); cachedResponse != nil {
+		revalidatedSnapshot, revalidationError := s.catalogSnapshot(ctx)
+		if revalidationError != nil {
+			return nil, revalidationError
+		}
+		if revalidatedSnapshot.Revision == initialSnapshot.Revision {
+			return cachedResponse, nil
+		}
+		initialSnapshot = revalidatedSnapshot
 	}
 
-	ranked := s.rankCandidates(candidates, nil, req)
-	ranked = s.applyJourneyBoosts(ctx, ranked)
+	candidateSnapshot, candidatesError := s.candidateSnapshot(ctx, req.Types, req.Limit*3, initialSnapshot)
+	if candidatesError != nil {
+		return nil, fmt.Errorf("recommendation anonymous: %w", candidatesError)
+	}
+
+	ranked, rankingError := s.rankCandidates(candidateSnapshot.Items, nil, req)
+	if rankingError != nil {
+		return nil, rankingError
+	}
+	ranked, journeyBoostError := s.applyJourneyBoosts(ctx, ranked)
+	if journeyBoostError != nil {
+		return nil, journeyBoostError
+	}
 
 	resp := &models.RecommendationResponse{
 		Items:        ranked[:min(req.Limit, len(ranked))],
@@ -98,16 +168,26 @@ func (s *RecommendationService) RecommendAnonymous(
 		Personalized: false,
 	}
 
-	_ = s.cache.Set(ctx, cacheKey, resp, s.clusterTTL)
+	latestSnapshot, latestSnapshotError := s.catalogSnapshot(ctx)
+	if latestSnapshotError != nil {
+		return nil, latestSnapshotError
+	}
+	if latestSnapshot.Revision == candidateSnapshot.SnapshotVersion.Revision {
+		cacheKey = s.anonymousCacheKey(req, candidateSnapshot.SnapshotVersion.Revision)
+		s.cacheRecommendation(ctx, cacheKey, resp, s.anonymousTTL, candidateSnapshot.SnapshotVersion)
+	}
 	return resp, nil
 }
 
 // applyJourneyBoosts aplica o boost de jornadas do cidadão aos itens já rankeados.
 // Pega os top-5 pelo score, consulta vizinhos de jornada e adiciona boost nos itens
 // que já estão na lista. Re-ordena após o boost.
-func (s *RecommendationService) applyJourneyBoosts(ctx context.Context, ranked []*models.RankedItem) []*models.RankedItem {
+func (s *RecommendationService) applyJourneyBoosts(
+	ctx context.Context,
+	ranked []*models.RankedItem,
+) ([]*models.RankedItem, error) {
 	if len(ranked) == 0 {
-		return ranked
+		return ranked, nil
 	}
 
 	// Extrai IDs dos top-5 para consultar jornadas
@@ -118,8 +198,11 @@ func (s *RecommendationService) applyJourneyBoosts(ctx context.Context, ranked [
 	}
 
 	boosts, err := s.itemRepo.GetJourneyBoosts(ctx, fromIDs)
-	if err != nil || len(boosts) == 0 {
-		return ranked
+	if err != nil {
+		return nil, fmt.Errorf("recommendation journey boosts: %w", err)
+	}
+	if len(boosts) == 0 {
+		return ranked, nil
 	}
 
 	for _, item := range ranked {
@@ -131,10 +214,8 @@ func (s *RecommendationService) applyJourneyBoosts(ctx context.Context, ranked [
 		}
 	}
 
-	slices.SortFunc(ranked, func(a, b *models.RankedItem) int {
-		return cmp.Compare(b.Score, a.Score)
-	})
-	return ranked
+	slices.SortFunc(ranked, compareRankedItems)
+	return ranked, nil
 }
 
 // rankCandidates calcula o score de cada item e ordena decrescentemente.
@@ -142,7 +223,7 @@ func (s *RecommendationService) rankCandidates(
 	items []*models.CatalogItem,
 	profile *models.CitizenProfile,
 	req *models.RecommendationRequest,
-) []*models.RankedItem {
+) ([]*models.RankedItem, error) {
 	typeWeights := models.TypeWeightsByContext[req.Context]
 	if typeWeights == nil {
 		typeWeights = models.TypeWeightsByContext[models.ContextHomepage]
@@ -150,7 +231,10 @@ func (s *RecommendationService) rankCandidates(
 
 	ranked := make([]*models.RankedItem, 0, len(items))
 	for _, item := range items {
-		score, breakdown := s.scoreItem(item, profile, typeWeights)
+		score, breakdown, scoringError := s.scoreItem(item, profile, typeWeights)
+		if scoringError != nil {
+			return nil, scoringError
+		}
 		ranked = append(ranked, &models.RankedItem{
 			ID:             item.ID.String(),
 			Type:           item.Type,
@@ -168,20 +252,28 @@ func (s *RecommendationService) rankCandidates(
 		})
 	}
 
-	slices.SortFunc(ranked, func(a, b *models.RankedItem) int {
-		return cmp.Compare(b.Score, a.Score)
-	})
-	return ranked
+	slices.SortFunc(ranked, compareRankedItems)
+	return ranked, nil
 }
 
-// scoreItem calcula o score de um item vs o perfil do cidadão.
-// score ∈ [0, 1]. Dimensões e pesos conforme models.ScoringWeights.
+func compareRankedItems(firstItem *models.RankedItem, secondItem *models.RankedItem) int {
+	if scoreComparison := cmp.Compare(secondItem.Score, firstItem.Score); scoreComparison != 0 {
+		return scoreComparison
+	}
+	return cmp.Compare(firstItem.ID, secondItem.ID)
+}
+
+// scoreItem calculates the profile-based score before unconstrained journey
+// graph boosts are applied.
 func (s *RecommendationService) scoreItem(
 	item *models.CatalogItem,
 	profile *models.CitizenProfile,
 	typeWeights map[models.ItemType]float64,
-) (float64, map[string]float64) {
-	ta, _ := item.ParseTargetAudience()
+) (float64, map[string]float64, error) {
+	ta, targetAudienceError := item.ParseTargetAudience()
+	if targetAudienceError != nil {
+		return 0, nil, fmt.Errorf("recommendation: invalid catalog target audience: %w", targetAudienceError)
+	}
 
 	var escolaridadeScore, rendaScore, locScore, acessibilidadeScore, faixaEtariaScore, tipoScore float64
 
@@ -224,15 +316,15 @@ func (s *RecommendationService) scoreItem(
 		w.TipoItem*tipoScore
 
 	breakdown := map[string]float64{
-		"escolaridade":  round2(w.Escolaridade * escolaridadeScore),
-		"renda":         round2(w.RendaFamiliar * rendaScore),
-		"localizacao":   round2(w.Localizacao * locScore),
+		"escolaridade":   round2(w.Escolaridade * escolaridadeScore),
+		"renda":          round2(w.RendaFamiliar * rendaScore),
+		"localizacao":    round2(w.Localizacao * locScore),
 		"acessibilidade": round2(w.Acessibilidade * acessibilidadeScore),
-		"faixa_etaria":  round2(w.FaixaEtaria * faixaEtariaScore),
-		"tipo":          round2(w.TipoItem * tipoScore),
+		"faixa_etaria":   round2(w.FaixaEtaria * faixaEtariaScore),
+		"tipo":           round2(w.TipoItem * tipoScore),
 	}
 
-	return round2(total), breakdown
+	return round2(total), breakdown, nil
 }
 
 func matchStringSlice(profileVal string, targetVals []string, defaultScore float64) float64 {
@@ -305,22 +397,167 @@ func round2(v float64) float64 {
 	return float64(int(v*100)) / 100
 }
 
-func (s *RecommendationService) authCacheKey(cpfHash string, req *models.RecommendationRequest) string {
-	typeStrs := make([]string, len(req.Types))
-	for i, t := range req.Types {
-		typeStrs[i] = string(t)
+func (s *RecommendationService) catalogSnapshot(
+	ctx context.Context,
+) (repository.CatalogSnapshotVersion, error) {
+	if snapshotProvider, providesSnapshot := s.itemRepo.(catalogSnapshotProvider); providesSnapshot {
+		snapshotVersion, snapshotError := snapshotProvider.CatalogSnapshot(ctx)
+		if snapshotError != nil {
+			return repository.CatalogSnapshotVersion{}, fmt.Errorf("recommendation catalog snapshot: %w", snapshotError)
+		}
+		if strings.TrimSpace(snapshotVersion.Revision) == "" {
+			return repository.CatalogSnapshotVersion{}, fmt.Errorf("recommendation catalog snapshot: provider returned an empty revision")
+		}
+		return snapshotVersion, nil
 	}
-	raw := fmt.Sprintf("rec:auth:%s:%s:%s:%d", cpfHash, strings.Join(typeStrs, ","), req.Context, req.Limit)
-	h := sha256.Sum256([]byte(raw))
-	return fmt.Sprintf("catalogo:rec:auth:%x", h[:8])
+	if revisionProvider, providesRevision := s.itemRepo.(catalogRevisionProvider); providesRevision {
+		catalogRevision, revisionError := revisionProvider.CatalogRevision(ctx)
+		if revisionError != nil {
+			return repository.CatalogSnapshotVersion{}, fmt.Errorf("recommendation catalog revision: %w", revisionError)
+		}
+		if strings.TrimSpace(catalogRevision) == "" {
+			return repository.CatalogSnapshotVersion{}, fmt.Errorf("recommendation catalog revision: provider returned an empty revision")
+		}
+		return repository.CatalogSnapshotVersion{Revision: catalogRevision}, nil
+	}
+	return repository.CatalogSnapshotVersion{Revision: unversionedComponent}, nil
 }
 
-func (s *RecommendationService) clusterCacheKey(req *models.RecommendationRequest) string {
+func (s *RecommendationService) candidateSnapshot(
+	ctx context.Context,
+	itemTypes []models.ItemType,
+	limit int,
+	fallbackVersion repository.CatalogSnapshotVersion,
+) (*repository.RecommendationCandidateSnapshot, error) {
+	if snapshotProvider, providesSnapshot := s.itemRepo.(recommendationCandidateSnapshotProvider); providesSnapshot {
+		candidateSnapshot, snapshotError := snapshotProvider.GetCandidateSnapshot(ctx, itemTypes, limit)
+		if snapshotError != nil {
+			return nil, snapshotError
+		}
+		if candidateSnapshot == nil || strings.TrimSpace(candidateSnapshot.CatalogRevision) == "" {
+			return nil, fmt.Errorf("recommendation candidate provider returned an invalid snapshot")
+		}
+		if validCatalogSnapshotVersion(candidateSnapshot.SnapshotVersion) &&
+			candidateSnapshot.SnapshotVersion.Revision != candidateSnapshot.CatalogRevision {
+			return nil, fmt.Errorf(
+				"recommendation candidate provider returned conflicting revisions %q and %q",
+				candidateSnapshot.SnapshotVersion.Revision,
+				candidateSnapshot.CatalogRevision,
+			)
+		}
+		if !validCatalogSnapshotVersion(candidateSnapshot.SnapshotVersion) {
+			if fallbackVersion.Revision == candidateSnapshot.CatalogRevision {
+				candidateSnapshot.SnapshotVersion = fallbackVersion
+			} else {
+				candidateSnapshot.SnapshotVersion = repository.CatalogSnapshotVersion{
+					Revision: candidateSnapshot.CatalogRevision,
+				}
+			}
+		}
+		return candidateSnapshot, nil
+	}
+
+	candidates, candidatesError := s.itemRepo.GetCandidates(ctx, itemTypes, limit)
+	if candidatesError != nil {
+		return nil, candidatesError
+	}
+	return &repository.RecommendationCandidateSnapshot{
+		SnapshotVersion: fallbackVersion,
+		CatalogRevision: fallbackVersion.Revision,
+		Items:           candidates,
+	}, nil
+}
+
+func (s *RecommendationService) cachedRecommendation(
+	ctx context.Context,
+	cacheKey string,
+) *models.RecommendationResponse {
+	if s.cache == nil {
+		return nil
+	}
+	var cachedResponse models.RecommendationResponse
+	if cacheError := s.cache.Get(ctx, cacheKey, &cachedResponse); cacheError != nil {
+		return nil
+	}
+	if cachedResponse.Items == nil || len(cachedResponse.Items) > models.MaximumRecommendationItems {
+		return nil
+	}
+	return &cachedResponse
+}
+
+func (s *RecommendationService) cacheRecommendation(
+	ctx context.Context,
+	cacheKey string,
+	recommendationResponse *models.RecommendationResponse,
+	configuredTTL time.Duration,
+	snapshotVersion repository.CatalogSnapshotVersion,
+) {
+	if s.cache == nil {
+		return
+	}
+	cacheTTL := catalogSnapshotCacheTTL(configuredTTL, snapshotVersion)
+	if cacheTTL <= 0 {
+		return
+	}
+	if cacheError := s.cache.Set(ctx, cacheKey, recommendationResponse, cacheTTL); cacheError != nil {
+		log.Warn().Err(cacheError).Str("operation", "recommendation_cache_set").Msg("recommendation cache write failed")
+	}
+}
+
+func (s *RecommendationService) authCacheKey(
+	cpfHash string,
+	req *models.RecommendationRequest,
+	catalogRevision string,
+) string {
 	typeStrs := make([]string, len(req.Types))
 	for i, t := range req.Types {
 		typeStrs[i] = string(t)
 	}
-	raw := fmt.Sprintf("rec:anon:%s:%s:%s:%d", req.ClusterHint, strings.Join(typeStrs, ","), req.Context, req.Limit)
+	raw := fmt.Sprintf(
+		"rec:auth:%s:%s:%s:%d:%s:%s:%s",
+		cpfHash,
+		strings.Join(typeStrs, ","),
+		req.Context,
+		req.Limit,
+		catalogRevision,
+		s.recommendationRankingVersion(),
+		s.recommendationJourneyGraphVersion(),
+	)
 	h := sha256.Sum256([]byte(raw))
-	return fmt.Sprintf("catalogo:rec:anon:%x", h[:8])
+	return fmt.Sprintf("catalogo:rec:auth:%x", h[:])
+}
+
+func (s *RecommendationService) anonymousCacheKey(
+	req *models.RecommendationRequest,
+	catalogRevision string,
+) string {
+	typeStrs := make([]string, len(req.Types))
+	for i, t := range req.Types {
+		typeStrs[i] = string(t)
+	}
+	raw := fmt.Sprintf(
+		"rec:anon:%s:%s:%d:%s:%s:%s",
+		strings.Join(typeStrs, ","),
+		req.Context,
+		req.Limit,
+		catalogRevision,
+		s.recommendationRankingVersion(),
+		s.recommendationJourneyGraphVersion(),
+	)
+	h := sha256.Sum256([]byte(raw))
+	return fmt.Sprintf("catalogo:rec:anon:%x", h[:])
+}
+
+func (s *RecommendationService) recommendationRankingVersion() string {
+	if rankingVersion := strings.TrimSpace(s.rankingVersion); rankingVersion != "" {
+		return rankingVersion
+	}
+	return defaultRecommendationRankingVersion
+}
+
+func (s *RecommendationService) recommendationJourneyGraphVersion() string {
+	if journeyGraphVersion := strings.TrimSpace(s.journeyGraphVersion); journeyGraphVersion != "" {
+		return journeyGraphVersion
+	}
+	return defaultJourneyGraphVersion
 }

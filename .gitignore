@@ -15,6 +15,9 @@ coverage.out
 docs/swagger.json
 docs/swagger.yaml
 docs/docs.go
+docs/.openapi-convert-*
+docs/.converted-openapi-v3.json.*
+docs/.validated-openapi-v3.json.*
 
 # Ambiente
 .env

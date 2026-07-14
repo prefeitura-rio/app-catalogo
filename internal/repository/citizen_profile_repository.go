@@ -25,7 +25,7 @@ func NewCitizenProfileRepository(db *pgxpool.Pool) *CitizenProfileRepository {
 func (r *CitizenProfileRepository) GetByCPFHash(ctx context.Context, cpfHash string) (*models.CitizenProfile, error) {
 	row := r.db.QueryRow(ctx, `
 		SELECT id, bairro, cidade, estado, cep, escolaridade, renda_familiar,
-		       deficiencia, etnia, genero, faixa_etaria, cluster_id, last_synced_at
+		       deficiencia, etnia, genero, faixa_etaria, last_synced_at
 		FROM citizen_profiles
 		WHERE cpf_hash = $1
 	`, cpfHash)
@@ -37,7 +37,7 @@ func (r *CitizenProfileRepository) GetByCPFHash(ctx context.Context, cpfHash str
 		&p.ID, &p.Bairro, &p.Cidade, &p.Estado, &p.CEP,
 		&p.Escolaridade, &p.RendaFamiliar, &p.Deficiencia,
 		&p.Etnia, &p.Genero, &p.FaixaEtaria,
-		&p.ClusterID, &p.LastSyncedAt,
+		&p.LastSyncedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrProfileNotFound
@@ -72,29 +72,4 @@ func (r *CitizenProfileRepository) Upsert(ctx context.Context, p *models.Citizen
 		p.Etnia, p.Genero, p.FaixaEtaria, time.Now(),
 	)
 	return err
-}
-
-// GetStaleProfiles retorna perfis não sincronizados há mais de staleThreshold.
-func (r *CitizenProfileRepository) GetStaleProfiles(ctx context.Context, staleThreshold time.Duration, limit int) ([]string, error) {
-	cutoff := time.Now().Add(-staleThreshold)
-	rows, err := r.db.Query(ctx, `
-		SELECT cpf_hash FROM citizen_profiles
-		WHERE last_synced_at < $1
-		ORDER BY last_synced_at ASC
-		LIMIT $2
-	`, cutoff, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var hashes []string
-	for rows.Next() {
-		var h string
-		if err := rows.Scan(&h); err != nil {
-			return nil, err
-		}
-		hashes = append(hashes, h)
-	}
-	return hashes, rows.Err()
 }

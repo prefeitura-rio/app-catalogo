@@ -4,14 +4,28 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/prefeitura-rio/app-catalogo/internal/models"
 )
 
 var ErrCacheMiss = errors.New("cache miss")
 
-const SearchKeyPrefix = "catalogo:search:"
+const SearchKeyPrefix = "catalogo:search:v2:"
+
+var incrementRateLimitScript = redis.NewScript(`
+local count = redis.call("INCR", KEYS[1])
+local ttl = redis.call("PTTL", KEYS[1])
+if count == 1 or ttl < 0 then
+  redis.call("PEXPIRE", KEYS[1], ARGV[1])
+  ttl = tonumber(ARGV[1])
+end
+return {count, ttl}
+`)
 
 type RedisCache struct {
 	client *redis.Client
@@ -32,6 +46,47 @@ func (c *RedisCache) Ping(ctx context.Context) error {
 	return c.client.Ping(ctx).Err()
 }
 
+func (c *RedisCache) Close() error {
+	if c == nil || c.client == nil {
+		return nil
+	}
+	return c.client.Close()
+}
+
+// IncrementRateLimit atomically increments a fixed-window counter and returns
+// its current value and remaining lifetime.
+func (c *RedisCache) IncrementRateLimit(
+	ctx context.Context,
+	key string,
+	window time.Duration,
+) (int64, time.Duration, error) {
+	if c == nil || c.client == nil {
+		return 0, 0, errors.New("redis rate-limit store is not configured")
+	}
+	if key == "" || window <= 0 {
+		return 0, 0, errors.New("redis rate-limit key and window must be valid")
+	}
+	windowMilliseconds := int64((window-1)/time.Millisecond + 1)
+
+	counterValues, scriptError := incrementRateLimitScript.Run(
+		ctx,
+		c.client,
+		[]string{key},
+		windowMilliseconds,
+	).Int64Slice()
+	if scriptError != nil {
+		return 0, 0, scriptError
+	}
+	if len(counterValues) != 2 || counterValues[0] <= 0 || counterValues[1] < 0 {
+		return 0, 0, fmt.Errorf("redis returned an invalid rate-limit counter: %v", counterValues)
+	}
+	remainingMilliseconds := counterValues[1]
+	if remainingMilliseconds == 0 {
+		remainingMilliseconds = 1
+	}
+	return counterValues[0], time.Duration(remainingMilliseconds) * time.Millisecond, nil
+}
+
 // Get desserializa o valor do cache na variável dest.
 // Retorna ErrCacheMiss se a chave não existe.
 func (c *RedisCache) Get(ctx context.Context, key string, dest interface{}) error {
@@ -47,11 +102,22 @@ func (c *RedisCache) Get(ctx context.Context, key string, dest interface{}) erro
 
 // Set serializa e armazena o valor com TTL.
 func (c *RedisCache) Set(ctx context.Context, key string, value interface{}, ttl time.Duration) error {
-	data, err := json.Marshal(value)
+	data, err := marshalCacheValue(key, value)
 	if err != nil {
 		return err
 	}
 	return c.client.Set(ctx, key, data, ttl).Err()
+}
+
+func marshalCacheValue(key string, value any) ([]byte, error) {
+	encodedValue, encodeError := json.Marshal(value)
+	if encodeError != nil {
+		return nil, encodeError
+	}
+	if strings.HasPrefix(key, SearchKeyPrefix) && len(encodedValue) > models.MaximumPublicSearchResponseBytes {
+		return nil, errors.New("search cache value exceeds the public response byte limit")
+	}
+	return encodedValue, nil
 }
 
 // Del remove uma chave do cache.

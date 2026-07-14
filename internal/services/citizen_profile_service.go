@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -18,28 +19,30 @@ import (
 type CitizenProfileService struct {
 	rmiClient      *clients.RMIClient
 	profileRepo    *repository.CitizenProfileRepository
-	cpfHashSalt    string
+	cpfHashSecret  string
 	staleThreshold time.Duration
 }
 
 func NewCitizenProfileService(
 	rmiClient *clients.RMIClient,
 	profileRepo *repository.CitizenProfileRepository,
-	cpfHashSalt string,
+	cpfHashSecret string,
 	staleThreshold time.Duration,
 ) *CitizenProfileService {
 	return &CitizenProfileService{
 		rmiClient:      rmiClient,
 		profileRepo:    profileRepo,
-		cpfHashSalt:    cpfHashSalt,
+		cpfHashSecret:  cpfHashSecret,
 		staleThreshold: staleThreshold,
 	}
 }
 
-// HashCPF calcula SHA-256(CPF + salt). CPF nunca é armazenado diretamente.
+// HashCPF calculates a keyed, non-reversible identifier for the CPF. The raw
+// CPF is never persisted.
 func (s *CitizenProfileService) HashCPF(cpf string) string {
-	h := sha256.Sum256([]byte(cpf + s.cpfHashSalt))
-	return fmt.Sprintf("%x", h)
+	cpfMessageAuthenticationCode := hmac.New(sha256.New, []byte(s.cpfHashSecret))
+	_, _ = cpfMessageAuthenticationCode.Write([]byte(cpf))
+	return fmt.Sprintf("%x", cpfMessageAuthenticationCode.Sum(nil))
 }
 
 // GetOrSync retorna o perfil do cidadão, sincronizando do RMI se necessário.
