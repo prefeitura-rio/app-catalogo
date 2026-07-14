@@ -9,7 +9,6 @@ import (
 	"math"
 	"net/url"
 	"reflect"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -97,10 +96,6 @@ type searchReranker interface {
 	Rerank(context.Context, string, []clients.RerankerDocument) ([]clients.RerankerResult, error)
 }
 
-type serviceCandidateProvider interface {
-	SearchCandidates(context.Context, string, int) (clients.FacilitaServiceCandidateBatch, error)
-}
-
 type SearchRuntimeConfig struct {
 	RankerVersion           string
 	CatalogRevision         string
@@ -166,7 +161,6 @@ type SearchService struct {
 	searchTTL         time.Duration
 	semanticClient    semanticSearchClient
 	rerankerClient    searchReranker
-	candidateProvider serviceCandidateProvider
 	runtimeConfig     SearchRuntimeConfig
 	rankerDescriptor  models.SearchRankerDescriptor
 	rankerVersion     string
@@ -180,7 +174,6 @@ func NewSearchService(
 	semanticClient semanticSearchClient,
 	rerankerClient searchReranker,
 	runtimeConfig SearchRuntimeConfig,
-	candidateProviders ...serviceCandidateProvider,
 ) *SearchService {
 	if isNilInterface(searchCache) {
 		searchCache = nil
@@ -191,28 +184,19 @@ func NewSearchService(
 	if isNilInterface(rerankerClient) {
 		rerankerClient = nil
 	}
-	var candidateProvider serviceCandidateProvider
-	if len(candidateProviders) > 0 && !isNilInterface(candidateProviders[0]) {
-		candidateProvider = candidateProviders[0]
-	}
 	normalizedConfig := runtimeConfig.normalized()
-	if candidateProvider == nil {
-		normalizedConfig.Weights.Facilita = 0
-	}
 	service := &SearchService{
-		searchRepository:  searchRepository,
-		searchCache:       searchCache,
-		searchTTL:         searchTTL,
-		semanticClient:    semanticClient,
-		rerankerClient:    rerankerClient,
-		candidateProvider: candidateProvider,
-		runtimeConfig:     normalizedConfig,
+		searchRepository: searchRepository,
+		searchCache:      searchCache,
+		searchTTL:        searchTTL,
+		semanticClient:   semanticClient,
+		rerankerClient:   rerankerClient,
+		runtimeConfig:    normalizedConfig,
 	}
 	service.rankerDescriptor = buildRankerDescriptor(
 		normalizedConfig,
 		semanticClient,
 		rerankerClient != nil,
-		candidateProvider != nil,
 	)
 	service.rankerVersion = buildRankerVersion(service.rankerDescriptor)
 	return service
@@ -247,7 +231,6 @@ func (service *SearchService) RankerDescriptor() models.SearchRankerDescriptor {
 		service.runtimeConfig.normalized(),
 		service.semanticClient,
 		service.rerankerClient != nil,
-		service.candidateProvider != nil,
 	)
 }
 
@@ -255,7 +238,6 @@ func buildRankerDescriptor(
 	runtimeConfig SearchRuntimeConfig,
 	semanticClient semanticSearchClient,
 	rerankerEnabled bool,
-	facilitaCandidateCapabilities ...bool,
 ) models.SearchRankerDescriptor {
 	normalizedConfig := runtimeConfig.normalized()
 	descriptor := models.SearchRankerDescriptor{
@@ -275,15 +257,12 @@ func buildRankerDescriptor(
 			Trigram:  normalizedConfig.Weights.Trigram,
 			Semantic: normalizedConfig.Weights.Semantic,
 			HyDE:     normalizedConfig.Weights.HyDE,
-			Facilita: normalizedConfig.Weights.Facilita,
+			Facilita: 0,
 		},
 		SemanticEnabled: semanticClient != nil && normalizedConfig.Weights.Semantic > 0,
 		HyDEEnabled: normalizedConfig.HyDEEnabled && semanticClient != nil &&
 			normalizedConfig.Weights.Semantic > 0 && normalizedConfig.Weights.HyDE > 0,
 		RerankerEnabled: rerankerEnabled,
-	}
-	if len(facilitaCandidateCapabilities) > 0 && facilitaCandidateCapabilities[0] {
-		descriptor.RetrievalVersion += "+facilita-service-candidates-v2"
 	}
 	if semanticClient != nil {
 		embeddingMetadata := semanticClient.Metadata()
@@ -352,165 +331,15 @@ type rankedSearchOutcome struct {
 	cacheHit        bool
 }
 
-type facilitaCandidateExecution struct {
-	diagnostic       models.SearchSourceDiagnostic
-	candidates       []clients.FacilitaServiceCandidate
-	cacheFingerprint string
-}
-
 func notApplicableFacilitaDiagnostic() models.SearchSourceDiagnostic {
 	return models.SearchSourceDiagnostic{Status: models.SearchSourceStatusNotApplicable}
-}
-
-func facilitaSourceFailure(candidateError error) models.SearchSourceFailure {
-	switch clients.FacilitaSearchFailureFromError(candidateError) {
-	case clients.FacilitaSearchFailureTimeout:
-		return models.SearchSourceFailureTimeout
-	case clients.FacilitaSearchFailureRejected:
-		return models.SearchSourceFailureRejected
-	case clients.FacilitaSearchFailureInvalidContract:
-		return models.SearchSourceFailureInvalidContract
-	default:
-		return models.SearchSourceFailureTransport
-	}
-}
-
-func (service *SearchService) prepareFacilitaCandidates(
-	searchContext context.Context,
-	searchRequest *models.SearchRequest,
-) facilitaCandidateExecution {
-	if !service.usesFacilitaCandidates(searchRequest) {
-		return facilitaCandidateExecution{diagnostic: notApplicableFacilitaDiagnostic()}
-	}
-	requestStartedAt := time.Now()
-	candidateBatch, candidateError := service.candidateProvider.SearchCandidates(
-		searchContext,
-		searchRequest.Q,
-		min(service.runtimeConfig.CandidatePoolSize, 50),
-	)
-	requestDuration := time.Since(requestStartedAt)
-	latencyMilliseconds := max(requestDuration.Milliseconds(), 0)
-	if candidateError != nil {
-		failure := facilitaSourceFailure(candidateError)
-		observability.SearchExternalSourceRequestsTotal.WithLabelValues("facilita", string(failure)).Inc()
-		observability.SearchExternalSourceDuration.WithLabelValues("facilita", string(failure)).Observe(requestDuration.Seconds())
-		observability.SearchFallbacksTotal.WithLabelValues(
-			string(models.SearchPipelineHybrid),
-			string(models.SearchPipelineLexical),
-			"facilita_candidates_"+string(failure),
-		).Inc()
-		log.Warn().Err(candidateError).Str("failure", string(failure)).Msg(
-			"search: Facilita candidates unavailable; continuing with catalog retrieval",
-		)
-		return facilitaCandidateExecution{diagnostic: models.SearchSourceDiagnostic{
-			Status:              models.SearchSourceStatusUnavailable,
-			Failure:             failure,
-			LatencyMilliseconds: latencyMilliseconds,
-		}}
-	}
-	provenance := &models.SearchExternalRetrieverDescriptor{
-		SchemaVersion:         candidateBatch.SchemaVersion,
-		CatalogRevision:       candidateBatch.Provenance.CatalogRevision,
-		RetrievalVersion:      candidateBatch.Provenance.RetrievalVersion,
-		QueryExpansionVersion: candidateBatch.Provenance.QueryExpansionVersion,
-		RankerVersion:         candidateBatch.Provenance.RankerVersion,
-	}
-	candidateFingerprintPayload := struct {
-		Provenance models.SearchExternalRetrieverDescriptor `json:"provenance"`
-		Candidates []clients.FacilitaServiceCandidate       `json:"candidates"`
-	}{Provenance: *provenance, Candidates: candidateBatch.Candidates}
-	serializedCandidates, marshalError := json.Marshal(candidateFingerprintPayload)
-	if marshalError != nil {
-		observability.SearchExternalSourceRequestsTotal.WithLabelValues("facilita", "invalid_contract").Inc()
-		observability.SearchExternalSourceDuration.WithLabelValues("facilita", "invalid_contract").Observe(requestDuration.Seconds())
-		log.Error().Err(marshalError).Msg("search: validated Facilita candidate fingerprint failed")
-		return facilitaCandidateExecution{diagnostic: models.SearchSourceDiagnostic{
-			Status:              models.SearchSourceStatusUnavailable,
-			Failure:             models.SearchSourceFailureInvalidContract,
-			LatencyMilliseconds: latencyMilliseconds,
-		}}
-	}
-	candidateDigest := sha256.Sum256(serializedCandidates)
-	observability.SearchExternalSourceRequestsTotal.WithLabelValues("facilita", "success").Inc()
-	observability.SearchExternalSourceDuration.WithLabelValues("facilita", "success").Observe(requestDuration.Seconds())
-	observability.SearchExternalCandidates.WithLabelValues("facilita", "received").Observe(float64(len(candidateBatch.Candidates)))
-	return facilitaCandidateExecution{
-		diagnostic: models.SearchSourceDiagnostic{
-			Status:              models.SearchSourceStatusNoEffect,
-			Provenance:          provenance,
-			LatencyMilliseconds: latencyMilliseconds,
-			CandidatesReceived:  len(candidateBatch.Candidates),
-		},
-		candidates:       candidateBatch.Candidates,
-		cacheFingerprint: fmt.Sprintf("%x", candidateDigest),
-	}
-}
-
-func (service *SearchService) executionRankerDescriptor(
-	facilitaExecution facilitaCandidateExecution,
-) models.SearchRankerDescriptor {
-	descriptor := service.RankerDescriptor()
-	if facilitaExecution.diagnostic.Provenance != nil {
-		provenanceCopy := *facilitaExecution.diagnostic.Provenance
-		descriptor.Facilita = &provenanceCopy
-	}
-	return descriptor
-}
-
-func finalizeFacilitaDiagnostic(
-	facilitaExecution facilitaCandidateExecution,
-	searchResults []*repository.SearchResult,
-) models.SearchSourceDiagnostic {
-	diagnostic := facilitaExecution.diagnostic
-	if diagnostic.Status != models.SearchSourceStatusNoEffect {
-		return diagnostic
-	}
-	for _, searchResult := range searchResults {
-		if searchResult != nil && searchResult.FacilitaContributed {
-			diagnostic.EligibleContributions++
-		}
-	}
-	if diagnostic.EligibleContributions > 0 {
-		diagnostic.Status = models.SearchSourceStatusApplied
-	}
-	observability.SearchExternalCandidates.WithLabelValues("facilita", "eligible").Observe(
-		float64(diagnostic.EligibleContributions),
-	)
-	return diagnostic
 }
 
 func validFacilitaDiagnostic(
 	diagnostic models.SearchSourceDiagnostic,
 	descriptor *models.SearchExternalRetrieverDescriptor,
 ) bool {
-	if diagnostic.LatencyMilliseconds < 0 || diagnostic.CandidatesReceived < 0 ||
-		diagnostic.CandidatesReceived > 50 || diagnostic.EligibleContributions < 0 ||
-		diagnostic.EligibleContributions > diagnostic.CandidatesReceived {
-		return false
-	}
-	provenanceMatches := diagnostic.Provenance != nil && descriptor != nil &&
-		*diagnostic.Provenance == *descriptor
-	switch diagnostic.Status {
-	case models.SearchSourceStatusNotApplicable:
-		return diagnostic.Failure == "" && diagnostic.Provenance == nil &&
-			diagnostic.LatencyMilliseconds == 0 && diagnostic.CandidatesReceived == 0 &&
-			diagnostic.EligibleContributions == 0 && descriptor == nil
-	case models.SearchSourceStatusUnavailable:
-		return (diagnostic.Failure == models.SearchSourceFailureTimeout ||
-			diagnostic.Failure == models.SearchSourceFailureTransport ||
-			diagnostic.Failure == models.SearchSourceFailureRejected ||
-			diagnostic.Failure == models.SearchSourceFailureInvalidContract) &&
-			diagnostic.Provenance == nil && diagnostic.CandidatesReceived == 0 &&
-			diagnostic.EligibleContributions == 0 && descriptor == nil
-	case models.SearchSourceStatusNoEffect:
-		return diagnostic.Failure == "" && provenanceMatches &&
-			diagnostic.EligibleContributions == 0
-	case models.SearchSourceStatusApplied:
-		return diagnostic.Failure == "" && provenanceMatches &&
-			diagnostic.EligibleContributions > 0
-	default:
-		return false
-	}
+	return diagnostic == notApplicableFacilitaDiagnostic() && descriptor == nil
 }
 
 // Search executes a bounded multi-stage pipeline and paginates only after all
@@ -690,53 +519,33 @@ func (service *SearchService) rankedSearchWithCache(
 	searchRequest *models.SearchRequest,
 	initialSnapshot repository.CatalogSnapshotVersion,
 ) (*rankedSearchOutcome, error) {
-	facilitaExecution := service.prepareFacilitaCandidates(searchContext, searchRequest)
-	executionDescriptor := service.executionRankerDescriptor(facilitaExecution)
-	executionRankerVersion := buildRankerVersion(executionDescriptor)
-	cacheKey, cacheKeyError := service.rankedCacheKey(
-		searchRequest,
-		initialSnapshot.Revision,
-		facilitaExecution.cacheFingerprint,
-	)
+	executionRankerVersion := service.RankerVersion()
+	cacheKey, cacheKeyError := service.rankedCacheKey(searchRequest, initialSnapshot.Revision)
 	if cacheKeyError != nil {
 		return nil, cacheKeyError
 	}
-	if facilitaExecution.diagnostic.Status != models.SearchSourceStatusUnavailable {
-		if cachedSnapshot := service.getCachedRankedSnapshot(
-			searchContext,
-			cacheKey,
-			initialSnapshot.Revision,
-			executionRankerVersion,
-		); cachedSnapshot != nil {
-			revalidatedSnapshot, revalidationError := service.catalogSnapshot(searchContext)
-			if revalidationError != nil {
-				return nil, revalidationError
-			}
-			if revalidatedSnapshot.Revision == initialSnapshot.Revision {
-				cachedSnapshot.Sources.Facilita.LatencyMilliseconds =
-					facilitaExecution.diagnostic.LatencyMilliseconds
-				if cachedSnapshot.Sources.Facilita.Status == models.SearchSourceStatusApplied ||
-					cachedSnapshot.Sources.Facilita.Status == models.SearchSourceStatusNoEffect {
-					observability.SearchExternalCandidates.WithLabelValues("facilita", "eligible").Observe(
-						float64(cachedSnapshot.Sources.Facilita.EligibleContributions),
-					)
-				}
-				return &rankedSearchOutcome{
-					snapshot:        cachedSnapshot,
-					snapshotVersion: initialSnapshot,
-					cacheHit:        true,
-				}, nil
-			}
-			observability.SearchCacheOperationsTotal.WithLabelValues("get", "stale_revision").Inc()
-			initialSnapshot = revalidatedSnapshot
-			cacheKey, cacheKeyError = service.rankedCacheKey(
-				searchRequest,
-				initialSnapshot.Revision,
-				facilitaExecution.cacheFingerprint,
-			)
-			if cacheKeyError != nil {
-				return nil, cacheKeyError
-			}
+	if cachedSnapshot := service.getCachedRankedSnapshot(
+		searchContext,
+		cacheKey,
+		initialSnapshot.Revision,
+		executionRankerVersion,
+	); cachedSnapshot != nil {
+		revalidatedSnapshot, revalidationError := service.catalogSnapshot(searchContext)
+		if revalidationError != nil {
+			return nil, revalidationError
+		}
+		if revalidatedSnapshot.Revision == initialSnapshot.Revision {
+			return &rankedSearchOutcome{
+				snapshot:        cachedSnapshot,
+				snapshotVersion: initialSnapshot,
+				cacheHit:        true,
+			}, nil
+		}
+		observability.SearchCacheOperationsTotal.WithLabelValues("get", "stale_revision").Inc()
+		initialSnapshot = revalidatedSnapshot
+		cacheKey, cacheKeyError = service.rankedCacheKey(searchRequest, initialSnapshot.Revision)
+		if cacheKeyError != nil {
+			return nil, cacheKeyError
 		}
 	}
 
@@ -751,7 +560,6 @@ func (service *SearchService) rankedSearchWithCache(
 			sharedContext,
 			rankingRequest,
 			initialSnapshot,
-			facilitaExecution,
 		)
 	})
 	select {
@@ -773,13 +581,8 @@ func (service *SearchService) executeRankedSearchSnapshot(
 	searchContext context.Context,
 	searchRequest *models.SearchRequest,
 	initialSnapshot repository.CatalogSnapshotVersion,
-	facilitaExecution facilitaCandidateExecution,
 ) (*rankedSearchOutcome, error) {
-	searchResults, _, execution, searchError := service.searchRanked(
-		searchContext,
-		searchRequest,
-		facilitaExecution,
-	)
+	searchResults, _, execution, searchError := service.searchRanked(searchContext, searchRequest)
 	if searchError != nil {
 		return nil, fmt.Errorf("search: %w", searchError)
 	}
@@ -814,8 +617,8 @@ func (service *SearchService) executeRankedSearchSnapshot(
 			"catalog_revision_changed",
 		).Inc()
 	}
-	execution.facilita = finalizeFacilitaDiagnostic(facilitaExecution, searchResults)
-	executionDescriptor := service.executionRankerDescriptor(facilitaExecution)
+	execution.facilita = notApplicableFacilitaDiagnostic()
+	executionDescriptor := service.RankerDescriptor()
 
 	rankedSnapshot := &rankedSearchSnapshot{
 		RankerVersion:     buildRankerVersion(executionDescriptor),
@@ -840,11 +643,7 @@ func (service *SearchService) executeRankedSearchSnapshot(
 		observability.SearchCacheOperationsTotal.WithLabelValues("set", "skipped_oversize").Inc()
 		return &rankedSearchOutcome{snapshot: rankedSnapshot, snapshotVersion: execution.snapshotVersion}, nil
 	}
-	cacheKey, cacheKeyError := service.rankedCacheKey(
-		searchRequest,
-		catalogRevision,
-		facilitaExecution.cacheFingerprint,
-	)
+	cacheKey, cacheKeyError := service.rankedCacheKey(searchRequest, catalogRevision)
 	if cacheKeyError != nil {
 		return nil, cacheKeyError
 	}
@@ -894,7 +693,6 @@ func cloneSearchRequest(searchRequest *models.SearchRequest) *models.SearchReque
 func (service *SearchService) searchRanked(
 	searchContext context.Context,
 	searchRequest *models.SearchRequest,
-	facilitaExecution facilitaCandidateExecution,
 ) ([]*repository.SearchResult, int, searchExecution, error) {
 	lexicalOptions := repository.RankedSearchOptions{
 		CandidatePoolSize:       service.runtimeConfig.CandidatePoolSize,
@@ -902,17 +700,6 @@ func (service *SearchService) searchRanked(
 		MaximumSemanticDistance: service.runtimeConfig.MaximumSemanticDistance,
 		Weights:                 service.runtimeConfig.Weights,
 	}
-	lexicalOptions.FacilitaCandidates = make(
-		[]repository.RankedServiceCandidate,
-		len(facilitaExecution.candidates),
-	)
-	for candidateIndex, candidate := range facilitaExecution.candidates {
-		lexicalOptions.FacilitaCandidates[candidateIndex] = repository.RankedServiceCandidate{
-			Slug: candidate.Slug,
-			Rank: candidate.Rank,
-		}
-	}
-	facilitaDegraded := facilitaExecution.diagnostic.Status == models.SearchSourceStatusUnavailable
 	if service.semanticClient == nil || service.runtimeConfig.Weights.Semantic <= 0 {
 		searchResults, totalCandidates, snapshotVersion, searchError := service.searchRankedRepository(
 			searchContext,
@@ -921,7 +708,7 @@ func (service *SearchService) searchRanked(
 		)
 		return searchResults, totalCandidates, searchExecution{
 			pipeline:        models.SearchPipelineLexical,
-			degraded:        facilitaDegraded,
+			degraded:        false,
 			snapshotVersion: snapshotVersion,
 		}, searchError
 	}
@@ -950,7 +737,7 @@ func (service *SearchService) searchRanked(
 	hybridOptions.EmbeddingDimensions = embeddingMetadata.Dimensions
 	hybridOptions.EmbeddingTaskType = embeddingMetadata.DocumentTaskType
 	hybridOptions.EmbeddingDocumentVersion = embeddingMetadata.DocumentVersion
-	execution := searchExecution{pipeline: models.SearchPipelineHybrid, degraded: facilitaDegraded}
+	execution := searchExecution{pipeline: models.SearchPipelineHybrid}
 	if hydeError == nil && len(hydeEmbedding) > 0 {
 		hybridOptions.HyDEEmbedding = clients.VectorLiteral(hydeEmbedding)
 		execution.pipeline = models.SearchPipelineHybridHyDE
@@ -1004,18 +791,6 @@ func (service *SearchService) searchRanked(
 		degraded:        true,
 		snapshotVersion: snapshotVersion,
 	}, nil
-}
-
-func (service *SearchService) usesFacilitaCandidates(searchRequest *models.SearchRequest) bool {
-	return service.candidateProvider != nil && service.runtimeConfig.Weights.Facilita > 0 &&
-		searchRequestAllowsServiceCandidates(searchRequest)
-}
-
-func searchRequestAllowsServiceCandidates(searchRequest *models.SearchRequest) bool {
-	if len(searchRequest.Types) == 0 {
-		return true
-	}
-	return slices.Contains(searchRequest.Types, models.TypeService)
 }
 
 func (service *SearchService) searchRankedRepository(
@@ -1723,28 +1498,21 @@ func (service *SearchService) setCachedRankedSnapshot(
 func (service *SearchService) cacheKey(
 	searchRequest *models.SearchRequest,
 	catalogRevision string,
-	externalCandidateFingerprints ...string,
 ) (string, error) {
-	externalCandidateFingerprint := ""
-	if len(externalCandidateFingerprints) > 0 {
-		externalCandidateFingerprint = externalCandidateFingerprints[0]
-	}
 	cacheDescriptor := struct {
-		RankerVersion      string                        `json:"ranker_version"`
-		RankerDescriptor   models.SearchRankerDescriptor `json:"ranker_descriptor"`
-		CatalogRevision    string                        `json:"catalog_revision"`
-		FacetVersion       string                        `json:"facet_version"`
-		Request            *models.SearchRequest         `json:"request"`
-		ExpandedQuery      string                        `json:"expanded_query"`
-		ExternalCandidates string                        `json:"external_candidates,omitempty"`
+		RankerVersion    string                        `json:"ranker_version"`
+		RankerDescriptor models.SearchRankerDescriptor `json:"ranker_descriptor"`
+		CatalogRevision  string                        `json:"catalog_revision"`
+		FacetVersion     string                        `json:"facet_version"`
+		Request          *models.SearchRequest         `json:"request"`
+		ExpandedQuery    string                        `json:"expanded_query"`
 	}{
-		RankerVersion:      service.RankerVersion(),
-		RankerDescriptor:   service.RankerDescriptor(),
-		CatalogRevision:    catalogRevision,
-		FacetVersion:       models.SearchFacetVersion,
-		Request:            searchRequest,
-		ExpandedQuery:      searchRequest.ExpandedQ,
-		ExternalCandidates: externalCandidateFingerprint,
+		RankerVersion:    service.RankerVersion(),
+		RankerDescriptor: service.RankerDescriptor(),
+		CatalogRevision:  catalogRevision,
+		FacetVersion:     models.SearchFacetVersion,
+		Request:          searchRequest,
+		ExpandedQuery:    searchRequest.ExpandedQ,
 	}
 	serializedDescriptor, marshalError := json.Marshal(cacheDescriptor)
 	if marshalError != nil {
@@ -1757,12 +1525,11 @@ func (service *SearchService) cacheKey(
 func (service *SearchService) rankedCacheKey(
 	searchRequest *models.SearchRequest,
 	catalogRevision string,
-	externalCandidateFingerprints ...string,
 ) (string, error) {
 	rankingRequest := cloneSearchRequest(searchRequest)
 	rankingRequest.Page = 0
 	rankingRequest.PerPage = 0
-	return service.cacheKey(rankingRequest, catalogRevision, externalCandidateFingerprints...)
+	return service.cacheKey(rankingRequest, catalogRevision)
 }
 
 func (service *SearchService) catalogSnapshot(

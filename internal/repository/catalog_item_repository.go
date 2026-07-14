@@ -114,117 +114,8 @@ func (r *CatalogItemRepository) WithSourceSyncLease(
 
 // Upsert insere ou atualiza um item do catálogo baseado em (source, external_id).
 func (r *CatalogItemRepository) Upsert(ctx context.Context, item *models.CatalogItem) error {
-	if validationError := models.ValidateCatalogItem(item); validationError != nil {
-		return fmt.Errorf("validate catalog item: %w", validationError)
-	}
-	targetAudience := item.TargetAudience
-	if len(targetAudience) == 0 {
-		targetAudience = json.RawMessage("{}")
-	}
-
-	sourceData := item.SourceData
-	if len(sourceData) == 0 {
-		sourceData = json.RawMessage("{}")
-	}
-
-	tags := item.Tags
-	if tags == nil {
-		tags = []string{}
-	}
-	bairros := item.Bairros
-	if bairros == nil {
-		bairros = []string{}
-	}
-
-	_, err := r.db.Exec(ctx, `
-		INSERT INTO catalog_items (
-			external_id, source, type, title, description, short_desc,
-			organization, url, image_url, target_audience, bairros,
-			modalidade, status, tags, source_data,
-			valid_from, valid_until, source_updated_at
-		) VALUES (
-			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11,
-			$12, $13, $14, $15,
-			$16, $17, $18
-		)
-		ON CONFLICT (source, external_id) DO UPDATE SET
-			type             = EXCLUDED.type,
-			title            = EXCLUDED.title,
-			description      = EXCLUDED.description,
-			short_desc       = EXCLUDED.short_desc,
-			organization     = EXCLUDED.organization,
-			url              = EXCLUDED.url,
-			image_url        = EXCLUDED.image_url,
-			target_audience  = EXCLUDED.target_audience,
-			bairros          = EXCLUDED.bairros,
-			modalidade       = EXCLUDED.modalidade,
-			status           = EXCLUDED.status,
-			tags             = EXCLUDED.tags,
-			source_data      = EXCLUDED.source_data,
-			valid_from       = EXCLUDED.valid_from,
-			valid_until      = EXCLUDED.valid_until,
-			source_updated_at = EXCLUDED.source_updated_at,
-			deleted_at       = NULL,
-			updated_at       = NOW()
-		WHERE (
-			(
-				EXCLUDED.source = 'salesforce'
-				AND (
-					EXCLUDED.source_updated_at IS NOT NULL
-					AND (
-						catalog_items.source_updated_at IS NULL
-						OR EXCLUDED.source_updated_at > catalog_items.source_updated_at
-					)
-				)
-			) OR (
-				EXCLUDED.source <> 'salesforce'
-				AND (
-					EXCLUDED.source_updated_at IS NULL
-					OR catalog_items.source_updated_at IS NULL
-					OR EXCLUDED.source_updated_at >= catalog_items.source_updated_at
-				)
-			)
-		) AND (
-			catalog_items.source_data IS DISTINCT FROM EXCLUDED.source_data
-			OR catalog_items.type IS DISTINCT FROM EXCLUDED.type
-			OR catalog_items.title IS DISTINCT FROM EXCLUDED.title
-			OR catalog_items.description IS DISTINCT FROM EXCLUDED.description
-			OR catalog_items.short_desc IS DISTINCT FROM EXCLUDED.short_desc
-			OR catalog_items.organization IS DISTINCT FROM EXCLUDED.organization
-			OR catalog_items.url IS DISTINCT FROM EXCLUDED.url
-			OR catalog_items.image_url IS DISTINCT FROM EXCLUDED.image_url
-			OR catalog_items.target_audience IS DISTINCT FROM EXCLUDED.target_audience
-			OR catalog_items.bairros IS DISTINCT FROM EXCLUDED.bairros
-			OR catalog_items.modalidade IS DISTINCT FROM EXCLUDED.modalidade
-			OR catalog_items.tags IS DISTINCT FROM EXCLUDED.tags
-			OR catalog_items.status IS DISTINCT FROM EXCLUDED.status
-			OR catalog_items.valid_from IS DISTINCT FROM EXCLUDED.valid_from
-			OR catalog_items.valid_until IS DISTINCT FROM EXCLUDED.valid_until
-			OR catalog_items.source_updated_at IS DISTINCT FROM EXCLUDED.source_updated_at
-			OR catalog_items.deleted_at IS NOT NULL
-		)
-	`,
-		item.ExternalID,
-		string(item.Source),
-		string(item.Type),
-		item.Title,
-		item.Description,
-		item.ShortDesc,
-		item.Organization,
-		item.URL,
-		item.ImageURL,
-		targetAudience,
-		bairros,
-		item.Modalidade,
-		string(item.Status),
-		tags,
-		sourceData,
-		item.ValidFrom,
-		item.ValidUntil,
-		item.SourceUpdatedAt,
-	)
-	return err
+	_, upsertError := r.UpsertBatch(ctx, []*models.CatalogItem{item})
+	return upsertError
 }
 
 // UpsertBatch executa upserts em lote dentro de uma única transação.
@@ -386,10 +277,49 @@ func upsertCatalogItems(
 			}
 			return 0, err
 		}
+		if aliasError := replaceCatalogItemSlugAliases(ctx, tx, id, item); aliasError != nil {
+			return 0, aliasError
+		}
 		count++
 	}
 
 	return count, nil
+}
+
+func replaceCatalogItemSlugAliases(
+	ctx context.Context,
+	transaction pgx.Tx,
+	catalogItemID uuid.UUID,
+	catalogItem *models.CatalogItem,
+) error {
+	canonicalSlug, historicalSlugs, slugError := models.PublicServiceSlugs(catalogItem)
+	if slugError != nil {
+		return fmt.Errorf("catalog item slug aliases: %w", slugError)
+	}
+	if _, deleteError := transaction.Exec(ctx, `
+		DELETE FROM catalog_item_slug_aliases
+		WHERE catalog_item_id = $1
+	`, catalogItemID); deleteError != nil {
+		return fmt.Errorf("catalog item slug aliases: delete existing aliases: %w", deleteError)
+	}
+	if canonicalSlug == "" {
+		return nil
+	}
+	if _, insertError := transaction.Exec(ctx, `
+		INSERT INTO catalog_item_slug_aliases (catalog_item_id, slug, is_canonical)
+		VALUES ($1, $2, TRUE)
+	`, catalogItemID, canonicalSlug); insertError != nil {
+		return fmt.Errorf("catalog item slug aliases: insert canonical alias: %w", insertError)
+	}
+	for _, historicalSlug := range historicalSlugs {
+		if _, insertError := transaction.Exec(ctx, `
+			INSERT INTO catalog_item_slug_aliases (catalog_item_id, slug, is_canonical)
+			VALUES ($1, $2, FALSE)
+		`, catalogItemID, historicalSlug); insertError != nil {
+			return fmt.Errorf("catalog item slug aliases: insert historical alias: %w", insertError)
+		}
+	}
+	return nil
 }
 
 // ReconcileSourceSnapshot atomically upserts a proven-complete snapshot and

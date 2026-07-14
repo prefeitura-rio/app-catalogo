@@ -354,6 +354,298 @@
         "type": "object",
         "additionalProperties": false
       },
+      "models.PublicServiceAction": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "order": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "order",
+          "title",
+          "url"
+        ],
+        "type": "object"
+      },
+      "models.PublicServiceCategory": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "count",
+          "name"
+        ],
+        "type": "object"
+      },
+      "models.PublicServiceCategoryResponse": {
+        "properties": {
+          "catalog_revision": {
+            "type": "string"
+          },
+          "categories": {
+            "items": {
+              "$ref": "#/components/schemas/models.PublicServiceCategory"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "catalog_revision",
+          "categories"
+        ],
+        "type": "object"
+      },
+      "models.PublicServiceDetail": {
+        "properties": {
+          "actions": {
+            "items": {
+              "$ref": "#/components/schemas/models.PublicServiceAction"
+            },
+            "type": "array"
+          },
+          "author": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "cost": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "digital_channels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "exclusions": {
+            "type": "string"
+          },
+          "featured": {
+            "type": "boolean"
+          },
+          "historical_slugs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "in_person_channels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "is_free": {
+            "type": "boolean"
+          },
+          "managing_organizations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "published_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "related_legislation": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "request_instructions": {
+            "type": "string"
+          },
+          "request_outcome": {
+            "type": "string"
+          },
+          "required_documents": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "service_time": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "source_updated_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "subcategory": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "target_audiences": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actions",
+          "digital_channels",
+          "featured",
+          "historical_slugs",
+          "id",
+          "in_person_channels",
+          "is_free",
+          "managing_organizations",
+          "related_legislation",
+          "required_documents",
+          "slug",
+          "source_id",
+          "target_audiences",
+          "title"
+        ],
+        "type": "object"
+      },
+      "models.PublicServiceListResponse": {
+        "properties": {
+          "catalog_revision": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/models.PublicServiceSummary"
+            },
+            "type": "array"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "per_page": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "catalog_revision",
+          "items",
+          "page",
+          "per_page",
+          "total"
+        ],
+        "type": "object"
+      },
+      "models.PublicServiceSubcategory": {
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "count",
+          "name"
+        ],
+        "type": "object"
+      },
+      "models.PublicServiceSubcategoryResponse": {
+        "properties": {
+          "catalog_revision": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "subcategories": {
+            "items": {
+              "$ref": "#/components/schemas/models.PublicServiceSubcategory"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "catalog_revision",
+          "category",
+          "subcategories"
+        ],
+        "type": "object"
+      },
+      "models.PublicServiceSummary": {
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "modality": {
+            "type": "string"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "subcategory": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "format": "uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "slug",
+          "title"
+        ],
+        "type": "object"
+      },
       "models.RankedItem": {
         "properties": {
           "bairros": {
@@ -1970,6 +2262,323 @@
           "busca"
         ],
         "security": []
+      }
+    },
+    "/api/public/service-categories": {
+      "get": {
+        "description": "Lists non-empty categories from active, currently eligible services.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.PublicServiceCategoryResponse"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "summary": "Public service categories",
+        "tags": [
+          "catálogo"
+        ]
+      }
+    },
+    "/api/public/service-categories/{category}/subcategories": {
+      "get": {
+        "description": "Lists non-empty subcategories for one exact public category name.",
+        "parameters": [
+          {
+            "description": "Exact category name",
+            "in": "path",
+            "name": "category",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.PublicServiceSubcategoryResponse"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "summary": "Public service subcategories",
+        "tags": [
+          "catálogo"
+        ]
+      }
+    },
+    "/api/public/services": {
+      "get": {
+        "description": "Lists active, currently eligible services, optionally filtered by exact category and subcategory names.",
+        "parameters": [
+          {
+            "description": "Exact category name",
+            "in": "query",
+            "name": "category",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact subcategory name",
+            "in": "query",
+            "name": "subcategory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Page",
+            "in": "query",
+            "name": "page",
+            "schema": {
+              "default": 1,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Items per page",
+            "in": "query",
+            "name": "per_page",
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.PublicServiceListResponse"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "summary": "Public services browse",
+        "tags": [
+          "catálogo"
+        ]
+      }
+    },
+    "/api/public/services/{slug}": {
+      "get": {
+        "description": "Returns an allowlisted detail for an active service. Historical slugs redirect to the canonical path.",
+        "parameters": [
+          {
+            "description": "Canonical or historical service slug",
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/models.PublicServiceDetail"
+                }
+              }
+            },
+            "description": "OK",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "308": {
+            "description": "Permanent Redirect",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Bad Request",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Not Found",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Internal Server Error",
+            "headers": {
+              "X-Request-ID": {
+                "$ref": "#/components/headers/X-Request-ID"
+              }
+            }
+          }
+        },
+        "summary": "Public service detail by canonical or historical slug",
+        "tags": [
+          "catálogo"
+        ]
       }
     },
     "/api/v1/admin/sync/status": {
