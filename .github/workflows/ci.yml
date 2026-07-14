@@ -3,6 +3,8 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
 
 # Cancela runs anteriores do mesmo PR/branch automaticamente
 concurrency:
@@ -38,10 +40,30 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - uses: golangci/golangci-lint-action@v6
+      - uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.12.2
           args: --timeout=5m
+
+  openapi:
+    name: OpenAPI Contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Generate and validate OpenAPI v3
+        run: bash scripts/generate-openapi.sh
+
+      - name: Verify generated API contract
+        run: go test -count=1 -run '^TestGeneratedOpenAPIContract$' ./internal/api
+
+      - name: Verify generated OpenAPI is committed
+        run: git diff --exit-code -- docs/openapi-v3.json
 
   test:
     name: Test
@@ -81,7 +103,17 @@ jobs:
       DB_SSL_MODE: disable
       REDIS_HOST: localhost
       REDIS_PORT: 6379
-      CPF_HASH_SALT: test-salt-for-ci-only
+      CPF_HASH_SALT: test-cpf-hmac-key-with-at-least-32-bytes
+      RATE_LIMIT_KEY_SECRET: test-rate-limit-key-with-at-least-32-bytes
+      APP_CATALOGO_INTERNAL_API_KEY: test-catalog-internal-api-key-with-at-least-32-bytes
+      AUTH_JWT_ISSUER: https://identity.example/realms/citizen
+      AUTH_JWT_JWKS_URL: https://identity.example/realms/citizen/protocol/openid-connect/certs
+      AUTH_JWT_AUDIENCE: app-catalogo
+      AUTH_JWT_AUTHORIZED_PARTY: superapp
+      AUTH_JWT_ROLE_CLIENT_ID: superapp
+      APP_CATALOGO_SEARCH_TEST_DATABASE_URL: postgres://catalogo:catalogo@localhost:5432/catalogo_test?sslmode=disable
+      APP_CATALOGO_EMBEDDING_TEST_DATABASE_URL: postgres://catalogo:catalogo@localhost:5432/catalogo_test?sslmode=disable
+      APP_CATALOGO_RATE_LIMIT_TEST_REDIS_ADDR: localhost:6379
 
     steps:
       - uses: actions/checkout@v4
@@ -93,6 +125,11 @@ jobs:
 
       - name: Run migrations
         run: go run cmd/migrate/main.go up
+
+      - name: Test catalog revision migration round trip
+        env:
+          APP_CATALOGO_MIGRATION_TEST_DATABASE_URL: postgres://catalogo:catalogo@localhost:5432/catalogo_test?sslmode=disable
+        run: go test ./internal/repository -run '^TestCatalogRevisionMigrationRoundTrip$' -count=1 -v
 
       - name: Test
         run: go test ./... -v -race -coverprofile=coverage.out -timeout 2m
