@@ -183,14 +183,6 @@ func TestGeneratedOpenAPIContract(t *testing.T) {
 
 	assertGeneratedSearchRequestSchema(t, contract.Components.Schemas["models.SearchRequestBody"])
 	assertGeneratedSearchResponseSchema(t, contract.Components.Schemas["models.SearchResponse"])
-	assertGeneratedSearchSourceSchemas(
-		t,
-		contract.Components.Schemas["models.SearchSources"],
-		contract.Components.Schemas["models.SearchSourceDiagnostic"],
-		contract.Components.Schemas["models.SearchExternalRetrieverDescriptor"],
-		contract.Components.Schemas["models.SearchSourceStatus"],
-		contract.Components.Schemas["models.SearchSourceFailure"],
-	)
 	assertGeneratedRankerDescriptorSchema(
 		t,
 		contract.Components.Schemas["models.SearchRankerDescriptor"],
@@ -769,7 +761,6 @@ func assertGeneratedRankerDescriptorSchema(
 	}
 	expectedReferenceProperties := map[string]string{
 		"embedding": "#/components/schemas/models.EmbeddingMetadata",
-		"facilita":  "#/components/schemas/models.SearchExternalRetrieverDescriptor",
 		"weights":   "#/components/schemas/models.SearchRetrievalWeights",
 	}
 	expectedPropertyNames := make([]string, 0, len(expectedPropertyTypes)+len(expectedReferenceProperties))
@@ -794,7 +785,7 @@ func assertGeneratedRankerDescriptorSchema(
 		t,
 		"ranker weights",
 		weightsSchema,
-		[]string{"exact", "facilita", "full_text", "hyde", "semantic", "trigram"},
+		[]string{"exact", "full_text", "hyde", "semantic", "trigram"},
 	)
 	assertGeneratedClosedRequiredObject(
 		t,
@@ -802,48 +793,6 @@ func assertGeneratedRankerDescriptorSchema(
 		embeddingSchema,
 		[]string{"dimensions", "document_task_type", "document_version", "model", "query_task_type", "version"},
 	)
-}
-
-func assertGeneratedSearchSourceSchemas(
-	t *testing.T,
-	sourcesSchema generatedOpenAPISchema,
-	diagnosticSchema generatedOpenAPISchema,
-	provenanceSchema generatedOpenAPISchema,
-	statusSchema generatedOpenAPISchema,
-	failureSchema generatedOpenAPISchema,
-) {
-	t.Helper()
-	assertGeneratedClosedRequiredObject(t, "search sources", sourcesSchema, []string{"facilita"})
-	assertGeneratedClosedRequiredObject(
-		t,
-		"external retriever provenance",
-		provenanceSchema,
-		[]string{"catalog_revision", "query_expansion_version", "ranker_version", "retrieval_version", "schema_version"},
-	)
-	expectedDiagnosticProperties := []string{
-		"candidates_received",
-		"eligible_contributions",
-		"failure",
-		"latency_ms",
-		"provenance",
-		"status",
-	}
-	if actualProperties := sortedGeneratedOpenAPIKeys(diagnosticSchema.Properties); !slices.Equal(actualProperties, expectedDiagnosticProperties) ||
-		diagnosticSchema.AdditionalProperties == nil || *diagnosticSchema.AdditionalProperties {
-		t.Fatalf("search source diagnostic schema = %+v", diagnosticSchema)
-	}
-	requiredDiagnosticProperties := append([]string(nil), diagnosticSchema.Required...)
-	slices.Sort(requiredDiagnosticProperties)
-	if !slices.Equal(
-		requiredDiagnosticProperties,
-		[]string{"candidates_received", "eligible_contributions", "latency_ms", "status"},
-	) {
-		t.Fatalf("search source diagnostic required properties = %v", requiredDiagnosticProperties)
-	}
-	if !slices.Equal(statusSchema.Enum, []string{"not_applicable", "unavailable", "no_effect", "applied"}) ||
-		!slices.Equal(failureSchema.Enum, []string{"timeout", "transport", "rejected", "invalid_contract"}) {
-		t.Fatalf("search source enums = status %v failure %v", statusSchema.Enum, failureSchema.Enum)
-	}
 }
 
 func assertGeneratedClosedRequiredObject(
@@ -1209,7 +1158,6 @@ func assertGeneratedSearchResponseSchema(t *testing.T, responseSchema generatedO
 		"ranker_descriptor",
 		"ranker_version",
 		"search_id",
-		"sources",
 		"total",
 	}
 	requiredProperties := append([]string(nil), responseSchema.Required...)
@@ -1225,9 +1173,6 @@ func assertGeneratedSearchResponseSchema(t *testing.T, responseSchema generatedO
 	}
 	if responseSchema.Properties["facets"].Reference != generatedSearchFacetsSchemaReference {
 		t.Fatalf("facets property = %+v", responseSchema.Properties["facets"])
-	}
-	if responseSchema.Properties["sources"].Reference != "#/components/schemas/models.SearchSources" {
-		t.Fatalf("search sources property = %+v", responseSchema.Properties["sources"])
 	}
 	if responseSchema.Properties["catalog_revision"].Type != "string" || responseSchema.Properties["degraded"].Type != "boolean" {
 		t.Fatalf("search provenance properties = %+v", responseSchema.Properties)
