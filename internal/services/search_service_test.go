@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -185,6 +186,31 @@ type searchRerankerStub struct {
 	rerankFunction func(context.Context, string, []clients.RerankerDocument) ([]clients.RerankerResult, error)
 }
 
+type serviceCandidateProviderStub struct {
+	searchCandidatesFunction func(context.Context, string, int) (clients.FacilitaServiceCandidateBatch, error)
+}
+
+func (providerStub serviceCandidateProviderStub) SearchCandidates(
+	searchContext context.Context,
+	query string,
+	limit int,
+) (clients.FacilitaServiceCandidateBatch, error) {
+	return providerStub.searchCandidatesFunction(searchContext, query, limit)
+}
+
+func facilitaCandidateBatch(candidates ...clients.FacilitaServiceCandidate) clients.FacilitaServiceCandidateBatch {
+	return clients.FacilitaServiceCandidateBatch{
+		SchemaVersion: clients.FacilitaServiceCandidateSchemaVersion,
+		Provenance: clients.FacilitaCandidateProvenance{
+			CatalogRevision:       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			RetrievalVersion:      "facilita-bm25-faiss-rrf/v2",
+			QueryExpansionVersion: "facilita-query-expansion/v2-aabbccddeeff",
+			RankerVersion:         "facilita-local-hybrid-reranker/v2-aabbccddeeff",
+		},
+		Candidates: candidates,
+	}
+}
+
 func (rerankerStub searchRerankerStub) Rerank(
 	searchContext context.Context,
 	searchQuery string,
@@ -258,9 +284,271 @@ func TestSearchSeparatesExpansionAndPaginatesAfterFusion(t *testing.T) {
 	if searchResponse.CatalogRevision != unversionedComponent || searchResponse.RankerDescriptor.RetrievalVersion != repository.RetrievalVersion {
 		t.Fatalf("response provenance = %+v", searchResponse)
 	}
-	if searchResponse.Sources.Facilita != notApplicableFacilitaDiagnostic() ||
-		searchResponse.RankerDescriptor.Facilita != nil {
-		t.Fatalf("retired Facilita compatibility marker = %+v", searchResponse)
+}
+
+func TestSearchFusesFacilitaCandidatesBeforeRepositoryRankingAndUsesVersionedCache(t *testing.T) {
+	t.Parallel()
+
+	var capturedOptions repository.RankedSearchOptions
+	repositoryCalls := 0
+	repositoryStub := &searchRepositoryStub{
+		rankedSearchFunction: func(
+			_ context.Context,
+			_ *models.SearchRequest,
+			searchOptions repository.RankedSearchOptions,
+		) ([]*repository.SearchResult, int, error) {
+			repositoryCalls++
+			capturedOptions = searchOptions
+			searchResult := newSearchResult("00000000-0000-4000-8000-000000000001", "IPTU")
+			searchResult.FacilitaContributed = true
+			return []*repository.SearchResult{searchResult}, 1, nil
+		},
+	}
+	providerCalls := 0
+	provider := serviceCandidateProviderStub{searchCandidatesFunction: func(
+		_ context.Context,
+		query string,
+		limit int,
+	) (clients.FacilitaServiceCandidateBatch, error) {
+		providerCalls++
+		if query != "segunda via iptu" || limit != repository.DefaultCandidatePoolSize {
+			t.Fatalf("candidate request = query %q limit %d", query, limit)
+		}
+		return facilitaCandidateBatch(clients.FacilitaServiceCandidate{Slug: "iptu", Rank: 1}), nil
+	}}
+	runtimeConfig := DefaultSearchRuntimeConfig()
+	runtimeConfig.Weights.Facilita = 2
+	cacheRecorder := &searchCacheRecorder{serveStored: true}
+	searchService := NewSearchService(
+		repositoryStub,
+		cacheRecorder,
+		time.Minute,
+		nil,
+		nil,
+		runtimeConfig,
+		provider,
+	)
+
+	searchResponse, searchError := searchService.Search(context.Background(), &models.SearchRequest{
+		Q:       "segunda via iptu",
+		Page:    1,
+		PerPage: 10,
+	})
+	if searchError != nil {
+		t.Fatalf("Search: %v", searchError)
+	}
+	wantedCandidates := []repository.RankedServiceCandidate{{Slug: "iptu", Rank: 1}}
+	if !reflect.DeepEqual(capturedOptions.FacilitaCandidates, wantedCandidates) {
+		t.Fatalf("repository candidates = %#v, want %#v", capturedOptions.FacilitaCandidates, wantedCandidates)
+	}
+	if searchResponse.Degraded || !strings.Contains(searchResponse.RankerDescriptor.RetrievalVersion, "facilita-service-candidates-v2") ||
+		searchResponse.Sources.Facilita.Status != models.SearchSourceStatusApplied ||
+		searchResponse.RankerDescriptor.Facilita == nil {
+		t.Fatalf("Facilita provenance = %+v", searchResponse)
+	}
+	if cacheRecorder.setCount != 1 || len(cacheRecorder.getKeys) == 0 {
+		t.Fatalf("versioned external candidate cache activity: gets=%v sets=%d", cacheRecorder.getKeys, cacheRecorder.setCount)
+	}
+	secondResponse, secondError := searchService.Search(context.Background(), &models.SearchRequest{
+		Q:       "segunda via iptu",
+		Page:    1,
+		PerPage: 10,
+	})
+	if secondError != nil {
+		t.Fatalf("second Search: %v", secondError)
+	}
+	if repositoryCalls != 1 || providerCalls != 2 || cacheRecorder.setCount != 1 {
+		t.Fatalf("versioned cache reuse: repository=%d provider=%d sets=%d", repositoryCalls, providerCalls, cacheRecorder.setCount)
+	}
+	if secondResponse.RankerVersion != searchResponse.RankerVersion ||
+		secondResponse.Sources.Facilita.Status != models.SearchSourceStatusApplied {
+		t.Fatalf("cached provenance = %+v, want ranker %q and applied source", secondResponse, searchResponse.RankerVersion)
+	}
+}
+
+func TestSearchReportsFacilitaCandidatesWithNoEligibleEffect(t *testing.T) {
+	t.Parallel()
+
+	repositoryStub := &searchRepositoryStub{
+		rankedSearchFunction: func(
+			_ context.Context,
+			_ *models.SearchRequest,
+			_ repository.RankedSearchOptions,
+		) ([]*repository.SearchResult, int, error) {
+			return []*repository.SearchResult{
+				newSearchResult("00000000-0000-4000-8000-000000000001", "Unrelated item"),
+			}, 1, nil
+		},
+	}
+	provider := serviceCandidateProviderStub{searchCandidatesFunction: func(
+		context.Context,
+		string,
+		int,
+	) (clients.FacilitaServiceCandidateBatch, error) {
+		return facilitaCandidateBatch(clients.FacilitaServiceCandidate{Slug: "iptu", Rank: 1}), nil
+	}}
+	runtimeConfig := DefaultSearchRuntimeConfig()
+	runtimeConfig.Weights.Facilita = 2
+	searchService := NewSearchService(repositoryStub, nil, 0, nil, nil, runtimeConfig, provider)
+
+	searchResponse, searchError := searchService.Search(context.Background(), &models.SearchRequest{
+		Q:       "iptu",
+		Page:    1,
+		PerPage: 10,
+	})
+	if searchError != nil {
+		t.Fatalf("Search: %v", searchError)
+	}
+	sourceDiagnostic := searchResponse.Sources.Facilita
+	if sourceDiagnostic.Status != models.SearchSourceStatusNoEffect ||
+		sourceDiagnostic.Provenance == nil ||
+		sourceDiagnostic.CandidatesReceived != 1 ||
+		sourceDiagnostic.EligibleContributions != 0 ||
+		searchResponse.Degraded {
+		t.Fatalf("no-effect source diagnostic = %+v, degraded=%t", sourceDiagnostic, searchResponse.Degraded)
+	}
+}
+
+func TestValidFacilitaDiagnosticRejectsInconsistentCachedProvenance(t *testing.T) {
+	t.Parallel()
+
+	provenance := &models.SearchExternalRetrieverDescriptor{
+		SchemaVersion:         clients.FacilitaServiceCandidateSchemaVersion,
+		CatalogRevision:       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		RetrievalVersion:      "facilita-bm25-faiss-rrf/v2",
+		QueryExpansionVersion: "facilita-query-expansion/v2-aabbccddeeff",
+		RankerVersion:         "facilita-local-hybrid-reranker/v2-aabbccddeeff",
+	}
+	testCases := []struct {
+		name       string
+		diagnostic models.SearchSourceDiagnostic
+		descriptor *models.SearchExternalRetrieverDescriptor
+		valid      bool
+	}{
+		{
+			name: "applied exact provenance",
+			diagnostic: models.SearchSourceDiagnostic{
+				Status: models.SearchSourceStatusApplied, Provenance: provenance,
+				CandidatesReceived: 2, EligibleContributions: 1,
+			},
+			descriptor: provenance,
+			valid:      true,
+		},
+		{
+			name: "applied without contribution",
+			diagnostic: models.SearchSourceDiagnostic{
+				Status: models.SearchSourceStatusApplied, Provenance: provenance,
+				CandidatesReceived: 1,
+			},
+			descriptor: provenance,
+		},
+		{
+			name: "not applicable with ranker provenance",
+			diagnostic: models.SearchSourceDiagnostic{
+				Status: models.SearchSourceStatusNotApplicable,
+			},
+			descriptor: provenance,
+		},
+		{
+			name: "unavailable without failure",
+			diagnostic: models.SearchSourceDiagnostic{
+				Status: models.SearchSourceStatusUnavailable,
+			},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			if diagnosticValid := validFacilitaDiagnostic(testCase.diagnostic, testCase.descriptor); diagnosticValid != testCase.valid {
+				t.Fatalf("validFacilitaDiagnostic() = %t, want %t", diagnosticValid, testCase.valid)
+			}
+		})
+	}
+}
+
+func TestSearchDegradesWhenFacilitaCandidatesAreUnavailable(t *testing.T) {
+	t.Parallel()
+
+	repositoryStub := &searchRepositoryStub{
+		rankedSearchFunction: func(
+			_ context.Context,
+			_ *models.SearchRequest,
+			searchOptions repository.RankedSearchOptions,
+		) ([]*repository.SearchResult, int, error) {
+			if len(searchOptions.FacilitaCandidates) != 0 {
+				t.Fatalf("unexpected fallback candidates: %#v", searchOptions.FacilitaCandidates)
+			}
+			return []*repository.SearchResult{
+				newSearchResult("00000000-0000-4000-8000-000000000001", "IPTU"),
+			}, 1, nil
+		},
+	}
+	provider := serviceCandidateProviderStub{searchCandidatesFunction: func(
+		context.Context,
+		string,
+		int,
+	) (clients.FacilitaServiceCandidateBatch, error) {
+		return clients.FacilitaServiceCandidateBatch{}, &clients.FacilitaSearchError{
+			Failure: clients.FacilitaSearchFailureTimeout,
+			Cause:   errors.New("temporary candidate outage"),
+		}
+	}}
+	runtimeConfig := DefaultSearchRuntimeConfig()
+	runtimeConfig.Weights.Facilita = 2
+	searchService := NewSearchService(repositoryStub, nil, 0, nil, nil, runtimeConfig, provider)
+
+	searchResponse, searchError := searchService.Search(context.Background(), &models.SearchRequest{
+		Q:       "iptu",
+		Page:    1,
+		PerPage: 10,
+	})
+	if searchError != nil {
+		t.Fatalf("Search: %v", searchError)
+	}
+	if !searchResponse.Degraded || searchResponse.EffectivePipeline != models.SearchPipelineLexical {
+		t.Fatalf("fallback provenance = pipeline %q degraded=%t", searchResponse.EffectivePipeline, searchResponse.Degraded)
+	}
+	if searchResponse.Sources.Facilita.Status != models.SearchSourceStatusUnavailable ||
+		searchResponse.Sources.Facilita.Failure != models.SearchSourceFailureTimeout {
+		t.Fatalf("fallback source diagnostic = %+v", searchResponse.Sources.Facilita)
+	}
+}
+
+func TestSearchSkipsFacilitaCandidatesWhenServiceTypeIsExcluded(t *testing.T) {
+	t.Parallel()
+
+	providerCalled := false
+	provider := serviceCandidateProviderStub{searchCandidatesFunction: func(
+		context.Context,
+		string,
+		int,
+	) (clients.FacilitaServiceCandidateBatch, error) {
+		providerCalled = true
+		return facilitaCandidateBatch(), nil
+	}}
+	repositoryStub := &searchRepositoryStub{
+		rankedSearchFunction: func(
+			context.Context,
+			*models.SearchRequest,
+			repository.RankedSearchOptions,
+		) ([]*repository.SearchResult, int, error) {
+			return []*repository.SearchResult{}, 0, nil
+		},
+	}
+	runtimeConfig := DefaultSearchRuntimeConfig()
+	runtimeConfig.Weights.Facilita = 2
+	searchService := NewSearchService(repositoryStub, nil, 0, nil, nil, runtimeConfig, provider)
+	_, searchError := searchService.Search(context.Background(), &models.SearchRequest{
+		Q:       "curso",
+		Types:   []models.ItemType{models.TypeCourse},
+		Page:    1,
+		PerPage: 10,
+	})
+	if searchError != nil {
+		t.Fatalf("Search: %v", searchError)
+	}
+	if providerCalled {
+		t.Fatal("Facilita service candidates were requested for a service-excluding type filter")
 	}
 }
 

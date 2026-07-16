@@ -38,6 +38,7 @@ type AppConfig struct {
 	Typesense   TypesenseSettings
 	Gemini      GeminiSettings
 	Reranker    RerankerSettings
+	Facilita    FacilitaSearchSettings
 	Embedding   EmbeddingSettings
 	Search      SearchSettings
 	RateLimit   RateLimitSettings
@@ -368,6 +369,16 @@ type RerankerSettings struct {
 	Timeout time.Duration
 }
 
+type FacilitaSearchSettings struct {
+	BaseURL        string
+	InternalAPIKey string
+	Timeout        time.Duration
+}
+
+func (settings FacilitaSearchSettings) Enabled() bool {
+	return settings.BaseURL != "" && settings.InternalAPIKey != ""
+}
+
 type EmbeddingSettings struct {
 	BackfillInterval time.Duration
 	RequestTimeout   time.Duration
@@ -386,6 +397,7 @@ type SearchSettings struct {
 	TrigramWeight           float64
 	SemanticWeight          float64
 	HyDEWeight              float64
+	FacilitaWeight          float64
 }
 
 const (
@@ -426,6 +438,7 @@ func (settings SearchSettings) Validate() error {
 		settings.TrigramWeight,
 		settings.SemanticWeight,
 		settings.HyDEWeight,
+		settings.FacilitaWeight,
 	}
 	positiveWeight := false
 	for _, weight := range weights {
@@ -477,6 +490,10 @@ func Load() (*AppConfig, error) {
 	embeddingSettings, embeddingSettingsError := loadEmbeddingSettings(v)
 	if embeddingSettingsError != nil {
 		return nil, fmt.Errorf("configuração de embeddings inválida: %w", embeddingSettingsError)
+	}
+	facilitaSettings, facilitaSettingsError := loadFacilitaSearchSettings(v)
+	if facilitaSettingsError != nil {
+		return nil, fmt.Errorf("invalid Facilita search configuration: %w", facilitaSettingsError)
 	}
 	serverSettings, serverSettingsError := loadServerSettings(v)
 	if serverSettingsError != nil {
@@ -575,6 +592,7 @@ func Load() (*AppConfig, error) {
 			URL:     getEnv(v, "RERANKER_URL", ""),
 			Timeout: getDuration(v, "RERANKER_TIMEOUT", 2*time.Second),
 		},
+		Facilita:    facilitaSettings,
 		Embedding:   embeddingSettings,
 		Search:      searchSettings,
 		RateLimit:   rateLimitSettings,
@@ -583,7 +601,23 @@ func Load() (*AppConfig, error) {
 	if strings.TrimSpace(cfg.Reranker.URL) != "" && cfg.Search.RerankerVersion == "" {
 		return nil, errors.New("SEARCH_RERANKER_VERSION is required when RERANKER_URL is configured")
 	}
+	if availabilityError := validateSearchSourceAvailability(cfg.Search, cfg.Facilita); availabilityError != nil {
+		return nil, availabilityError
+	}
+
 	return cfg, nil
+}
+
+func validateSearchSourceAvailability(
+	searchSettings SearchSettings,
+	facilitaSettings FacilitaSearchSettings,
+) error {
+	localWeight := searchSettings.ExactWeight + searchSettings.FullTextWeight +
+		searchSettings.TrigramWeight + searchSettings.SemanticWeight + searchSettings.HyDEWeight
+	if localWeight == 0 && searchSettings.FacilitaWeight > 0 && !facilitaSettings.Enabled() {
+		return errors.New("FACILITA search must be configured when it is the only weighted retrieval source")
+	}
+	return nil
 }
 
 func loadCacheSettings(configuration *viper.Viper) (CacheSettings, error) {
@@ -992,6 +1026,7 @@ func loadSearchSettings(v *viper.Viper) (SearchSettings, error) {
 		{key: "SEARCH_TRIGRAM_WEIGHT", defaultValue: 1.0},
 		{key: "SEARCH_SEMANTIC_WEIGHT", defaultValue: 1.0},
 		{key: "SEARCH_HYDE_WEIGHT", defaultValue: 0.5},
+		{key: "SEARCH_FACILITA_WEIGHT", defaultValue: 2.0},
 	}
 	weights := make([]float64, len(weightSettings))
 	for weightIndex, weightSetting := range weightSettings {
@@ -1015,11 +1050,32 @@ func loadSearchSettings(v *viper.Viper) (SearchSettings, error) {
 		TrigramWeight:           weights[2],
 		SemanticWeight:          weights[3],
 		HyDEWeight:              weights[4],
+		FacilitaWeight:          weights[5],
 	}
 	if validationError := settings.Validate(); validationError != nil {
 		return SearchSettings{}, validationError
 	}
 	return settings, nil
+}
+
+func loadFacilitaSearchSettings(v *viper.Viper) (FacilitaSearchSettings, error) {
+	baseURL := strings.TrimSpace(getEnv(v, "FACILITA_SEARCH_BASE_URL", ""))
+	internalAPIKey := getEnv(v, "FACILITA_INTERNAL_API_KEY", "")
+	timeout, timeoutError := strictDurationSetting(v, "FACILITA_SEARCH_TIMEOUT", 2*time.Second)
+	if timeoutError != nil {
+		return FacilitaSearchSettings{}, timeoutError
+	}
+	if timeout <= 0 {
+		return FacilitaSearchSettings{}, errors.New("FACILITA_SEARCH_TIMEOUT must be positive")
+	}
+	if (baseURL == "") != (internalAPIKey == "") {
+		return FacilitaSearchSettings{}, errors.New("FACILITA_SEARCH_BASE_URL and FACILITA_INTERNAL_API_KEY must be configured together")
+	}
+	return FacilitaSearchSettings{
+		BaseURL:        baseURL,
+		InternalAPIKey: internalAPIKey,
+		Timeout:        timeout,
+	}, nil
 }
 
 func loadEmbeddingSettings(v *viper.Viper) (EmbeddingSettings, error) {
@@ -1063,8 +1119,8 @@ func Get() (*AppConfig, error) {
 }
 
 func getEnv(v *viper.Viper, key, defaultValue string) string {
-	if v.IsSet(key) {
-		return v.GetString(key)
+	if value := v.GetString(key); value != "" {
+		return value
 	}
 	if value := os.Getenv(key); value != "" {
 		return value

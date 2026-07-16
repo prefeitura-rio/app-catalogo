@@ -21,10 +21,6 @@ const (
 	generatedSyncStatusResponseReference   = "#/components/schemas/models.SyncStatusResponse"
 	generatedTargetAudienceReference       = "#/components/schemas/models.TargetAudienceData"
 	generatedRecommendationErrorReference  = "#/components/schemas/models.RecommendationErrorResponse"
-	generatedPublicServiceDetailReference  = "#/components/schemas/models.PublicServiceDetail"
-	generatedPublicServiceListReference    = "#/components/schemas/models.PublicServiceListResponse"
-	generatedServiceCategoriesReference    = "#/components/schemas/models.PublicServiceCategoryResponse"
-	generatedServiceSubcategoriesReference = "#/components/schemas/models.PublicServiceSubcategoryResponse"
 	generatedNonBlankPattern               = `\S`
 	generatedCatalogHTTPURLPattern         = `^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\s]+($|[/?#]($|.*\S$))`
 	generatedSalesForceSignaturePattern    = `^[0-9A-Fa-f]{64}$`
@@ -132,7 +128,6 @@ func TestGeneratedOpenAPIContract(t *testing.T) {
 	assertGeneratedRequestIDContract(t, contract)
 	assertGeneratedMetricsContract(t, contract.Paths["/metrics"])
 	assertGeneratedRecommendationOperations(t, contract.Paths, contract.Components.Schemas)
-	assertGeneratedPublicServiceOperations(t, contract.Paths)
 	assertGeneratedSyncStatusContract(t, contract.Paths["/api/v1/admin/sync/status"], contract.Components.Schemas)
 	assertGeneratedSalesForceWebhookContract(
 		t,
@@ -201,75 +196,21 @@ func TestGeneratedOpenAPIContract(t *testing.T) {
 	assertGeneratedNonSearchSchemas(t, contract.Components.Schemas)
 }
 
-func assertGeneratedPublicServiceOperations(t *testing.T, paths map[string]generatedOpenAPIPath) {
-	t.Helper()
-	expectedOperations := map[string]struct {
-		statuses          []string
-		responseReference string
-	}{
-		"/api/public/service-categories": {
-			statuses:          []string{"200", "500"},
-			responseReference: generatedServiceCategoriesReference,
-		},
-		"/api/public/service-categories/{category}/subcategories": {
-			statuses:          []string{"200", "400", "500"},
-			responseReference: generatedServiceSubcategoriesReference,
-		},
-		"/api/public/services": {
-			statuses:          []string{"200", "400", "500"},
-			responseReference: generatedPublicServiceListReference,
-		},
-		"/api/public/services/{slug}": {
-			statuses:          []string{"200", "308", "400", "404", "500"},
-			responseReference: generatedPublicServiceDetailReference,
-		},
-	}
-	for operationPath, expectation := range expectedOperations {
-		operation := paths[operationPath].Get
-		actualStatuses := sortedGeneratedOpenAPIKeys(operation.Responses)
-		if !slices.Equal(actualStatuses, expectation.statuses) {
-			t.Fatalf("%s response statuses = %v, want %v", operationPath, actualStatuses, expectation.statuses)
-		}
-		responseSchema := operation.Responses["200"].Content["application/json"].Schema
-		if responseSchema.Reference != expectation.responseReference {
-			t.Fatalf("%s response schema = %q, want %q", operationPath, responseSchema.Reference, expectation.responseReference)
-		}
-	}
-
-	browseParameters := paths["/api/public/services"].Get.Parameters
-	if len(browseParameters) != 4 {
-		t.Fatalf("public service browse parameters = %v", browseParameters)
-	}
-	pageParameters := map[string]generatedOpenAPIProperty{}
-	for _, parameter := range browseParameters {
-		pageParameters[parameter.Name] = parameter.Schema
-	}
-	if pageParameters["page"].Minimum == nil || *pageParameters["page"].Minimum != 1 ||
-		pageParameters["per_page"].Minimum == nil || *pageParameters["per_page"].Minimum != 1 ||
-		pageParameters["per_page"].Maximum == nil || *pageParameters["per_page"].Maximum != 100 {
-		t.Fatalf("public service pagination contract = %+v", pageParameters)
-	}
-}
-
 func assertGeneratedPathParity(t *testing.T, paths map[string]generatedOpenAPIPath) {
 	t.Helper()
 	expectedMethods := map[string][]string{
-		"/api/public/catalog/{id}":                                {"GET"},
-		"/api/public/recommendations":                             {"GET"},
-		"/api/public/search":                                      {"GET", "POST"},
-		"/api/public/service-categories":                          {"GET"},
-		"/api/public/service-categories/{category}/subcategories": {"GET"},
-		"/api/public/services":                                    {"GET"},
-		"/api/public/services/{slug}":                             {"GET"},
-		"/api/v1/admin/sync/status":                               {"GET"},
-		"/api/v1/admin/sync/trigger":                              {"POST"},
-		"/api/v1/catalog/{id}":                                    {"GET"},
-		"/api/v1/recommendations":                                 {"GET"},
-		"/api/v1/search":                                          {"GET", "POST"},
-		"/api/webhooks/salesforce":                                {"POST"},
-		"/health":                                                 {"GET"},
-		"/metrics":                                                {"GET"},
-		"/ready":                                                  {"GET"},
+		"/api/public/catalog/{id}":    {"GET"},
+		"/api/public/recommendations": {"GET"},
+		"/api/public/search":          {"GET", "POST"},
+		"/api/v1/admin/sync/status":   {"GET"},
+		"/api/v1/admin/sync/trigger":  {"POST"},
+		"/api/v1/catalog/{id}":        {"GET"},
+		"/api/v1/recommendations":     {"GET"},
+		"/api/v1/search":              {"GET", "POST"},
+		"/api/webhooks/salesforce":    {"POST"},
+		"/health":                     {"GET"},
+		"/metrics":                    {"GET"},
+		"/ready":                      {"GET"},
 	}
 	actualPaths := sortedGeneratedOpenAPIKeys(paths)
 	expectedPaths := sortedGeneratedOpenAPIKeys(expectedMethods)

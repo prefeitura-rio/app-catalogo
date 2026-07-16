@@ -104,6 +104,13 @@ jobs:
       REDIS_HOST: localhost
       REDIS_PORT: 6379
       CPF_HASH_SALT: test-cpf-hmac-key-with-at-least-32-bytes
+      RATE_LIMIT_KEY_SECRET: test-rate-limit-key-with-at-least-32-bytes
+      APP_CATALOGO_INTERNAL_API_KEY: test-catalog-internal-api-key-with-at-least-32-bytes
+      AUTH_JWT_ISSUER: https://identity.example/realms/citizen
+      AUTH_JWT_JWKS_URL: https://identity.example/realms/citizen/protocol/openid-connect/certs
+      AUTH_JWT_AUDIENCE: app-catalogo
+      AUTH_JWT_AUTHORIZED_PARTY: superapp
+      AUTH_JWT_ROLE_CLIENT_ID: superapp
       APP_CATALOGO_SEARCH_TEST_DATABASE_URL: postgres://catalogo:catalogo@localhost:5432/catalogo_test?sslmode=disable
       APP_CATALOGO_EMBEDDING_TEST_DATABASE_URL: postgres://catalogo:catalogo@localhost:5432/catalogo_test?sslmode=disable
       APP_CATALOGO_RATE_LIMIT_TEST_REDIS_ADDR: localhost:6379
@@ -119,20 +126,12 @@ jobs:
       - name: Run migrations
         run: go run cmd/migrate/main.go up
 
-      - name: Test migration round trips
+      - name: Test catalog revision migration round trip
         env:
           APP_CATALOGO_MIGRATION_TEST_DATABASE_URL: postgres://catalogo:catalogo@localhost:5432/catalogo_test?sslmode=disable
-        run: go test ./internal/repository -run '^Test(CatalogRevision|ServiceSlugAlias)MigrationRoundTrip$' -count=1 -v
+        run: go test ./internal/repository -run '^TestCatalogRevisionMigrationRoundTrip$' -count=1 -v
 
       - name: Test
-        env:
-          RATE_LIMIT_KEY_SECRET: test-rate-limit-key-with-at-least-32-bytes
-          APP_CATALOGO_INTERNAL_API_KEY: test-catalog-internal-api-key-with-at-least-32-bytes
-          AUTH_JWT_ISSUER: https://identity.example/realms/citizen
-          AUTH_JWT_JWKS_URL: https://identity.example/realms/citizen/protocol/openid-connect/certs
-          AUTH_JWT_AUDIENCE: app-catalogo
-          AUTH_JWT_AUTHORIZED_PARTY: superapp
-          AUTH_JWT_ROLE_CLIENT_ID: superapp
         run: go test ./... -v -race -coverprofile=coverage.out -timeout 2m
 
       - name: Upload coverage

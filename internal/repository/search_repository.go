@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -51,9 +53,10 @@ func (repository *SearchRepository) CatalogRevision(searchContext context.Contex
 }
 
 type SearchResult struct {
-	Item     *models.CatalogItem
-	Rank     float64
-	Headline string
+	Item                *models.CatalogItem
+	Rank                float64
+	Headline            string
+	FacilitaContributed bool
 }
 
 // BrowseSnapshot is a self-consistent catalog browse read. Results, total,
@@ -81,6 +84,7 @@ type RetrievalWeights struct {
 	Trigram  float64
 	Semantic float64
 	HyDE     float64
+	Facilita float64
 }
 
 func DefaultRetrievalWeights() RetrievalWeights {
@@ -90,7 +94,13 @@ func DefaultRetrievalWeights() RetrievalWeights {
 		Trigram:  1.0,
 		Semantic: 1.0,
 		HyDE:     0.5,
+		Facilita: 0,
 	}
+}
+
+type RankedServiceCandidate struct {
+	Slug string
+	Rank int
 }
 
 type RankedSearchOptions struct {
@@ -105,6 +115,7 @@ type RankedSearchOptions struct {
 	CandidatePoolSize        int
 	SemanticOverfetchFactor  int
 	Weights                  RetrievalWeights
+	FacilitaCandidates       []RankedServiceCandidate
 }
 
 func (options RankedSearchOptions) normalized() RankedSearchOptions {
@@ -126,7 +137,56 @@ func (options RankedSearchOptions) normalized() RankedSearchOptions {
 	if options.MaximumSemanticDistance <= 0 || options.MaximumSemanticDistance > MaximumCosineDistance {
 		options.MaximumSemanticDistance = DefaultMaximumSemanticDistance
 	}
+	options.FacilitaCandidates = normalizeRankedServiceCandidates(
+		options.FacilitaCandidates,
+		options.CandidatePoolSize,
+	)
 	return options
+}
+
+var rankedServiceCandidateSlugPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+func normalizeRankedServiceCandidates(
+	candidates []RankedServiceCandidate,
+	maximumCandidates int,
+) []RankedServiceCandidate {
+	bestRankBySlug := make(map[string]int, len(candidates))
+	for _, candidate := range candidates {
+		canonicalSlug := strings.ToLower(strings.TrimSpace(candidate.Slug))
+		if candidate.Rank < 1 || !rankedServiceCandidateSlugPattern.MatchString(canonicalSlug) {
+			continue
+		}
+		if previousRank, found := bestRankBySlug[canonicalSlug]; !found || candidate.Rank < previousRank {
+			bestRankBySlug[canonicalSlug] = candidate.Rank
+		}
+	}
+	normalizedCandidates := make([]RankedServiceCandidate, 0, len(bestRankBySlug))
+	for slug, rank := range bestRankBySlug {
+		normalizedCandidates = append(normalizedCandidates, RankedServiceCandidate{Slug: slug, Rank: rank})
+	}
+	sort.Slice(normalizedCandidates, func(leftIndex int, rightIndex int) bool {
+		leftCandidate := normalizedCandidates[leftIndex]
+		rightCandidate := normalizedCandidates[rightIndex]
+		if leftCandidate.Rank != rightCandidate.Rank {
+			return leftCandidate.Rank < rightCandidate.Rank
+		}
+		return leftCandidate.Slug < rightCandidate.Slug
+	})
+	if len(normalizedCandidates) > maximumCandidates {
+		normalizedCandidates = normalizedCandidates[:maximumCandidates]
+	}
+	return normalizedCandidates
+}
+
+func (options RankedSearchOptions) facilitaCandidateArrays() ([]string, []int) {
+	normalizedCandidates := options.normalized().FacilitaCandidates
+	slugs := make([]string, len(normalizedCandidates))
+	ranks := make([]int, len(normalizedCandidates))
+	for candidateIndex, candidate := range normalizedCandidates {
+		slugs[candidateIndex] = candidate.Slug
+		ranks[candidateIndex] = candidate.Rank
+	}
+	return slugs, ranks
 }
 
 func (options RankedSearchOptions) semanticAliasPoolSize() int {
@@ -453,6 +513,30 @@ func canonicalEntityKeySQL(catalogAlias string) string {
 	`, explicitCanonicalID, sourceSlug, serviceURLSlug, catalogAlias)
 }
 
+func serviceSlugEvidenceSQL(catalogAlias string) string {
+	sourceSlug := fmt.Sprintf("btrim(%[1]s.source_data->>'slug')", catalogAlias)
+	serviceURLPath := fmt.Sprintf(
+		"regexp_replace(split_part(split_part(COALESCE(%s.url, ''), '?', 1), '#', 1), '^(?:[A-Za-z][A-Za-z0-9+.-]*:)?//[^/]*', '', 'i')",
+		catalogAlias,
+	)
+	serviceURLSlug := fmt.Sprintf(
+		"btrim(substring(%s FROM '(?i)(?:^|/)servicos/([^/]+)'))",
+		serviceURLPath,
+	)
+	return fmt.Sprintf(`
+		CASE
+			WHEN %[3]s.type = 'service'
+				AND NULLIF(%[1]s, '') IS NOT NULL
+				AND strpos(%[1]s, '/') = 0
+				AND strpos(%[1]s, chr(92)) = 0 THEN lower(%[1]s)
+			WHEN %[3]s.type = 'service'
+				AND NULLIF(%[2]s, '') IS NOT NULL
+				AND strpos(%[2]s, chr(92)) = 0 THEN lower(%[2]s)
+			ELSE ''
+		END
+	`, sourceSlug, serviceURLSlug, catalogAlias)
+}
+
 func querySearchFacets(
 	searchContext context.Context,
 	queryer searchQueryer,
@@ -685,10 +769,12 @@ func buildRankedSearchQuery(
 		expandedQuery = searchRequest.Q
 	}
 
-	const firstFilterParameterIndex = 19
+	const firstFilterParameterIndex = 22
 	filterSQL, filterArguments, _ := buildFilterClauses(searchRequest, firstFilterParameterIndex)
 	basePredicate := activeCatalogPredicate(filterSQL)
 	canonicalKeyExpression := canonicalEntityKeySQL("ci")
+	serviceSlugExpression := serviceSlugEvidenceSQL("ci")
+	facilitaCandidateSlugs, facilitaCandidateRanks := searchOptions.facilitaCandidateArrays()
 	queryArguments := []any{
 		searchRequest.Q,
 		expandedQuery,
@@ -708,6 +794,9 @@ func buildRankedSearchQuery(
 		searchOptions.Weights.HyDE,
 		searchOptions.MaximumSemanticDistance,
 		searchOptions.semanticAliasPoolSize(),
+		facilitaCandidateSlugs,
+		facilitaCandidateRanks,
+		searchOptions.Weights.Facilita,
 	}
 	queryArguments = append(queryArguments, filterArguments...)
 
@@ -920,6 +1009,33 @@ func buildRankedSearchQuery(
 			FROM hyde_ranked_entities
 			WHERE candidate_rank <= $10
 		),
+		facilita_candidate_input AS (
+			SELECT candidate_slug, candidate_rank
+			FROM unnest($19::text[], $20::integer[]) AS candidates(candidate_slug, candidate_rank)
+		),
+		facilita_alias_matches AS MATERIALIZED (
+			SELECT
+				ci.id,
+				%s AS canonical_entity_key,
+				ci.created_at,
+				facilita_candidate_input.candidate_rank
+			FROM facilita_candidate_input
+			JOIN catalog_items ci ON %s = facilita_candidate_input.candidate_slug
+			WHERE %s
+		),
+		facilita_entity_best_alias AS (
+			SELECT DISTINCT ON (canonical_entity_key COLLATE "C")
+				canonical_entity_key,
+				id AS representative_id,
+				candidate_rank
+			FROM facilita_alias_matches
+			ORDER BY canonical_entity_key COLLATE "C", candidate_rank ASC, created_at DESC, id ASC
+		),
+		facilita_candidates AS (
+			SELECT canonical_entity_key, representative_id, candidate_rank
+			FROM facilita_entity_best_alias
+			WHERE candidate_rank <= $10
+		),
 		retrieval_signals AS (
 			SELECT canonical_entity_key, representative_id, ''::text AS headline, 'exact'::text AS retriever, $12::double precision / ($11::double precision + candidate_rank::double precision) AS contribution FROM exact_candidates
 			UNION ALL
@@ -930,6 +1046,8 @@ func buildRankedSearchQuery(
 			SELECT canonical_entity_key, representative_id, '', 'semantic', $15::double precision / ($11::double precision + candidate_rank::double precision) FROM semantic_candidates
 			UNION ALL
 			SELECT canonical_entity_key, representative_id, '', 'hyde', $16::double precision / ($11::double precision + candidate_rank::double precision) FROM hyde_candidates
+			UNION ALL
+			SELECT canonical_entity_key, representative_id, '', 'facilita', $21::double precision / ($11::double precision + candidate_rank::double precision) FROM facilita_candidates
 		),
 		fused_entities AS (
 			SELECT
@@ -937,6 +1055,7 @@ func buildRankedSearchQuery(
 				SUM(contribution) AS reciprocal_rank_score,
 				COUNT(DISTINCT retriever) AS matching_retrievers,
 				BOOL_OR(retriever = 'exact') AS has_exact_match,
+				BOOL_OR(retriever = 'facilita') AS facilita_contributed,
 				COALESCE(MAX(headline) FILTER (WHERE headline <> ''), '') AS headline
 			FROM retrieval_signals
 			WHERE contribution > 0
@@ -981,6 +1100,7 @@ func buildRankedSearchQuery(
 			ci.created_at, ci.updated_at,
 			fused_candidates.reciprocal_rank_score AS rank,
 			fused_candidates.headline,
+			fused_candidates.facilita_contributed,
 			COUNT(*) OVER() AS total_candidates
 		FROM fused_candidates
 		JOIN canonical_representatives USING (canonical_entity_key)
@@ -996,6 +1116,9 @@ func buildRankedSearchQuery(
 		canonicalKeyExpression,
 		basePredicate,
 		canonicalKeyExpression,
+		basePredicate,
+		canonicalKeyExpression,
+		serviceSlugExpression,
 		basePredicate,
 		canonicalKeyExpression,
 		basePredicate,
@@ -1043,7 +1166,7 @@ func scanRankedResults(
 	searchResults := make([]*SearchResult, 0)
 	totalCandidates := 0
 	for queryRows.Next() {
-		searchResult, scanError := scanSearchResult(queryRows, &totalCandidates)
+		searchResult, scanError := scanSearchResult(queryRows, &totalCandidates, true)
 		if scanError != nil {
 			return nil, 0, scanError
 		}
@@ -1069,7 +1192,7 @@ func scanResults(
 
 	searchResults := make([]*SearchResult, 0)
 	for queryRows.Next() {
-		searchResult, scanError := scanSearchResult(queryRows, nil)
+		searchResult, scanError := scanSearchResult(queryRows, nil, false)
 		if scanError != nil {
 			return nil, scanError
 		}
@@ -1084,6 +1207,7 @@ func scanResults(
 func scanSearchResult(
 	scanRow rowScanner,
 	totalCandidates *int,
+	includeRetrievalMetadata bool,
 ) (*SearchResult, error) {
 	catalogItem := &models.CatalogItem{}
 	var itemSource string
@@ -1091,6 +1215,7 @@ func scanSearchResult(
 	var itemStatus string
 	var relevanceRank float64
 	var headline string
+	var facilitaContributed bool
 
 	scanDestinations := []any{
 		&catalogItem.ID, &catalogItem.ExternalID, &itemSource, &itemType,
@@ -1101,6 +1226,9 @@ func scanSearchResult(
 		&catalogItem.ValidFrom, &catalogItem.ValidUntil, &catalogItem.SourceUpdatedAt,
 		&catalogItem.CreatedAt, &catalogItem.UpdatedAt,
 		&relevanceRank, &headline,
+	}
+	if includeRetrievalMetadata {
+		scanDestinations = append(scanDestinations, &facilitaContributed)
 	}
 	if totalCandidates != nil {
 		scanDestinations = append(scanDestinations, totalCandidates)
@@ -1113,8 +1241,9 @@ func scanSearchResult(
 	catalogItem.Type = models.ItemType(itemType)
 	catalogItem.Status = models.ItemStatus(itemStatus)
 	return &SearchResult{
-		Item:     catalogItem,
-		Rank:     relevanceRank,
-		Headline: headline,
+		Item:                catalogItem,
+		Rank:                relevanceRank,
+		Headline:            headline,
+		FacilitaContributed: facilitaContributed,
 	}, nil
 }

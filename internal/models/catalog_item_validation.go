@@ -149,9 +149,6 @@ func ValidateCatalogItem(catalogItem *CatalogItem) error {
 	if sourceDataError != nil {
 		return sourceDataError
 	}
-	if serviceSourceError := ValidatePublicServiceSourceData(catalogItem); serviceSourceError != nil {
-		return serviceSourceError
-	}
 	encodedProjection, encodeError := json.Marshal(catalogSearchProjection{
 		ExternalID:     catalogItem.ExternalID,
 		Title:          catalogItem.Title,

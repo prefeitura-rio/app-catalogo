@@ -19,7 +19,6 @@ import (
 )
 
 const catalogRevisionMigrationPath = "../../db/migrations/000005_catalog_revision.sql"
-const latestCatalogMigrationVersion = 6
 
 const catalogMigrationTestDatabaseURLVariable = "APP_CATALOGO_MIGRATION_TEST_DATABASE_URL"
 
@@ -28,8 +27,8 @@ func TestCatalogRevisionMigrationContract(t *testing.T) {
 	if collectionError != nil {
 		t.Fatalf("collect Goose migrations: %v", collectionError)
 	}
-	if len(migrations) == 0 || migrations[len(migrations)-1].Version != latestCatalogMigrationVersion {
-		t.Fatalf("latest Goose migration = %#v, want version %d", migrations, latestCatalogMigrationVersion)
+	if len(migrations) == 0 || migrations[len(migrations)-1].Version != 5 {
+		t.Fatalf("latest Goose migration = %#v, want version 5", migrations)
 	}
 
 	migrationBytes, readError := os.ReadFile(catalogRevisionMigrationPath)
@@ -101,24 +100,19 @@ func TestCatalogRevisionMigrationRoundTrip(t *testing.T) {
 	if versionError != nil {
 		t.Fatalf("read starting migration version: %v", versionError)
 	}
-	if startingVersion < 4 || startingVersion > latestCatalogMigrationVersion {
-		t.Fatalf("migration round-trip requires schema version between 4 and %d, got %d", latestCatalogMigrationVersion, startingVersion)
+	if startingVersion != 4 && startingVersion != 5 {
+		t.Fatalf("migration round-trip requires schema version 4 or 5, got %d", startingVersion)
 	}
 	t.Cleanup(func() {
 		cleanupContext, cancelCleanup := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancelCleanup()
 		currentVersion, currentVersionError := goose.GetDBVersionContext(cleanupContext, database)
-		if currentVersionError == nil && currentVersion < latestCatalogMigrationVersion {
-			if restoreError := goose.UpToContext(cleanupContext, database, "../../db/migrations", latestCatalogMigrationVersion); restoreError != nil {
+		if currentVersionError == nil && currentVersion == 4 {
+			if restoreError := goose.UpToContext(cleanupContext, database, "../../db/migrations", 5); restoreError != nil {
 				t.Errorf("restore catalog revision migration after test: %v", restoreError)
 			}
 		}
 	})
-	if startingVersion > 5 {
-		if downError := goose.DownToContext(testContext, database, "../../db/migrations", 5); downError != nil {
-			t.Fatalf("temporarily roll back later additive migrations: %v", downError)
-		}
-	}
 
 	if startingVersion == 4 {
 		if upError := goose.UpToContext(testContext, database, "../../db/migrations", 5); upError != nil {

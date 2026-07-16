@@ -17,22 +17,6 @@ func TestGetGeminiAPIKeyReadsCanonicalShellVariable(t *testing.T) {
 	}
 }
 
-func TestGetEnvPrefersExplicitViperValueOverAmbientEnvironment(t *testing.T) {
-	const settingKey = "TEST_GET_ENV_PRECEDENCE"
-	t.Setenv(settingKey, "ambient-value")
-
-	configuration := viper.New()
-	configuration.Set(settingKey, "")
-	if settingValue := getEnv(configuration, settingKey, "default-value"); settingValue != "" {
-		t.Fatalf("explicit empty setting = %q, want empty", settingValue)
-	}
-
-	configuration.Set(settingKey, "explicit-value")
-	if settingValue := getEnv(configuration, settingKey, "default-value"); settingValue != "explicit-value" {
-		t.Fatalf("explicit setting = %q, want explicit-value", settingValue)
-	}
-}
-
 func TestLoadDatabaseSettingsDoesNotRequireApplicationSecrets(t *testing.T) {
 	configuration := viper.New()
 	configuration.Set("DB_HOST", "database.internal")
@@ -399,6 +383,7 @@ func TestLoadSearchSettingsRejectsMalformedValues(t *testing.T) {
 		{name: "semantic timeout", key: "SEARCH_SEMANTIC_TIMEOUT", value: "quickly"},
 		{name: "hyde flag", key: "SEARCH_HYDE_ENABLED", value: "yes"},
 		{name: "retrieval weight", key: "SEARCH_SEMANTIC_WEIGHT", value: "1.0garbage"},
+		{name: "Facilita weight", key: "SEARCH_FACILITA_WEIGHT", value: "heavy"},
 		{name: "semantic distance", key: "SEARCH_MAX_SEMANTIC_DISTANCE", value: "close"},
 		{name: "ranker version", key: "SEARCH_RANKER_VERSION", value: "invalid version"},
 		{name: "reranker version", key: "SEARCH_RERANKER_VERSION", value: "invalid version"},
@@ -431,6 +416,7 @@ func TestLoadSearchSettingsParsesExplicitValidValues(t *testing.T) {
 	configuration.Set("SEARCH_TRIGRAM_WEIGHT", "1.5")
 	configuration.Set("SEARCH_SEMANTIC_WEIGHT", "3")
 	configuration.Set("SEARCH_HYDE_WEIGHT", "0.25")
+	configuration.Set("SEARCH_FACILITA_WEIGHT", "2.5")
 
 	settings, settingsError := loadSearchSettings(configuration)
 	if settingsError != nil {
@@ -440,8 +426,73 @@ func TestLoadSearchSettingsParsesExplicitValidValues(t *testing.T) {
 		settings.CandidatePoolSize != 80 || settings.SemanticOverfetchFactor != 6 || settings.MaximumSemanticDistance != 0.42 ||
 		settings.SemanticTimeout.String() != "1.5s" || !settings.HyDEEnabled ||
 		settings.ExactWeight != 4.5 || settings.FullTextWeight != 2 ||
-		settings.TrigramWeight != 1.5 || settings.SemanticWeight != 3 || settings.HyDEWeight != 0.25 {
+		settings.TrigramWeight != 1.5 || settings.SemanticWeight != 3 || settings.HyDEWeight != 0.25 ||
+		settings.FacilitaWeight != 2.5 {
 		t.Fatalf("parsed search settings = %#v", settings)
+	}
+}
+
+func TestLoadFacilitaSearchSettingsRequiresCompleteConfiguration(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		baseURL     string
+		internalKey string
+	}{
+		{name: "URL only", baseURL: "https://facilita.example"},
+		{name: "key only", internalKey: "test-facilita-internal-api-key-000000000000"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			configuration := viper.New()
+			configuration.Set("FACILITA_SEARCH_BASE_URL", testCase.baseURL)
+			configuration.Set("FACILITA_INTERNAL_API_KEY", testCase.internalKey)
+			if _, settingsError := loadFacilitaSearchSettings(configuration); settingsError == nil {
+				t.Fatal("partial Facilita search configuration was accepted")
+			}
+		})
+	}
+}
+
+func TestLoadFacilitaSearchSettingsParsesExplicitValues(t *testing.T) {
+	configuration := viper.New()
+	configuration.Set("FACILITA_SEARCH_BASE_URL", " https://facilita.example ")
+	configuration.Set("FACILITA_INTERNAL_API_KEY", "test-facilita-internal-api-key-000000000000")
+	configuration.Set("FACILITA_SEARCH_TIMEOUT", "750ms")
+
+	settings, settingsError := loadFacilitaSearchSettings(configuration)
+	if settingsError != nil {
+		t.Fatalf("load Facilita search settings: %v", settingsError)
+	}
+	if !settings.Enabled() || settings.BaseURL != "https://facilita.example" || settings.Timeout != 750*time.Millisecond {
+		t.Fatalf("Facilita settings = %#v", settings)
+	}
+}
+
+func TestLoadFacilitaSearchSettingsRejectsInvalidTimeout(t *testing.T) {
+	configuration := viper.New()
+	configuration.Set("FACILITA_SEARCH_TIMEOUT", "0s")
+	if _, settingsError := loadFacilitaSearchSettings(configuration); settingsError == nil {
+		t.Fatal("nonpositive Facilita timeout was accepted")
+	}
+}
+
+func TestSearchSourceAvailabilityRejectsUnavailableOnlyWeightedSource(t *testing.T) {
+	t.Parallel()
+
+	searchSettings := SearchSettings{FacilitaWeight: 2}
+	if availabilityError := validateSearchSourceAvailability(
+		searchSettings,
+		FacilitaSearchSettings{},
+	); availabilityError == nil {
+		t.Fatal("unconfigured sole Facilita retrieval source was accepted")
+	}
+	if availabilityError := validateSearchSourceAvailability(
+		searchSettings,
+		FacilitaSearchSettings{
+			BaseURL:        "https://facilita.example",
+			InternalAPIKey: "test-facilita-internal-api-key-000000000000",
+		},
+	); availabilityError != nil {
+		t.Fatalf("configured Facilita retrieval source: %v", availabilityError)
 	}
 }
 

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -117,6 +118,28 @@ func TestRankedSearchOptionsApplyBoundedDefaults(t *testing.T) {
 	}
 }
 
+func TestRankedSearchOptionsNormalizeFacilitaCandidates(t *testing.T) {
+	t.Parallel()
+
+	normalizedOptions := (RankedSearchOptions{
+		CandidatePoolSize: 2,
+		FacilitaCandidates: []RankedServiceCandidate{
+			{Slug: " IPTU ", Rank: 4},
+			{Slug: "iptu", Rank: 1},
+			{Slug: "cartao-familia-carioca", Rank: 2},
+			{Slug: "invalid/path", Rank: 3},
+			{Slug: "ignored", Rank: 0},
+		},
+	}).normalized()
+	wantedCandidates := []RankedServiceCandidate{
+		{Slug: "iptu", Rank: 1},
+		{Slug: "cartao-familia-carioca", Rank: 2},
+	}
+	if !reflect.DeepEqual(normalizedOptions.FacilitaCandidates, wantedCandidates) {
+		t.Fatalf("normalized candidates = %#v, want %#v", normalizedOptions.FacilitaCandidates, wantedCandidates)
+	}
+}
+
 func TestBuildRankedSearchQueryAppliesSemanticDistanceBeforeFusion(t *testing.T) {
 	t.Parallel()
 
@@ -148,6 +171,9 @@ func TestBuildRankedSearchQueryLimitsAndFusesCanonicalEntities(t *testing.T) {
 		"trigram_entity_best_alias",
 		"semantic_entity_best_alias",
 		"hyde_entity_best_alias",
+		"facilita_entity_best_alias",
+		"FROM unnest($19::text[], $20::integer[])",
+		"'facilita', $21::double precision",
 		"GROUP BY canonical_entity_key",
 		"WHERE candidate_rank <= $10",
 		"WHERE fused_rank <= $10",
@@ -174,8 +200,8 @@ func TestBuildRankedSearchQueryMatchesDistinctOnCollationToInitialOrderBy(t *tes
 	if distinctAliasCount := strings.Count(
 		queryStatement,
 		`SELECT DISTINCT ON (canonical_entity_key COLLATE "C")`,
-	); distinctAliasCount != 5 {
-		t.Fatalf("collated alias DISTINCT ON count = %d, want 5:\n%s", distinctAliasCount, queryStatement)
+	); distinctAliasCount != 6 {
+		t.Fatalf("collated alias DISTINCT ON count = %d, want 6:\n%s", distinctAliasCount, queryStatement)
 	}
 	if !strings.Contains(
 		queryStatement,

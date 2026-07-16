@@ -43,10 +43,6 @@ migrate-create NAME:
 test:
     go test ./... -v -race -coverprofile=coverage.out
 
-# Run all tests against isolated PostgreSQL and Redis containers
-test-integration:
-    bash scripts/test-integration.sh
-
 # Format code
 fmt:
     go fmt ./...

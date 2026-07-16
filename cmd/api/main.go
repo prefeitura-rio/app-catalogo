@@ -203,6 +203,20 @@ func main() {
 		log.Info().Str("url", cfg.Reranker.URL).Msg("reranker cross-encoder ativado")
 	}
 
+	var facilitaSearchClient *clients.FacilitaSearchClient
+	if cfg.Facilita.Enabled() {
+		configuredFacilitaClient, facilitaClientError := clients.NewFacilitaSearchClient(
+			cfg.Facilita.BaseURL,
+			cfg.Facilita.InternalAPIKey,
+			cfg.Facilita.Timeout,
+		)
+		if facilitaClientError != nil {
+			log.Fatal().Err(facilitaClientError).Msg("failed to configure Facilita search candidates")
+		}
+		facilitaSearchClient = configuredFacilitaClient
+		log.Info().Msg("Facilita service candidates enabled")
+	}
+
 	// Serviços
 	searchSvc := services.NewSearchService(
 		searchRepo,
@@ -224,8 +238,10 @@ func main() {
 				Trigram:  cfg.Search.TrigramWeight,
 				Semantic: cfg.Search.SemanticWeight,
 				HyDE:     cfg.Search.HyDEWeight,
+				Facilita: cfg.Search.FacilitaWeight,
 			},
 		},
+		facilitaSearchClient,
 	)
 	citizenSvc := services.NewCitizenProfileService(
 		rmiClient,
