@@ -168,6 +168,9 @@ def require_generated_search_contract:
       and (($document.components.schemas["models.ItemType"] | type) == "object")
       and (($document.components.schemas["models.SearchResponse"] | type) == "object")
       and (($document.components.schemas["models.SearchRankerDescriptor"] | type) == "object")
+      and (($document.components.schemas["models.SearchSources"] | type) == "object")
+      and (($document.components.schemas["models.SearchSourceDiagnostic"] | type) == "object")
+      and (($document.components.schemas["models.SearchExternalRetrieverDescriptor"] | type) == "object")
       and (($document.components.schemas["models.SearchPipeline"] | type) == "object")
       and (($document.components.schemas["models.SearchFacets"] | type) == "object")
       and (($document.components.schemas["models.SearchFacetValue"] | type) == "object")
@@ -497,7 +500,8 @@ require_generated_search_contract
     "full_text",
     "trigram",
     "semantic",
-    "hyde"
+    "hyde",
+    "facilita"
   ]
 | .components.schemas["models.SearchRetrievalWeights"].additionalProperties = false
 | .components.schemas["models.EmbeddingMetadata"].required = [
@@ -531,6 +535,43 @@ require_generated_search_contract
     "exclusiveMinimum": true,
     "maximum": 2
   }
+| .components.schemas["models.SearchSources"].required = ["facilita"]
+| .components.schemas["models.SearchSources"].additionalProperties = false
+| .components.schemas["models.SearchSourceDiagnostic"].required = [
+    "status",
+    "latency_ms",
+    "candidates_received",
+    "eligible_contributions"
+  ]
+| .components.schemas["models.SearchSourceDiagnostic"].additionalProperties = false
+| .components.schemas["models.SearchSourceDiagnostic"].properties.latency_ms += {
+    "minimum": 0
+  }
+| .components.schemas["models.SearchSourceDiagnostic"].properties.candidates_received += {
+    "minimum": 0,
+    "maximum": 50
+  }
+| .components.schemas["models.SearchSourceDiagnostic"].properties.eligible_contributions += {
+    "minimum": 0,
+    "maximum": 50
+  }
+| .components.schemas["models.SearchExternalRetrieverDescriptor"].required = [
+    "schema_version",
+    "catalog_revision",
+    "retrieval_version",
+    "query_expansion_version",
+    "ranker_version"
+  ]
+| .components.schemas["models.SearchExternalRetrieverDescriptor"].additionalProperties = false
+| .components.schemas["models.SearchExternalRetrieverDescriptor"].properties.schema_version |= bounded_non_blank_text(128)
+| .components.schemas["models.SearchExternalRetrieverDescriptor"].properties.catalog_revision += {
+    "minLength": 71,
+    "maxLength": 71,
+    "pattern": "^sha256:[0-9a-f]{64}$"
+  }
+| .components.schemas["models.SearchExternalRetrieverDescriptor"].properties.retrieval_version |= bounded_non_blank_text(128)
+| .components.schemas["models.SearchExternalRetrieverDescriptor"].properties.query_expansion_version |= bounded_non_blank_text(128)
+| .components.schemas["models.SearchExternalRetrieverDescriptor"].properties.ranker_version |= bounded_non_blank_text(128)
 | .components.schemas["models.SearchItem"].required = [
     "id",
     "canonical_id",
@@ -563,6 +604,7 @@ require_generated_search_contract
     "catalog_revision",
     "effective_pipeline",
     "degraded",
+    "sources",
     "total",
     "page",
     "per_page",

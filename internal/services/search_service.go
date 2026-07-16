@@ -257,6 +257,7 @@ func buildRankerDescriptor(
 			Trigram:  normalizedConfig.Weights.Trigram,
 			Semantic: normalizedConfig.Weights.Semantic,
 			HyDE:     normalizedConfig.Weights.HyDE,
+			Facilita: 0,
 		},
 		SemanticEnabled: semanticClient != nil && normalizedConfig.Weights.Semantic > 0,
 		HyDEEnabled: normalizedConfig.HyDEEnabled && semanticClient != nil &&
@@ -309,6 +310,7 @@ type searchExecution struct {
 	pipeline        models.SearchPipeline
 	degraded        bool
 	snapshotVersion repository.CatalogSnapshotVersion
+	facilita        models.SearchSourceDiagnostic
 }
 
 type rankedSearchSnapshot struct {
@@ -317,6 +319,7 @@ type rankedSearchSnapshot struct {
 	CatalogRevision   string                        `json:"catalog_revision"`
 	EffectivePipeline models.SearchPipeline         `json:"effective_pipeline"`
 	Degraded          bool                          `json:"degraded"`
+	Sources           models.SearchSources          `json:"sources"`
 	Total             int                           `json:"total"`
 	Facets            models.SearchFacets           `json:"facets"`
 	Items             []*models.SearchItem          `json:"items"`
@@ -326,6 +329,17 @@ type rankedSearchOutcome struct {
 	snapshot        *rankedSearchSnapshot
 	snapshotVersion repository.CatalogSnapshotVersion
 	cacheHit        bool
+}
+
+func notApplicableFacilitaDiagnostic() models.SearchSourceDiagnostic {
+	return models.SearchSourceDiagnostic{Status: models.SearchSourceStatusNotApplicable}
+}
+
+func validFacilitaDiagnostic(
+	diagnostic models.SearchSourceDiagnostic,
+	descriptor *models.SearchExternalRetrieverDescriptor,
+) bool {
+	return diagnostic == notApplicableFacilitaDiagnostic() && descriptor == nil
 }
 
 // Search executes a bounded multi-stage pipeline and paginates only after all
@@ -603,6 +617,7 @@ func (service *SearchService) executeRankedSearchSnapshot(
 			"catalog_revision_changed",
 		).Inc()
 	}
+	execution.facilita = notApplicableFacilitaDiagnostic()
 	executionDescriptor := service.RankerDescriptor()
 
 	rankedSnapshot := &rankedSearchSnapshot{
@@ -611,6 +626,7 @@ func (service *SearchService) executeRankedSearchSnapshot(
 		CatalogRevision:   catalogRevision,
 		EffectivePipeline: execution.pipeline,
 		Degraded:          execution.degraded,
+		Sources:           models.SearchSources{Facilita: execution.facilita},
 		Total:             len(searchResults),
 		Facets:            searchFacets,
 		Items:             buildSearchItems(searchResults),
@@ -645,6 +661,7 @@ func (snapshot *rankedSearchSnapshot) responsePage(
 		CatalogRevision:   snapshot.CatalogRevision,
 		EffectivePipeline: snapshot.EffectivePipeline,
 		Degraded:          snapshot.Degraded,
+		Sources:           snapshot.Sources,
 		Total:             snapshot.Total,
 		Page:              searchRequest.Page,
 		PerPage:           searchRequest.PerPage,
@@ -1081,12 +1098,16 @@ func (service *SearchService) buildResponse(
 	catalogRevision string,
 	searchFacets models.SearchFacets,
 ) *models.SearchResponse {
+	if !execution.facilita.Status.Valid() {
+		execution.facilita = notApplicableFacilitaDiagnostic()
+	}
 	return &models.SearchResponse{
 		RankerVersion:     service.RankerVersion(),
 		RankerDescriptor:  service.RankerDescriptor(),
 		CatalogRevision:   catalogRevision,
 		EffectivePipeline: execution.pipeline,
 		Degraded:          execution.degraded,
+		Sources:           models.SearchSources{Facilita: execution.facilita},
 		Total:             totalCandidates,
 		Page:              searchRequest.Page,
 		PerPage:           searchRequest.PerPage,
@@ -1350,6 +1371,10 @@ func (service *SearchService) getCachedResponse(
 		if cachedResponse.Degraded || !cachedResponse.EffectivePipeline.Valid() ||
 			cachedResponse.RankerVersion != service.RankerVersion() ||
 			cachedResponse.RankerDescriptor.SchemaVersion == "" ||
+			!validFacilitaDiagnostic(
+				cachedResponse.Sources.Facilita,
+				cachedResponse.RankerDescriptor.Facilita,
+			) ||
 			cachedResponse.Facets.Version != models.SearchFacetVersion ||
 			!cachedResponse.Facets.Scope.Valid() ||
 			cachedResponse.Facets.Types == nil ||
@@ -1389,6 +1414,10 @@ func (service *SearchService) getCachedRankedSnapshot(
 			cachedSnapshot.Degraded || !cachedSnapshot.EffectivePipeline.Valid() ||
 			cachedSnapshot.RankerVersion != expectedRankerVersion ||
 			cachedSnapshot.RankerDescriptor.SchemaVersion == "" ||
+			!validFacilitaDiagnostic(
+				cachedSnapshot.Sources.Facilita,
+				cachedSnapshot.RankerDescriptor.Facilita,
+			) ||
 			cachedSnapshot.Facets.Version != models.SearchFacetVersion ||
 			!cachedSnapshot.Facets.Scope.Valid() ||
 			cachedSnapshot.Facets.Types == nil ||

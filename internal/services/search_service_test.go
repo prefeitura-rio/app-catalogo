@@ -258,6 +258,10 @@ func TestSearchSeparatesExpansionAndPaginatesAfterFusion(t *testing.T) {
 	if searchResponse.CatalogRevision != unversionedComponent || searchResponse.RankerDescriptor.RetrievalVersion != repository.RetrievalVersion {
 		t.Fatalf("response provenance = %+v", searchResponse)
 	}
+	if searchResponse.Sources.Facilita != notApplicableFacilitaDiagnostic() ||
+		searchResponse.RankerDescriptor.Facilita != nil {
+		t.Fatalf("retired Facilita compatibility marker = %+v", searchResponse)
+	}
 }
 
 func TestRankerVersionFingerprintsConfiguredComponents(t *testing.T) {
@@ -621,11 +625,11 @@ func TestRankerDescriptorFingerprintCrossLanguageGolden(t *testing.T) {
 	if marshalError != nil {
 		t.Fatalf("marshal descriptor: %v", marshalError)
 	}
-	expectedJSON := `{"schema_version":"search-ranker-v1","base_version":"hybrid-v3","retrieval_version":"postgres-canonical-weighted-rrf-v3","query_expansion_version":"pt-br-synonyms-v1","deduplication_version":"canonical-entity-v2","candidate_pool_size":100,"semantic_overfetch_factor":4,"trigram_threshold":0.25,"maximum_semantic_distance":1,"reciprocal_rank_k":60,"weights":{"exact":4,"full_text":3,"trigram":2,"semantic":1,"hyde":0.5},"semantic_enabled":true,"embedding":{"model":"gemini-embedding-001","version":"001","dimensions":1536,"document_task_type":"RETRIEVAL_DOCUMENT","query_task_type":"RETRIEVAL_QUERY","document_version":"catalog-item-v1"},"hyde_enabled":true,"hyde_model":"gemini-3.1-flash-lite","hyde_prompt_version":"rio-public-service-hyde-v2","hyde_prompt_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","hyde_temperature":0,"hyde_seed":42,"hyde_candidate_count":1,"hyde_max_output_tokens":150,"hyde_response_mime_type":"text/plain","hyde_determinism_policy":"best-effort-seed","reranker_enabled":false}`
+	expectedJSON := `{"schema_version":"search-ranker-v1","base_version":"hybrid-v3","retrieval_version":"postgres-canonical-weighted-rrf-v3","query_expansion_version":"pt-br-synonyms-v1","deduplication_version":"canonical-entity-v2","candidate_pool_size":100,"semantic_overfetch_factor":4,"trigram_threshold":0.25,"maximum_semantic_distance":1,"reciprocal_rank_k":60,"weights":{"exact":4,"full_text":3,"trigram":2,"semantic":1,"hyde":0.5,"facilita":0},"semantic_enabled":true,"embedding":{"model":"gemini-embedding-001","version":"001","dimensions":1536,"document_task_type":"RETRIEVAL_DOCUMENT","query_task_type":"RETRIEVAL_QUERY","document_version":"catalog-item-v1"},"hyde_enabled":true,"hyde_model":"gemini-3.1-flash-lite","hyde_prompt_version":"rio-public-service-hyde-v2","hyde_prompt_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","hyde_temperature":0,"hyde_seed":42,"hyde_candidate_count":1,"hyde_max_output_tokens":150,"hyde_response_mime_type":"text/plain","hyde_determinism_policy":"best-effort-seed","reranker_enabled":false}`
 	if string(serializedDescriptor) != expectedJSON {
 		t.Fatalf("descriptor JSON = %s, want %s", serializedDescriptor, expectedJSON)
 	}
-	if rankerVersion := buildRankerVersion(descriptor); rankerVersion != "hybrid-v3-7b3b6c0d344b" {
+	if rankerVersion := buildRankerVersion(descriptor); rankerVersion != "hybrid-v3-d462586224a2" {
 		t.Fatalf("ranker version = %q", rankerVersion)
 	}
 }

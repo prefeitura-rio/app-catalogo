@@ -323,6 +323,60 @@ type SearchRetrievalWeights struct {
 	Trigram  float64 `json:"trigram"`
 	Semantic float64 `json:"semantic"`
 	HyDE     float64 `json:"hyde"`
+	Facilita float64 `json:"facilita"`
+}
+
+// SearchSourceStatus is the bounded outcome of one optional candidate source.
+type SearchSourceStatus string
+
+const (
+	SearchSourceStatusNotApplicable SearchSourceStatus = "not_applicable"
+	SearchSourceStatusUnavailable   SearchSourceStatus = "unavailable"
+	SearchSourceStatusNoEffect      SearchSourceStatus = "no_effect"
+	SearchSourceStatusApplied       SearchSourceStatus = "applied"
+)
+
+func (sourceStatus SearchSourceStatus) Valid() bool {
+	switch sourceStatus {
+	case SearchSourceStatusNotApplicable, SearchSourceStatusUnavailable, SearchSourceStatusNoEffect, SearchSourceStatusApplied:
+		return true
+	default:
+		return false
+	}
+}
+
+// SearchSourceFailure classifies bounded external failures without exposing details.
+type SearchSourceFailure string
+
+const (
+	SearchSourceFailureTimeout         SearchSourceFailure = "timeout"
+	SearchSourceFailureTransport       SearchSourceFailure = "transport"
+	SearchSourceFailureRejected        SearchSourceFailure = "rejected"
+	SearchSourceFailureInvalidContract SearchSourceFailure = "invalid_contract"
+)
+
+// SearchExternalRetrieverDescriptor identifies the exact remote ranking inputs.
+type SearchExternalRetrieverDescriptor struct {
+	SchemaVersion         string `json:"schema_version"`
+	CatalogRevision       string `json:"catalog_revision"`
+	RetrievalVersion      string `json:"retrieval_version"`
+	QueryExpansionVersion string `json:"query_expansion_version"`
+	RankerVersion         string `json:"ranker_version"`
+}
+
+// SearchSourceDiagnostic reports a bounded, query-free source outcome.
+type SearchSourceDiagnostic struct {
+	Status                SearchSourceStatus                 `json:"status" enums:"not_applicable,unavailable,no_effect,applied"`
+	Failure               SearchSourceFailure                `json:"failure,omitempty" enums:"timeout,transport,rejected,invalid_contract"`
+	Provenance            *SearchExternalRetrieverDescriptor `json:"provenance,omitempty"`
+	LatencyMilliseconds   int64                              `json:"latency_ms"`
+	CandidatesReceived    int                                `json:"candidates_received"`
+	EligibleContributions int                                `json:"eligible_contributions"`
+}
+
+// SearchSources contains diagnostics for every optional candidate authority.
+type SearchSources struct {
+	Facilita SearchSourceDiagnostic `json:"facilita"`
 }
 
 // HyDEGenerationMetadata is the immutable non-secret generation contract used
@@ -343,32 +397,33 @@ type HyDEGenerationMetadata struct {
 // can change retrieval or final ordering. It is safe to expose publicly and
 // must never contain provider credentials or internal URLs.
 type SearchRankerDescriptor struct {
-	SchemaVersion           string                 `json:"schema_version"`
-	BaseVersion             string                 `json:"base_version"`
-	RetrievalVersion        string                 `json:"retrieval_version"`
-	QueryExpansionVersion   string                 `json:"query_expansion_version"`
-	DeduplicationVersion    string                 `json:"deduplication_version"`
-	CandidatePoolSize       int                    `json:"candidate_pool_size"`
-	SemanticOverfetchFactor int                    `json:"semantic_overfetch_factor"`
-	TrigramThreshold        float64                `json:"trigram_threshold"`
-	MaximumSemanticDistance float64                `json:"maximum_semantic_distance"`
-	ReciprocalRankK         float64                `json:"reciprocal_rank_k"`
-	Weights                 SearchRetrievalWeights `json:"weights"`
-	SemanticEnabled         bool                   `json:"semantic_enabled"`
-	Embedding               *EmbeddingMetadata     `json:"embedding,omitempty"`
-	HyDEEnabled             bool                   `json:"hyde_enabled"`
-	HyDEModel               string                 `json:"hyde_model,omitempty"`
-	HyDEPromptVersion       string                 `json:"hyde_prompt_version,omitempty"`
-	HyDEPromptSHA256        string                 `json:"hyde_prompt_sha256,omitempty"`
-	HyDETemperature         *float32               `json:"hyde_temperature,omitempty"`
-	HyDESeed                *int32                 `json:"hyde_seed,omitempty"`
-	HyDECandidateCount      *int32                 `json:"hyde_candidate_count,omitempty"`
-	HyDEMaxOutputTokens     *int32                 `json:"hyde_max_output_tokens,omitempty"`
-	HyDEResponseMIMEType    string                 `json:"hyde_response_mime_type,omitempty"`
-	HyDEDeterminismPolicy   string                 `json:"hyde_determinism_policy,omitempty"`
-	RerankerEnabled         bool                   `json:"reranker_enabled"`
-	RerankerVersion         string                 `json:"reranker_version,omitempty"`
-	RerankerCandidateLimit  int                    `json:"reranker_candidate_limit,omitempty"`
+	SchemaVersion           string                             `json:"schema_version"`
+	BaseVersion             string                             `json:"base_version"`
+	RetrievalVersion        string                             `json:"retrieval_version"`
+	QueryExpansionVersion   string                             `json:"query_expansion_version"`
+	DeduplicationVersion    string                             `json:"deduplication_version"`
+	CandidatePoolSize       int                                `json:"candidate_pool_size"`
+	SemanticOverfetchFactor int                                `json:"semantic_overfetch_factor"`
+	TrigramThreshold        float64                            `json:"trigram_threshold"`
+	MaximumSemanticDistance float64                            `json:"maximum_semantic_distance"`
+	ReciprocalRankK         float64                            `json:"reciprocal_rank_k"`
+	Weights                 SearchRetrievalWeights             `json:"weights"`
+	SemanticEnabled         bool                               `json:"semantic_enabled"`
+	Embedding               *EmbeddingMetadata                 `json:"embedding,omitempty"`
+	HyDEEnabled             bool                               `json:"hyde_enabled"`
+	HyDEModel               string                             `json:"hyde_model,omitempty"`
+	HyDEPromptVersion       string                             `json:"hyde_prompt_version,omitempty"`
+	HyDEPromptSHA256        string                             `json:"hyde_prompt_sha256,omitempty"`
+	HyDETemperature         *float32                           `json:"hyde_temperature,omitempty"`
+	HyDESeed                *int32                             `json:"hyde_seed,omitempty"`
+	HyDECandidateCount      *int32                             `json:"hyde_candidate_count,omitempty"`
+	HyDEMaxOutputTokens     *int32                             `json:"hyde_max_output_tokens,omitempty"`
+	HyDEResponseMIMEType    string                             `json:"hyde_response_mime_type,omitempty"`
+	HyDEDeterminismPolicy   string                             `json:"hyde_determinism_policy,omitempty"`
+	RerankerEnabled         bool                               `json:"reranker_enabled"`
+	RerankerVersion         string                             `json:"reranker_version,omitempty"`
+	RerankerCandidateLimit  int                                `json:"reranker_candidate_limit,omitempty"`
+	Facilita                *SearchExternalRetrieverDescriptor `json:"facilita,omitempty"`
 }
 
 // SearchFacetScope makes the population behind facet counts explicit.
@@ -408,6 +463,7 @@ type SearchResponse struct {
 	CatalogRevision   string                 `json:"catalog_revision"`
 	EffectivePipeline SearchPipeline         `json:"effective_pipeline"`
 	Degraded          bool                   `json:"degraded"`
+	Sources           SearchSources          `json:"sources"`
 	Total             int                    `json:"total"`
 	Page              int                    `json:"page"`
 	PerPage           int                    `json:"per_page"`

@@ -969,6 +969,49 @@
         "type": "object",
         "additionalProperties": false
       },
+      "models.SearchExternalRetrieverDescriptor": {
+        "properties": {
+          "catalog_revision": {
+            "type": "string",
+            "minLength": 71,
+            "maxLength": 71,
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          },
+          "query_expansion_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "\\S"
+          },
+          "ranker_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "\\S"
+          },
+          "retrieval_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "\\S"
+          },
+          "schema_version": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "\\S"
+          }
+        },
+        "required": [
+          "schema_version",
+          "catalog_revision",
+          "retrieval_version",
+          "query_expansion_version",
+          "ranker_version"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
       "models.SearchFacetScope": {
         "enum": [
           "catalog_matches",
@@ -1225,6 +1268,9 @@
           "embedding": {
             "$ref": "#/components/schemas/models.EmbeddingMetadata"
           },
+          "facilita": {
+            "$ref": "#/components/schemas/models.SearchExternalRetrieverDescriptor"
+          },
           "hyde_candidate_count": {
             "type": "integer"
           },
@@ -1438,6 +1484,9 @@
             "type": "string",
             "format": "uuid"
           },
+          "sources": {
+            "$ref": "#/components/schemas/models.SearchSources"
+          },
           "total": {
             "type": "integer",
             "description": "Total canonical entities in the declared browse or retrieval population before pagination."
@@ -1450,6 +1499,7 @@
           "catalog_revision",
           "effective_pipeline",
           "degraded",
+          "sources",
           "total",
           "page",
           "per_page",
@@ -1462,6 +1512,9 @@
       "models.SearchRetrievalWeights": {
         "properties": {
           "exact": {
+            "type": "number"
+          },
+          "facilita": {
             "type": "number"
           },
           "full_text": {
@@ -1482,7 +1535,105 @@
           "full_text",
           "trigram",
           "semantic",
-          "hyde"
+          "hyde",
+          "facilita"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "models.SearchSourceDiagnostic": {
+        "properties": {
+          "candidates_received": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 50
+          },
+          "eligible_contributions": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 50
+          },
+          "failure": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/models.SearchSourceFailure"
+              }
+            ],
+            "enum": [
+              "timeout",
+              "transport",
+              "rejected",
+              "invalid_contract"
+            ]
+          },
+          "latency_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/models.SearchExternalRetrieverDescriptor"
+          },
+          "status": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/models.SearchSourceStatus"
+              }
+            ],
+            "enum": [
+              "not_applicable",
+              "unavailable",
+              "no_effect",
+              "applied"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "latency_ms",
+          "candidates_received",
+          "eligible_contributions"
+        ],
+        "type": "object",
+        "additionalProperties": false
+      },
+      "models.SearchSourceFailure": {
+        "enum": [
+          "timeout",
+          "transport",
+          "rejected",
+          "invalid_contract"
+        ],
+        "type": "string",
+        "x-enum-varnames": [
+          "SearchSourceFailureTimeout",
+          "SearchSourceFailureTransport",
+          "SearchSourceFailureRejected",
+          "SearchSourceFailureInvalidContract"
+        ]
+      },
+      "models.SearchSourceStatus": {
+        "enum": [
+          "not_applicable",
+          "unavailable",
+          "no_effect",
+          "applied"
+        ],
+        "type": "string",
+        "x-enum-varnames": [
+          "SearchSourceStatusNotApplicable",
+          "SearchSourceStatusUnavailable",
+          "SearchSourceStatusNoEffect",
+          "SearchSourceStatusApplied"
+        ]
+      },
+      "models.SearchSources": {
+        "properties": {
+          "facilita": {
+            "$ref": "#/components/schemas/models.SearchSourceDiagnostic"
+          }
+        },
+        "required": [
+          "facilita"
         ],
         "type": "object",
         "additionalProperties": false
