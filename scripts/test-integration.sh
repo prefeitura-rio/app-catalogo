@@ -54,7 +54,7 @@ export APP_CATALOGO_RATE_LIMIT_TEST_REDIS_ADDR="127.0.0.1:${redis_port}"
 go run cmd/migrate/main.go up
 
 export APP_CATALOGO_MIGRATION_TEST_DATABASE_URL="${test_database_url}"
-go test ./internal/repository -run '^Test(CatalogRevision|ServiceSlugAlias|ServiceIntelligence)MigrationRoundTrip$' -count=1 -v
+go test ./internal/repository -run '^Test(CatalogRevision|ServiceSlugAlias)MigrationRoundTrip$' -count=1 -v
 unset APP_CATALOGO_MIGRATION_TEST_DATABASE_URL
 
 go test ./... -count=1 -v -race -coverprofile=coverage.out -timeout 2m

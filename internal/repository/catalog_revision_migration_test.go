@@ -19,7 +19,7 @@ import (
 )
 
 const catalogRevisionMigrationPath = "../../db/migrations/000005_catalog_revision.sql"
-const latestCatalogMigrationVersion = 7
+const latestCatalogMigrationVersion = 6
 
 const catalogMigrationTestDatabaseURLVariable = "APP_CATALOGO_MIGRATION_TEST_DATABASE_URL"
 

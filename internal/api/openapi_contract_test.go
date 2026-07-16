@@ -25,11 +25,6 @@ const (
 	generatedPublicServiceListReference    = "#/components/schemas/models.PublicServiceListResponse"
 	generatedServiceCategoriesReference    = "#/components/schemas/models.PublicServiceCategoryResponse"
 	generatedServiceSubcategoriesReference = "#/components/schemas/models.PublicServiceSubcategoryResponse"
-	generatedSuggestionRequestReference    = "#/components/schemas/models.PublicSuggestionRequest"
-	generatedSuggestionResponseReference   = "#/components/schemas/models.PublicSuggestionResponse"
-	generatedServiceRelationsReference     = "#/components/schemas/models.PublicServiceRelationsResponse"
-	generatedSummaryRequestReference       = "#/components/schemas/models.SearchSummaryRequest"
-	generatedSummaryResponseReference      = "#/components/schemas/models.SearchSummaryResponse"
 	generatedNonBlankPattern               = `\S`
 	generatedCatalogHTTPURLPattern         = `^[Hh][Tt][Tt][Pp][Ss]?://[^/?#@\s]+($|[/?#]($|.*\S$))`
 	generatedSalesForceSignaturePattern    = `^[0-9A-Fa-f]{64}$`
@@ -138,7 +133,6 @@ func TestGeneratedOpenAPIContract(t *testing.T) {
 	assertGeneratedMetricsContract(t, contract.Paths["/metrics"])
 	assertGeneratedRecommendationOperations(t, contract.Paths, contract.Components.Schemas)
 	assertGeneratedPublicServiceOperations(t, contract.Paths)
-	assertGeneratedServiceIntelligenceOperations(t, contract)
 	assertGeneratedSyncStatusContract(t, contract.Paths["/api/v1/admin/sync/status"], contract.Components.Schemas)
 	assertGeneratedSalesForceWebhookContract(
 		t,
@@ -257,84 +251,16 @@ func assertGeneratedPublicServiceOperations(t *testing.T, paths map[string]gener
 	}
 }
 
-func assertGeneratedServiceIntelligenceOperations(t *testing.T, contract generatedOpenAPIDocument) {
-	t.Helper()
-	relationsOperation := contract.Paths["/api/public/services/{slug}/relations"].Get
-	if actualStatuses := sortedGeneratedOpenAPIKeys(relationsOperation.Responses); !slices.Equal(
-		actualStatuses, []string{"200", "308", "400", "404", "500"},
-	) {
-		t.Fatalf("public relations response statuses = %v", actualStatuses)
-	}
-	if responseReference := relationsOperation.Responses["200"].Content["application/json"].Schema.Reference; responseReference != generatedServiceRelationsReference {
-		t.Fatalf("public relations response schema = %q", responseReference)
-	}
-
-	for _, operationExpectation := range []struct {
-		path              string
-		requestReference  string
-		responseReference string
-		statuses          []string
-		maximumBodyBytes  int64
-	}{
-		{
-			path: "/api/public/suggest", requestReference: generatedSuggestionRequestReference,
-			responseReference: generatedSuggestionResponseReference,
-			statuses:          []string{"200", "400", "413", "415", "500"}, maximumBodyBytes: 4096,
-		},
-		{
-			path: "/api/public/search-summary", requestReference: generatedSummaryRequestReference,
-			responseReference: generatedSummaryResponseReference,
-			statuses:          []string{"200", "400", "409", "413", "415", "500", "504"}, maximumBodyBytes: 16384,
-		},
-	} {
-		operation := contract.Paths[operationExpectation.path].Post
-		if actualStatuses := sortedGeneratedOpenAPIKeys(operation.Responses); !slices.Equal(actualStatuses, operationExpectation.statuses) {
-			t.Fatalf("%s response statuses = %v, want %v", operationExpectation.path, actualStatuses, operationExpectation.statuses)
-		}
-		mediaType := operation.RequestBody.Content["application/json"]
-		if !operation.RequestBody.Required || mediaType.Schema.Reference != operationExpectation.requestReference ||
-			operation.RequestBody.MaximumBodyBytes == nil || *operation.RequestBody.MaximumBodyBytes != operationExpectation.maximumBodyBytes {
-			t.Fatalf("%s request contract = %+v", operationExpectation.path, operation.RequestBody)
-		}
-		if responseReference := operation.Responses["200"].Content["application/json"].Schema.Reference; responseReference != operationExpectation.responseReference {
-			t.Fatalf("%s response schema = %q", operationExpectation.path, responseReference)
-		}
-	}
-
-	assertGeneratedSchemaContract(
-		t, "models.PublicSuggestionRequest", contract.Components.Schemas["models.PublicSuggestionRequest"],
-		[]string{"query"}, nil,
-	)
-	suggestionQuery := contract.Components.Schemas["models.PublicSuggestionRequest"].Properties["query"]
-	if suggestionQuery.MaximumText == nil || *suggestionQuery.MaximumText != models.MaximumPublicSuggestionQueryRunes {
-		t.Fatalf("suggestion query bound = %+v", suggestionQuery)
-	}
-	summaryRequest := contract.Components.Schemas["models.SearchSummaryRequest"]
-	assertGeneratedSchemaContract(
-		t, "models.SearchSummaryRequest", summaryRequest,
-		[]string{"candidate_ids", "catalog_revision", "query"}, nil,
-	)
-	candidateIDs := summaryRequest.Properties["candidate_ids"]
-	if candidateIDs.MinimumItems == nil || *candidateIDs.MinimumItems != 1 ||
-		candidateIDs.MaximumItems == nil || *candidateIDs.MaximumItems != models.MaximumSearchSummaryCandidates ||
-		!candidateIDs.UniqueItems || candidateIDs.Items == nil || candidateIDs.Items.Format != "uuid" {
-		t.Fatalf("summary candidate ID contract = %+v", candidateIDs)
-	}
-}
-
 func assertGeneratedPathParity(t *testing.T, paths map[string]generatedOpenAPIPath) {
 	t.Helper()
 	expectedMethods := map[string][]string{
 		"/api/public/catalog/{id}":                                {"GET"},
 		"/api/public/recommendations":                             {"GET"},
 		"/api/public/search":                                      {"GET", "POST"},
-		"/api/public/search-summary":                              {"POST"},
 		"/api/public/service-categories":                          {"GET"},
 		"/api/public/service-categories/{category}/subcategories": {"GET"},
 		"/api/public/services":                                    {"GET"},
 		"/api/public/services/{slug}":                             {"GET"},
-		"/api/public/services/{slug}/relations":                   {"GET"},
-		"/api/public/suggest":                                     {"POST"},
 		"/api/v1/admin/sync/status":                               {"GET"},
 		"/api/v1/admin/sync/trigger":                              {"POST"},
 		"/api/v1/catalog/{id}":                                    {"GET"},

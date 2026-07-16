@@ -22,16 +22,13 @@ const (
 	defaultPublicServicePerPage = 20
 	maximumPublicServicePerPage = 100
 	maximumPublicCategoryRunes  = 500
-	maximumSuggestionBodyBytes  = 4 << 10
 )
 
 type publicServiceRepository interface {
 	GetPublicServiceBySlug(context.Context, string) (*repository.PublicServiceResolution, error)
-	GetPublicServiceRelations(context.Context, string, int) (*repository.PublicServiceRelationsSnapshot, error)
 	ListPublicServiceCategories(context.Context) (*repository.PublicServiceCategorySnapshot, error)
 	ListPublicServiceSubcategories(context.Context, string) (*repository.PublicServiceSubcategorySnapshot, error)
 	ListPublicServices(context.Context, string, string, int, int) (*repository.PublicServiceListSnapshot, error)
-	SuggestPublicServices(context.Context, string, int) ([]models.PublicServiceSuggestion, error)
 }
 
 type CatalogHandler struct {
@@ -40,91 +37,6 @@ type CatalogHandler struct {
 
 func NewCatalogHandler(catalogRepository publicServiceRepository) *CatalogHandler {
 	return &CatalogHandler{repository: catalogRepository}
-}
-
-// SuggestPublicServices godoc
-// @Summary      Public service typeahead
-// @Description  Returns deterministic, accent-insensitive suggestions from the authoritative active catalog.
-// @Tags         catálogo
-// @Accept       json
-// @Produce      json
-// @Param        request  body  models.PublicSuggestionRequest  true  "Suggestion query"
-// @Success      200  {object}  models.PublicSuggestionResponse
-// @Failure      400  {object}  map[string]string
-// @Failure      413  {object}  map[string]string
-// @Failure      415  {object}  map[string]string
-// @Failure      500  {object}  map[string]string
-// @Router       /api/public/suggest [post]
-func (handler *CatalogHandler) SuggestPublicServices(ginContext *gin.Context) {
-	requestID := ginContext.GetString("request_id")
-	ginContext.Header("Cache-Control", "private, no-store, max-age=0")
-	var suggestionRequest models.PublicSuggestionRequest
-	if decodeError := decodeStrictJSON(ginContext, maximumSuggestionBodyBytes, &suggestionRequest); decodeError != nil {
-		ginContext.JSON(strictJSONErrorStatus(decodeError), gin.H{"error": "consulta inválida", "log_id": requestID})
-		return
-	}
-	if normalizationError := suggestionRequest.Normalize(); normalizationError != nil {
-		ginContext.JSON(http.StatusBadRequest, gin.H{"error": "consulta inválida", "log_id": requestID})
-		return
-	}
-	suggestions, repositoryError := handler.repository.SuggestPublicServices(
-		ginContext.Request.Context(), suggestionRequest.Query, models.MaximumPublicSuggestions,
-	)
-	if repositoryError != nil {
-		log.Error().Err(repositoryError).Str("request_id", requestID).Msg("public service suggestions: database failure")
-		ginContext.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao buscar sugestões", "log_id": requestID})
-		return
-	}
-	ginContext.JSON(http.StatusOK, models.PublicSuggestionResponse{Suggestions: suggestions})
-}
-
-// GetPublicServiceRelations godoc
-// @Summary      Related public services and citizen journey
-// @Description  Blends curated journey edges, catalog taxonomy, and compatible semantic embeddings.
-// @Tags         catálogo
-// @Produce      json
-// @Param        slug  path  string  true  "Canonical or historical service slug"
-// @Success      200  {object}  models.PublicServiceRelationsResponse
-// @Success      308
-// @Failure      400  {object}  map[string]string
-// @Failure      404  {object}  map[string]string
-// @Failure      500  {object}  map[string]string
-// @Router       /api/public/services/{slug}/relations [get]
-func (handler *CatalogHandler) GetPublicServiceRelations(ginContext *gin.Context) {
-	requestID := ginContext.GetString("request_id")
-	requestedSlug := strings.TrimSpace(ginContext.Param("slug"))
-	if !models.ValidPublicServiceSlug(requestedSlug) {
-		ginContext.JSON(http.StatusBadRequest, gin.H{"error": "slug inválido", "log_id": requestID})
-		return
-	}
-	relations, repositoryError := handler.repository.GetPublicServiceRelations(
-		ginContext.Request.Context(), requestedSlug, models.MaximumPublicServiceRelations,
-	)
-	if repositoryError != nil {
-		if errors.Is(repositoryError, pgx.ErrNoRows) {
-			ginContext.JSON(http.StatusNotFound, gin.H{"error": "serviço não encontrado", "log_id": requestID})
-			return
-		}
-		log.Error().Err(repositoryError).Str("request_id", requestID).Str("service_slug", requestedSlug).Msg("public service relations: database failure")
-		ginContext.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao buscar serviços relacionados", "log_id": requestID})
-		return
-	}
-	if relations.CanonicalSlug != requestedSlug {
-		ginContext.Header("Location", "/api/public/services/"+url.PathEscape(relations.CanonicalSlug)+"/relations")
-		ginContext.Status(http.StatusPermanentRedirect)
-		ginContext.Writer.WriteHeaderNow()
-		return
-	}
-	ginContext.JSON(http.StatusOK, models.PublicServiceRelationsResponse{
-		CatalogRevision: relations.CatalogRevision,
-		Recommendations: relations.Recommendations,
-		Journey: models.PublicServiceJourney{
-			ServiceSlug: relations.CanonicalSlug,
-			Theme:       relations.Theme,
-			NextSteps:   relations.Journey,
-		},
-		Cluster: models.PublicServiceCluster{Theme: relations.Theme, Services: relations.Cluster},
-	})
 }
 
 // GetPublicServiceBySlug godoc

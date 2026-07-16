@@ -40,7 +40,6 @@ type AppConfig struct {
 	Reranker    RerankerSettings
 	Embedding   EmbeddingSettings
 	Search      SearchSettings
-	Summary     SummarySettings
 	RateLimit   RateLimitSettings
 	InternalAPI InternalAPISettings
 }
@@ -389,25 +388,6 @@ type SearchSettings struct {
 	HyDEWeight              float64
 }
 
-type SummarySettings struct {
-	Timeout            time.Duration
-	CacheTTL           time.Duration
-	MaximumConcurrency int
-}
-
-func (settings SummarySettings) Validate() error {
-	if settings.Timeout <= 0 {
-		return errors.New("SEARCH_SUMMARY_TIMEOUT must be positive")
-	}
-	if settings.CacheTTL <= 0 {
-		return errors.New("CACHE_SEARCH_SUMMARY_TTL must be positive")
-	}
-	if settings.MaximumConcurrency < 1 || settings.MaximumConcurrency > 32 {
-		return errors.New("SEARCH_SUMMARY_MAX_CONCURRENCY must be between 1 and 32")
-	}
-	return nil
-}
-
 const (
 	maximumSearchCandidatePoolSize = 200
 	maximumSemanticOverfetchFactor = 10
@@ -493,10 +473,6 @@ func Load() (*AppConfig, error) {
 	searchSettings, searchSettingsError := loadSearchSettings(v)
 	if searchSettingsError != nil {
 		return nil, fmt.Errorf("configuração de busca inválida: %w", searchSettingsError)
-	}
-	summarySettings, summarySettingsError := loadSummarySettings(v)
-	if summarySettingsError != nil {
-		return nil, fmt.Errorf("invalid search summary configuration: %w", summarySettingsError)
 	}
 	embeddingSettings, embeddingSettingsError := loadEmbeddingSettings(v)
 	if embeddingSettingsError != nil {
@@ -601,7 +577,6 @@ func Load() (*AppConfig, error) {
 		},
 		Embedding:   embeddingSettings,
 		Search:      searchSettings,
-		Summary:     summarySettings,
 		RateLimit:   rateLimitSettings,
 		InternalAPI: internalAPISettings,
 	}
@@ -609,28 +584,6 @@ func Load() (*AppConfig, error) {
 		return nil, errors.New("SEARCH_RERANKER_VERSION is required when RERANKER_URL is configured")
 	}
 	return cfg, nil
-}
-
-func loadSummarySettings(configuration *viper.Viper) (SummarySettings, error) {
-	timeout, timeoutError := strictDurationSetting(configuration, "SEARCH_SUMMARY_TIMEOUT", 20*time.Second)
-	if timeoutError != nil {
-		return SummarySettings{}, timeoutError
-	}
-	cacheTTL, cacheTTLError := strictDurationSetting(configuration, "CACHE_SEARCH_SUMMARY_TTL", 5*time.Minute)
-	if cacheTTLError != nil {
-		return SummarySettings{}, cacheTTLError
-	}
-	maximumConcurrency, concurrencyError := strictIntegerSetting(configuration, "SEARCH_SUMMARY_MAX_CONCURRENCY", 4)
-	if concurrencyError != nil {
-		return SummarySettings{}, concurrencyError
-	}
-	settings := SummarySettings{
-		Timeout: timeout, CacheTTL: cacheTTL, MaximumConcurrency: maximumConcurrency,
-	}
-	if validationError := settings.Validate(); validationError != nil {
-		return SummarySettings{}, validationError
-	}
-	return settings, nil
 }
 
 func loadCacheSettings(configuration *viper.Viper) (CacheSettings, error) {

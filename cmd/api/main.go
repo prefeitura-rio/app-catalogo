@@ -227,14 +227,6 @@ func main() {
 			},
 		},
 	)
-	searchSummarySvc := services.NewSearchSummaryService(
-		itemRepo,
-		geminiClient,
-		redisCache,
-		cfg.Summary.Timeout,
-		cfg.Summary.CacheTTL,
-		cfg.Summary.MaximumConcurrency,
-	)
 	citizenSvc := services.NewCitizenProfileService(
 		rmiClient,
 		profileRepo,
@@ -271,7 +263,6 @@ func main() {
 		SFSyncSvc:                   salesForceSyncService,
 		DSManager:                   dsManager,
 		SearchSvc:                   searchSvc,
-		SearchSummarySvc:            searchSummarySvc,
 		RecomSvc:                    recomSvc,
 		CitizenSvc:                  citizenSvc,
 		ItemRepo:                    itemRepo,

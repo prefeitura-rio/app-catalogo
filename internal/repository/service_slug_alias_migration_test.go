@@ -88,7 +88,7 @@ func TestServiceSlugAliasMigrationRoundTrip(t *testing.T) {
 		t.Fatalf("service slug alias round-trip requires schema version %d, got %d", latestCatalogMigrationVersion, startingVersion)
 	}
 	assertServiceSlugAliasTable(t, testContext, database, true)
-	if downError := goose.DownToContext(testContext, database, "../../db/migrations", 5); downError != nil {
+	if downError := goose.DownToContext(testContext, database, "../../db/migrations", latestCatalogMigrationVersion-1); downError != nil {
 		t.Fatalf("roll back service slug alias migration: %v", downError)
 	}
 	assertServiceSlugAliasTable(t, testContext, database, false)

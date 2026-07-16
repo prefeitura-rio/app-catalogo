@@ -614,67 +614,6 @@ require_generated_search_contract
 | .components.schemas["models.SearchResponse"].additionalProperties = false
 | .components.schemas["models.SearchResponse"].properties.search_id.format = "uuid"
 | .components.schemas["models.SearchResponse"].properties.total.description = "Total canonical entities in the declared browse or retrieval population before pagination."
-| .components.schemas["models.PublicSuggestionRequest"] |= (
-    .additionalProperties = false
-    | .properties.query.maxLength = 256
-  )
-| .components.schemas["models.PublicSuggestionResponse"].additionalProperties = false
-| .components.schemas["models.PublicSuggestionResponse"].properties.suggestions.maxItems = 8
-| .components.schemas["models.PublicServiceSuggestion"] |= (
-    .additionalProperties = false
-    | .properties.title |= bounded_non_blank_text(500)
-    | .properties.slug += {
-        "minLength": 1,
-        "maxLength": 200,
-        "pattern": "^[a-z0-9][a-z0-9-]*$"
-      }
-    | .properties.url += {
-        "format": "uri",
-        "minLength": 1,
-        "maxLength": 2048,
-        "pattern": "^/servicos/categoria/[^?#]+/[^/?#]+$"
-      }
-  )
-| .components.schemas["models.PublicServiceRelationsResponse"].additionalProperties = false
-| .components.schemas["models.PublicServiceRelationsResponse"].properties.recommendations.maxItems = 8
-| .components.schemas["models.PublicServiceJourney"].additionalProperties = false
-| .components.schemas["models.PublicServiceJourney"].properties.next_steps.maxItems = 8
-| .components.schemas["models.PublicServiceCluster"].additionalProperties = false
-| .components.schemas["models.PublicServiceCluster"].properties.services.maxItems = 8
-| .components.schemas["models.PublicServiceRelation"] |= (
-    .additionalProperties = false
-    | .properties.id.format = "uuid"
-    | .properties.slug += {
-        "minLength": 1,
-        "maxLength": 200,
-        "pattern": "^[a-z0-9][a-z0-9-]*$"
-      }
-    | .properties.title |= bounded_non_blank_text(500)
-    | .properties.short_desc |= bounded_serialized_text(2000)
-    | .properties.organization |= bounded_serialized_text(500)
-    | .properties.reason |= bounded_serialized_text(2000)
-    | .properties.url += {
-        "format": "uri",
-        "minLength": 1,
-        "maxLength": 2048,
-        "pattern": "^/servicos/categoria/[^?#]+/[^/?#]+$"
-      }
-  )
-| .components.schemas["models.SearchSummaryRequest"] |= (
-    .additionalProperties = false
-    | .properties.query += {"minLength": 1, "maxLength": 256, "pattern": "\\S"}
-    | .properties.catalog_revision += {"minLength": 1, "maxLength": 256, "pattern": "^catalog-v2:"}
-    | .properties.candidate_ids += {"minItems": 1, "maxItems": 10, "uniqueItems": true}
-    | .properties.candidate_ids.items.format = "uuid"
-  )
-| .components.schemas["models.SearchSummaryResponse"].additionalProperties = false
-| .components.schemas["models.SearchSummaryResponse"].properties.segments.maxItems = 20
-| .components.schemas["models.SearchSummarySegment"] |= (
-    .additionalProperties = false
-    | .properties.text |= bounded_non_blank_text(16000)
-    | .properties.slug |= bounded_serialized_text(500)
-    | .properties.url += {"format": "uri", "minLength": 1, "maxLength": 2048}
-  )
 | .components.schemas["v1.sfWebhookPayload"].required = ["sobject"]
 | del(.components.schemas["v1.sfWebhookPayload"].properties.event.required)
 | .components.schemas["v1.sfWebhookPayload"].properties.sobject.required = ["Id"]
@@ -707,6 +646,4 @@ require_generated_search_contract
     end
   )
 | .paths["/api/webhooks/salesforce"].post.requestBody["x-max-body-bytes"] = 65536
-| .paths["/api/public/suggest"].post.requestBody["x-max-body-bytes"] = 4096
-| .paths["/api/public/search-summary"].post.requestBody["x-max-body-bytes"] = 16384
 | add_request_id_response_headers
