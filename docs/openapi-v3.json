@@ -1161,9 +1161,6 @@
           "source": {
             "$ref": "#/components/schemas/models.ItemSource"
           },
-          "slug": {
-            "type": "string"
-          },
           "tags": {
             "type": "array",
             "items": {

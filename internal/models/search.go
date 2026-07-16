@@ -29,8 +29,8 @@ type SearchFilters struct {
 	Orgao      string `json:"orgao"`
 
 	// Cursos
-	Gratuito *bool  `json:"gratuito"`
-	Turno    string `json:"turno"`
+	Gratuito    *bool  `json:"gratuito"`
+	Turno       string `json:"turno"`
 
 	// Vagas
 	RegimeContratacao string `json:"regime_contratacao"`
@@ -59,7 +59,6 @@ type SearchItem struct {
 	ID             string          `json:"id"`
 	Type           ItemType        `json:"type"`
 	Source         ItemSource      `json:"source"`
-	Slug           string          `json:"slug,omitempty"`
 	Title          string          `json:"title"`
 	ShortDesc      string          `json:"short_desc,omitempty"`
 	Organization   string          `json:"organization,omitempty"`
