@@ -14,15 +14,14 @@ type stubSource struct {
 	name      string
 	callCount atomic.Int32
 	err       error
-	changed   int
 }
 
 func (s *stubSource) Name() string                { return s.name }
 func (s *stubSource) Source() models.ItemSource   { return models.ItemSource(s.name) }
 func (s *stubSource) SyncInterval() time.Duration { return time.Hour } // ticker longo: não dispara em teste
-func (s *stubSource) Sync(_ context.Context) (int, error) {
+func (s *stubSource) Sync(_ context.Context) error {
 	s.callCount.Add(1)
-	return s.changed, s.err
+	return s.err
 }
 
 func TestManager_Register_And_TriggerAll(t *testing.T) {
@@ -97,7 +96,7 @@ func TestManager_Start_InitialSync(t *testing.T) {
 
 func TestManager_SyncHookRunsAfterSuccessfulSync(t *testing.T) {
 	m := NewManager()
-	s := &stubSource{name: "app-go-api", changed: 1}
+	s := &stubSource{name: "app-go-api"}
 	hookCalled := make(chan string, 1)
 
 	m.Register(s)
@@ -138,30 +137,6 @@ func TestManager_SyncHookDoesNotRunAfterFailedSync(t *testing.T) {
 	select {
 	case got := <-hookCalled:
 		t.Fatalf("hook não deveria ser chamado, recebeu source %q", got)
-	case <-time.After(100 * time.Millisecond):
-	}
-}
-
-func TestManager_SyncHookDoesNotRunWhenNothingChanged(t *testing.T) {
-	// Sync bem-sucedida mas sem itens alterados (ex.: delta sync vazio) não
-	// deve invalidar o cache de busca — evita descartar o cache a cada tick.
-	m := NewManager()
-	s := &stubSource{name: "app-go-api", changed: 0}
-	hookCalled := make(chan string, 1)
-
-	m.Register(s)
-	m.AddSyncHook(func(_ context.Context, source DataSource) error {
-		hookCalled <- source.Name()
-		return nil
-	})
-
-	if !m.TriggerSync(context.Background(), "app-go-api") {
-		t.Fatal("TriggerSync deveria retornar true para 'app-go-api'")
-	}
-
-	select {
-	case got := <-hookCalled:
-		t.Fatalf("hook não deveria ser chamado quando changed=0, recebeu source %q", got)
 	case <-time.After(100 * time.Millisecond):
 	}
 }

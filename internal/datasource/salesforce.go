@@ -21,10 +21,10 @@ func NewSalesForceDataSource(syncSvc *services.SalesForceSyncService, syncInterv
 	}
 }
 
-func (s *SalesForceDataSource) Name() string                { return "salesforce" }
-func (s *SalesForceDataSource) Source() models.ItemSource   { return models.SourceSalesForce }
+func (s *SalesForceDataSource) Name() string               { return "salesforce" }
+func (s *SalesForceDataSource) Source() models.ItemSource  { return models.SourceSalesForce }
 func (s *SalesForceDataSource) SyncInterval() time.Duration { return s.syncInterval }
 
-func (s *SalesForceDataSource) Sync(ctx context.Context) (int, error) {
+func (s *SalesForceDataSource) Sync(ctx context.Context) error {
 	return s.syncSvc.DeltaSync(ctx)
 }

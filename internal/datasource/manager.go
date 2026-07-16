@@ -119,14 +119,11 @@ func (m *Manager) runSource(ctx context.Context, s DataSource) {
 }
 
 func (m *Manager) syncSource(ctx context.Context, s DataSource, errorMsg string) {
-	changed, err := s.Sync(ctx)
-	if err != nil {
+	if err := s.Sync(ctx); err != nil {
 		log.Error().Err(err).Str("source", s.Name()).Msg(errorMsg)
 		return
 	}
-	if changed > 0 {
-		m.runSyncHooks(ctx, s)
-	}
+	m.runSyncHooks(ctx, s)
 }
 
 func (m *Manager) runSyncHooks(ctx context.Context, source DataSource) {

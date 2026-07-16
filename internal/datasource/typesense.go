@@ -41,7 +41,7 @@ func (s *TypesenseDataSource) Source() models.ItemSource   { return models.Sourc
 func (s *TypesenseDataSource) SyncInterval() time.Duration { return s.syncInterval }
 
 // Sync determina o cursor pelo último sync completo e executa delta ou full sync.
-func (s *TypesenseDataSource) Sync(ctx context.Context) (int, error) {
+func (s *TypesenseDataSource) Sync(ctx context.Context) error {
 	since, eventType := s.resolveCursor(ctx)
 
 	startedAt := time.Now()
@@ -83,7 +83,7 @@ func (s *TypesenseDataSource) Sync(ctx context.Context) (int, error) {
 		Int("duration_ms", durationMs).
 		Msg("typesense datasource: sync concluído")
 
-	return processed, err
+	return err
 }
 
 // resolveCursor retorna o timestamp do último sync completo.
