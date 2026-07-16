@@ -19,15 +19,10 @@ const (
 	SearchIDHeader                     = "X-Search-ID"
 
 	catalogSearchRequestSignatureDomain = "catalog-search-request:v1\x00"
+	catalogSearchPublicPath             = "/api/public/search"
 	minimumCatalogSearchSecretBytes     = 32
 	maximumCatalogSearchSignatureSkew   = 10 * time.Minute
 )
-
-var protectedCatalogPublicPaths = map[string]struct{}{
-	"/api/public/search":         {},
-	"/api/public/search-summary": {},
-	"/api/public/suggest":        {},
-}
 
 type CatalogSearchClientVerifier struct {
 	secret      []byte
@@ -62,12 +57,10 @@ func NewCatalogSearchClientVerifier(
 }
 
 // VerifiedClientIdentifier returns a pseudonymous BFF client identifier only
-// for a complete, fresh signature on a protected public catalog POST.
+// for a complete, fresh signature on the public POST search transport.
 func (verifier *CatalogSearchClientVerifier) VerifiedClientIdentifier(request *http.Request) (string, bool) {
-	if verifier == nil || request == nil || request.URL == nil || request.Method != http.MethodPost {
-		return "", false
-	}
-	if _, protectedPath := protectedCatalogPublicPaths[request.URL.Path]; !protectedPath {
+	if verifier == nil || request == nil || request.URL == nil ||
+		request.Method != http.MethodPost || request.URL.Path != catalogSearchPublicPath {
 		return "", false
 	}
 
