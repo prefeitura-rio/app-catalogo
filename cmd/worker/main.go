@@ -64,11 +64,6 @@ func main() {
 		cfg.Redis.PoolSize,
 		cfg.Redis.MinIdleConns,
 	)
-	defer func() {
-		if closeError := redisCache.Close(); closeError != nil {
-			log.Error().Err(closeError).Msg("worker: erro ao encerrar cliente Redis")
-		}
-	}()
 	if err := redisCache.Ping(ctx); err != nil {
 		log.Warn().Err(err).Msg("worker: redis indisponível — invalidação de cache pode falhar")
 	}
@@ -82,36 +77,26 @@ func main() {
 	manager.AddSyncHook(datasource.NewSearchCacheInvalidationHook(redisCache))
 
 	// SalesForce — Carta de Serviços
-	if cfg.SalesForce.Enabled() {
-		sfClient, salesForceClientError := clients.NewSalesForceClient(
+	if cfg.SalesForce.InstanceURL != "" {
+		sfClient := clients.NewSalesForceClient(
 			cfg.SalesForce.InstanceURL,
 			cfg.SalesForce.ClientID,
 			cfg.SalesForce.ClientSecret,
 		)
-		if salesForceClientError != nil {
-			log.Fatal().Err(salesForceClientError).Msg("worker: invalid Salesforce client configuration")
-		}
 		sfSyncSvc := services.NewSalesForceSyncService(sfClient, itemRepo, cfg.SalesForce.ObjectType)
-		manager.Register(datasource.NewSalesForceDataSource(
-			sfSyncSvc,
-			cfg.SalesForce.SyncInterval,
-			cfg.SalesForce.FullSyncInterval,
-		))
+		manager.Register(datasource.NewSalesForceDataSource(sfSyncSvc, cfg.SalesForce.SyncInterval))
 	} else {
 		log.Warn().Msg("worker: SalesForce não configurado (SALESFORCE_INSTANCE_URL vazia), fonte ignorada")
 	}
 
 	// app-go-api — Cursos, Vagas, MEI
 	if cfg.AppGoAPI.BaseURL != "" && cfg.AppGoAPI.SyncEnabled {
-		tokenManager, tokenManagerError := clients.NewKeycloakTokenManager(
+		tokenManager := clients.NewKeycloakTokenManager(
 			cfg.Keycloak.URL,
 			cfg.Keycloak.Realm,
 			cfg.Keycloak.ClientID,
 			cfg.Keycloak.ClientSecret,
 		)
-		if tokenManagerError != nil {
-			log.Fatal().Err(tokenManagerError).Msg("worker: invalid Keycloak service-account configuration")
-		}
 		appGoAPIClient := clients.NewAppGoAPIClient(cfg.AppGoAPI.BaseURL, tokenManager)
 		manager.Register(datasource.NewAppGoAPIDataSource(appGoAPIClient, itemRepo, cfg.AppGoAPI.SyncInterval))
 	} else {
@@ -130,7 +115,6 @@ func main() {
 			itemRepo,
 			cfg.Typesense.BaseServiceURL,
 			cfg.Typesense.SyncInterval,
-			cfg.Typesense.FullSyncInterval,
 		))
 	} else {
 		log.Warn().Msg("worker: Typesense não configurado ou desabilitado, fonte ignorada")
@@ -142,7 +126,7 @@ func main() {
 		if err != nil {
 			log.Warn().Err(err).Msg("worker: Gemini indisponível — backfill de embeddings desativado")
 		} else {
-			embeddingSvc := services.NewEmbeddingService(itemRepo, geminiClient, cfg.Embedding.RequestTimeout)
+			embeddingSvc := services.NewEmbeddingService(itemRepo, geminiClient)
 			go func() {
 				ticker := time.NewTicker(cfg.Embedding.BackfillInterval)
 				defer ticker.Stop()
@@ -163,7 +147,7 @@ func main() {
 			}()
 		}
 	} else {
-		log.Warn().Msg("worker: GEMINI_API_KEY não configurado — backfill de embeddings desativado")
+		log.Warn().Msg("worker: GOOGLE_API_KEY não configurado — backfill de embeddings desativado")
 	}
 
 	// -------------------------------------------------------------------------

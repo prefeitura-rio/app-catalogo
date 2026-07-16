@@ -2,13 +2,10 @@ package services
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"sort"
+	"fmt"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/clients"
@@ -17,230 +14,92 @@ import (
 )
 
 const (
-	embeddingBackfillBatchSize       = 50
-	embeddingGenerationBatchSize     = 10
-	embeddingClaimTimeout            = 15 * time.Minute
-	embeddingClaimReleaseTimeout     = 5 * time.Second
-	defaultEmbeddingRequestTimeout   = 30 * time.Second
-	maximumEmbeddingDescriptionRunes = 600
-	maximumEmbeddingTags             = 2
+	embeddingBackfillBatchSize = 50 // itens por passagem de backfill
+	embeddingGenBatchSize      = 10 // itens por chamada à API Gemini
 )
 
-type embeddingItemRepository interface {
-	ClaimItemsForEmbedding(
-		ctx context.Context,
-		metadata models.EmbeddingMetadata,
-		limit int,
-		claimTimeout time.Duration,
-	) (*repository.EmbeddingClaim, error)
-	CompleteEmbedding(
-		ctx context.Context,
-		completion repository.EmbeddingCompletion,
-	) (bool, error)
-	ReleaseEmbeddingClaim(ctx context.Context, claimToken uuid.UUID) error
-}
-
-type documentEmbedder interface {
-	EmbedDocuments(ctx context.Context, documentTexts []string) ([][]float32, error)
-	Metadata() clients.EmbeddingMetadata
-}
-
-// EmbeddingService generates and stores semantic catalog embeddings outside
-// the request path.
+// EmbeddingService gera e armazena embeddings semânticos para itens do catálogo.
+// É executado como worker periódico — não bloqueia o path de busca.
 type EmbeddingService struct {
-	itemRepository   embeddingItemRepository
-	documentEmbedder documentEmbedder
-	requestTimeout   time.Duration
+	itemRepo *repository.CatalogItemRepository
+	gemini   *clients.GeminiEmbeddingClient
 }
 
 func NewEmbeddingService(
-	itemRepository embeddingItemRepository,
-	documentEmbedder documentEmbedder,
-	requestTimeout time.Duration,
+	itemRepo *repository.CatalogItemRepository,
+	gemini *clients.GeminiEmbeddingClient,
 ) *EmbeddingService {
-	if requestTimeout <= 0 {
-		requestTimeout = defaultEmbeddingRequestTimeout
-	}
-	return &EmbeddingService{
-		itemRepository:   itemRepository,
-		documentEmbedder: documentEmbedder,
-		requestTimeout:   requestTimeout,
-	}
+	return &EmbeddingService{itemRepo: itemRepo, gemini: gemini}
 }
 
-// BackfillPass claims one bounded work set, generates compatible vectors, and
-// writes each vector only while its source claim is still current.
-func (service *EmbeddingService) BackfillPass(ctx context.Context) int {
-	metadata := service.documentEmbedder.Metadata()
-	claim, err := service.itemRepository.ClaimItemsForEmbedding(
-		ctx,
-		metadata,
-		embeddingBackfillBatchSize,
-		embeddingClaimTimeout,
-	)
+// BackfillPass processa uma passagem de backfill: busca itens sem embedding,
+// gera os vetores e persiste no banco. Retorna o número de itens processados.
+func (s *EmbeddingService) BackfillPass(ctx context.Context) int {
+	items, err := s.itemRepo.GetItemsWithoutEmbedding(ctx, embeddingBackfillBatchSize)
 	if err != nil {
-		log.Error().Err(err).Msg("embedding backfill: failed to claim catalog items")
+		log.Error().Err(err).Msg("embedding backfill: erro ao buscar itens")
 		return 0
 	}
-	if len(claim.Items) == 0 {
+	if len(items) == 0 {
 		return 0
 	}
-	defer service.releaseEmbeddingClaim(claim.Token)
 
-	processedCount := 0
-	for batchStart := 0; batchStart < len(claim.Items); batchStart += embeddingGenerationBatchSize {
-		if ctx.Err() != nil {
-			return processedCount
+	processed := 0
+	for i := 0; i < len(items); i += embeddingGenBatchSize {
+		end := min(i+embeddingGenBatchSize, len(items))
+		batch := items[i:end]
+
+		texts := make([]string, len(batch))
+		for j, item := range batch {
+			texts[j] = buildDocumentText(item)
 		}
 
-		batchEnd := min(batchStart+embeddingGenerationBatchSize, len(claim.Items))
-		catalogItems := claim.Items[batchStart:batchEnd]
-		documents := make([]embeddingDocument, len(catalogItems))
-		documentTexts := make([]string, len(catalogItems))
-		for catalogItemIndex, catalogItem := range catalogItems {
-			documents[catalogItemIndex] = buildEmbeddingDocument(catalogItem, metadata.DocumentVersion)
-			documentTexts[catalogItemIndex] = documents[catalogItemIndex].Text
-		}
-
-		embeddingContext, cancelEmbedding := context.WithTimeout(ctx, service.requestTimeout)
-		embeddings, err := service.documentEmbedder.EmbedDocuments(embeddingContext, documentTexts)
-		cancelEmbedding()
+		embeddings, err := s.gemini.EmbedDocuments(ctx, texts)
 		if err != nil {
-			log.Error().Err(err).Int("batch_start", batchStart).Msg("embedding backfill: provider request failed")
-			break
-		}
-		if len(embeddings) != len(catalogItems) {
-			log.Error().
-				Int("batch_start", batchStart).
-				Int("expected_count", len(catalogItems)).
-				Int("actual_count", len(embeddings)).
-				Msg("embedding backfill: provider returned an invalid embedding count")
+			log.Error().Err(err).Int("batch_start", i).Msg("embedding backfill: erro na API Gemini")
+			time.Sleep(2 * time.Second) // back-off simples em caso de erro
 			continue
 		}
 
-		for catalogItemIndex, catalogItem := range catalogItems {
-			embedding := embeddings[catalogItemIndex]
-			if len(embedding) != metadata.Dimensions {
-				log.Error().
-					Str("id", catalogItem.ID.String()).
-					Int("expected_dimensions", metadata.Dimensions).
-					Int("actual_dimensions", len(embedding)).
-					Msg("embedding backfill: provider returned incompatible dimensions")
+		for j, item := range batch {
+			if j >= len(embeddings) {
+				break
+			}
+			vectorLit := clients.VectorLiteral(embeddings[j])
+			if err := s.itemRepo.UpdateEmbedding(ctx, item.ID.String(), vectorLit); err != nil {
+				log.Error().Err(err).Str("id", item.ID.String()).Msg("embedding backfill: erro ao salvar")
 				continue
 			}
-
-			completed, err := service.itemRepository.CompleteEmbedding(ctx, repository.EmbeddingCompletion{
-				ItemID:        catalogItem.ID,
-				ClaimToken:    claim.Token,
-				VectorLiteral: clients.VectorLiteral(embedding),
-				SourceHash:    documents[catalogItemIndex].SourceHash,
-				Metadata:      metadata,
-			})
-			if err != nil {
-				log.Error().Err(err).Str("id", catalogItem.ID.String()).Msg("embedding backfill: failed to persist vector")
-				continue
-			}
-			if !completed {
-				log.Info().Str("id", catalogItem.ID.String()).Msg("embedding backfill: discarded stale vector")
-				continue
-			}
-			processedCount++
+			processed++
 		}
 	}
 
-	log.Info().
-		Int("processed", processedCount).
-		Int("claimed", len(claim.Items)).
-		Msg("embedding backfill: pass completed")
-	return processedCount
+	log.Info().Int("processed", processed).Int("total", len(items)).Msg("embedding backfill: passagem concluída")
+	return processed
 }
 
-func (service *EmbeddingService) releaseEmbeddingClaim(claimToken uuid.UUID) {
-	releaseContext, cancelRelease := context.WithTimeout(context.Background(), embeddingClaimReleaseTimeout)
-	defer cancelRelease()
-	if err := service.itemRepository.ReleaseEmbeddingClaim(releaseContext, claimToken); err != nil {
-		log.Error().Err(err).Str("claim_token", claimToken.String()).Msg("embedding backfill: failed to release claim")
+// buildDocumentText monta o texto de um item para embedding de indexação.
+// Formato: "título. categoria. resumo descrição[:600]".
+func buildDocumentText(item *models.CatalogItem) string {
+	var parts []string
+	if item.Title != "" {
+		parts = append(parts, item.Title+".")
 	}
-}
-
-type embeddingDocument struct {
-	Text       string
-	SourceHash string
-}
-
-// buildEmbeddingDocument produces stable, valid UTF-8 input. The source hash
-// covers both the canonical text and its format version.
-func buildEmbeddingDocument(catalogItem *models.CatalogItem, documentVersion string) embeddingDocument {
-	documentLines := make([]string, 0, 6)
-	documentLines = appendEmbeddingDocumentField(documentLines, "Tipo", string(catalogItem.Type))
-	documentLines = appendEmbeddingDocumentField(documentLines, "Título", catalogItem.Title)
-
-	canonicalTags := canonicalizeEmbeddingTags(catalogItem.Tags)
-	if len(canonicalTags) > 0 {
-		documentLines = append(documentLines, "Categorias: "+strings.Join(canonicalTags, ", "))
+	if len(item.Tags) > 0 {
+		parts = append(parts, fmt.Sprintf("Categoria: %s.", strings.Join(item.Tags[:min(2, len(item.Tags))], ", ")))
 	}
-
-	documentLines = appendEmbeddingDocumentField(documentLines, "Resumo", catalogItem.ShortDesc)
-	normalizedDescription := normalizeEmbeddingText(catalogItem.Description)
-	documentLines = appendEmbeddingDocumentField(
-		documentLines,
-		"Descrição",
-		truncateEmbeddingText(normalizedDescription, maximumEmbeddingDescriptionRunes),
-	)
-	documentLines = appendEmbeddingDocumentField(documentLines, "Órgão", catalogItem.Organization)
-
-	if len(documentLines) == 0 {
-		documentLines = append(documentLines, "Título: item sem descrição")
+	if item.ShortDesc != "" {
+		parts = append(parts, item.ShortDesc)
 	}
-	documentText := strings.Join(documentLines, "\n")
-	sourceDigest := sha256.Sum256([]byte(documentVersion + "\x00" + documentText))
-
-	return embeddingDocument{
-		Text:       documentText,
-		SourceHash: hex.EncodeToString(sourceDigest[:]),
-	}
-}
-
-func appendEmbeddingDocumentField(documentLines []string, label string, sourceText string) []string {
-	normalizedText := normalizeEmbeddingText(sourceText)
-	if normalizedText == "" {
-		return documentLines
-	}
-	return append(documentLines, label+": "+normalizedText)
-}
-
-func canonicalizeEmbeddingTags(sourceTags []string) []string {
-	uniqueTags := make(map[string]struct{}, len(sourceTags))
-	for _, sourceTag := range sourceTags {
-		normalizedTag := normalizeEmbeddingText(sourceTag)
-		if normalizedTag != "" {
-			uniqueTags[normalizedTag] = struct{}{}
+	if item.Description != "" {
+		desc := item.Description
+		if len(desc) > 600 {
+			desc = desc[:600]
 		}
+		parts = append(parts, desc)
 	}
-
-	canonicalTags := make([]string, 0, len(uniqueTags))
-	for canonicalTag := range uniqueTags {
-		canonicalTags = append(canonicalTags, canonicalTag)
+	if item.Organization != "" {
+		parts = append(parts, "Órgão: "+item.Organization+".")
 	}
-	sort.Strings(canonicalTags)
-	if len(canonicalTags) > maximumEmbeddingTags {
-		canonicalTags = canonicalTags[:maximumEmbeddingTags]
-	}
-	return canonicalTags
-}
-
-func normalizeEmbeddingText(sourceText string) string {
-	validText := strings.ToValidUTF8(sourceText, "�")
-	return strings.Join(strings.Fields(validText), " ")
-}
-
-func truncateEmbeddingText(sourceText string, maximumRunes int) string {
-	if maximumRunes <= 0 {
-		return ""
-	}
-	textRunes := []rune(sourceText)
-	if len(textRunes) <= maximumRunes {
-		return sourceText
-	}
-	return string(textRunes[:maximumRunes])
+	return strings.Join(parts, " ")
 }

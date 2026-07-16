@@ -8,15 +8,13 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// ExpansionVersion changes whenever synonym semantics or rules change.
-const ExpansionVersion = "synonyms-v2"
-
-// synonymRule defines a deterministic query expansion rule.
-// Each pattern entry is a token sequence that must occur in the query.
+// synonymRule define uma regra de expansão de query.
+// Todos os tokens de Pattern devem estar presentes na query normalizada.
+// Se qualquer token de AntiPatterns estiver presente, a regra não se aplica.
 type synonymRule struct {
-	Pattern      []string
+	Pattern     []string
 	AntiPatterns []string
-	Expansion    string
+	Expansion   string
 }
 
 // synonymRules cobre termos coloquiais, siglas e abreviações comuns nos serviços
@@ -42,11 +40,8 @@ var synonymRules = []synonymRule{
 	{Pattern: []string{"upa"}, Expansion: "unidade pronto atendimento urgência emergência"},
 	{Pattern: []string{"sus"}, Expansion: "sistema único saúde cartão"},
 	{Pattern: []string{"sms"}, AntiPatterns: []string{"mensagem", "telefone"}, Expansion: "secretaria saúde"},
-	{Pattern: []string{"vacina", "cachorro"}, Expansion: "vacinação animal pet"},
-	{Pattern: []string{"vacina", "gato"}, Expansion: "vacinação animal pet"},
-	{Pattern: []string{"vacina", "animal"}, Expansion: "vacinação animal pet"},
-	{Pattern: []string{"vacina", "pet"}, Expansion: "vacinação animal pet"},
 	{Pattern: []string{"vacina"}, AntiPatterns: []string{"animal", "cachorro", "gato", "pet"}, Expansion: "vacinação imunização"},
+	{Pattern: []string{"vacina", "cachorro"}, Expansion: "vacinação animal pet"},
 
 	// Documentação
 	{Pattern: []string{"rg"}, AntiPatterns: []string{"endereço", "bairro"}, Expansion: "registro geral identidade documento"},
@@ -84,109 +79,53 @@ var synonymRules = []synonymRule{
 	{Pattern: []string{"156"}, Expansion: "central atendimento prefeitura solicitação"},
 }
 
-// Expand preserves the original websearch expression as one branch and appends
-// every matching synonym expansion as an OR branch. Unquoted terms inside an
-// expansion may still combine with AND, but can never become mandatory for the
-// original query branch.
+// Expand expande uma query adicionando sinônimos relevantes.
+// A query original é preservada — os termos são apenas concatenados.
+// Retorna a query inalterada se nenhuma regra se aplicar.
 func Expand(query string) string {
-	canonicalQuery := strings.Join(strings.Fields(strings.TrimSpace(query)), " ")
-	if hasExplicitWebsearchSyntax(canonicalQuery) {
-		return canonicalQuery
-	}
-	queryTokens := tokenizeForMatch(canonicalQuery)
-	if len(queryTokens) == 0 {
-		return canonicalQuery
-	}
+	normalized := normalizeForMatch(query)
 
-	expansions := make([]string, 0)
-	seenExpansions := make(map[string]struct{})
+	var additions []string
 	for _, rule := range synonymRules {
-		if !matchesPattern(queryTokens, rule.Pattern) || hasAntiPattern(queryTokens, rule.AntiPatterns) {
-			continue
+		if matchesPattern(normalized, rule.Pattern) &&
+			!hasAntiPattern(normalized, rule.AntiPatterns) {
+			additions = append(additions, rule.Expansion)
 		}
-		if _, duplicate := seenExpansions[rule.Expansion]; duplicate {
-			continue
-		}
-		seenExpansions[rule.Expansion] = struct{}{}
-		expansions = append(expansions, rule.Expansion)
 	}
 
-	if len(expansions) == 0 {
-		return canonicalQuery
+	if len(additions) == 0 {
+		return query
 	}
-	return canonicalQuery + " OR " + strings.Join(expansions, " OR ")
+	return query + " " + strings.Join(additions, " ")
 }
 
-func hasExplicitWebsearchSyntax(searchQuery string) bool {
-	if strings.Contains(searchQuery, `"`) {
-		return true
-	}
-	for _, queryField := range strings.Fields(searchQuery) {
-		if queryField == "OR" || strings.HasPrefix(queryField, "-") {
-			return true
-		}
-	}
-	return false
-}
-
-func tokenizeForMatch(searchText string) []string {
-	normalizedText := norm.NFD.String(strings.ToLower(searchText))
-	var tokens []string
-	var currentToken strings.Builder
-
-	for _, character := range normalizedText {
-		if unicode.Is(unicode.Mn, character) {
+// normalizeForMatch converte para lowercase e remove acentos para comparação.
+func normalizeForMatch(s string) string {
+	// Normalização Unicode NFD para decompor caracteres acentuados
+	t := norm.NFD.String(strings.ToLower(s))
+	// Remove marcas diacríticas (categoria Mn)
+	var b strings.Builder
+	for _, r := range t {
+		if unicode.Is(unicode.Mn, r) {
 			continue
 		}
-		if unicode.IsLetter(character) || unicode.IsDigit(character) {
-			currentToken.WriteRune(character)
-			continue
-		}
-		if currentToken.Len() > 0 {
-			tokens = append(tokens, currentToken.String())
-			currentToken.Reset()
-		}
+		b.WriteRune(r)
 	}
-	if currentToken.Len() > 0 {
-		tokens = append(tokens, currentToken.String())
-	}
-	return tokens
+	return b.String()
 }
 
-func matchesPattern(queryTokens []string, pattern []string) bool {
-	if len(pattern) == 0 {
-		return false
-	}
-	for _, patternEntry := range pattern {
-		if !containsTokenSequence(queryTokens, tokenizeForMatch(patternEntry)) {
+func matchesPattern(normalized string, pattern []string) bool {
+	for _, p := range pattern {
+		if !strings.Contains(normalized, p) {
 			return false
 		}
 	}
-	return true
+	return len(pattern) > 0
 }
 
-func hasAntiPattern(queryTokens []string, antiPatterns []string) bool {
-	for _, antiPattern := range antiPatterns {
-		if containsTokenSequence(queryTokens, tokenizeForMatch(antiPattern)) {
-			return true
-		}
-	}
-	return false
-}
-
-func containsTokenSequence(tokens, sequence []string) bool {
-	if len(sequence) == 0 || len(sequence) > len(tokens) {
-		return false
-	}
-	for startIndex := 0; startIndex <= len(tokens)-len(sequence); startIndex++ {
-		matches := true
-		for sequenceIndex, sequenceToken := range sequence {
-			if tokens[startIndex+sequenceIndex] != sequenceToken {
-				matches = false
-				break
-			}
-		}
-		if matches {
+func hasAntiPattern(normalized string, antiPatterns []string) bool {
+	for _, ap := range antiPatterns {
+		if strings.Contains(normalized, ap) {
 			return true
 		}
 	}

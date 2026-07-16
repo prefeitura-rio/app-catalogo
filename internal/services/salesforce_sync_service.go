@@ -3,55 +3,25 @@ package services
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog/log"
 
+	"github.com/prefeitura-rio/app-catalogo/internal/clients"
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
 	"github.com/prefeitura-rio/app-catalogo/internal/repository"
 )
 
 type SalesForceSyncService struct {
-	client     salesForceSyncClient
-	repo       salesForceSyncRepository
+	client     *clients.SalesForceClient
+	repo       *repository.CatalogItemRepository
 	objectType string
 }
 
-type salesForceSyncClient interface {
-	Query(ctx context.Context, soql string) ([]map[string]interface{}, error)
-	QueryAll(ctx context.Context, objectType string) ([]map[string]interface{}, error)
-	QueryModifiedSince(ctx context.Context, objectType string, since time.Time) ([]map[string]interface{}, error)
-}
-
-type salesForceSyncRepository interface {
-	GetSalesForceCursor(ctx context.Context, objectType string) (*models.SalesForceSyncCursor, error)
-	RecordSyncEvent(ctx context.Context, event *models.SyncEvent) (int64, error)
-	UpdateSyncEvent(ctx context.Context, id int64, status models.SyncEventStatus, processed, failed int, errorMessage string, durationMilliseconds int) error
-	ReconcileSalesForceSnapshot(ctx context.Context, objectType string, items []*models.CatalogItem, lastSyncAt time.Time) (int, int, error)
-	UpsertSalesForceDelta(ctx context.Context, objectType string, items []*models.CatalogItem, lastSyncAt time.Time) (int, error)
-	SoftDelete(ctx context.Context, source models.ItemSource, externalID string) error
-	Upsert(ctx context.Context, item *models.CatalogItem) error
-}
-
-const (
-	maximumSalesForceObjectTypeLength = 100
-	shortSalesForceRecordIDLength     = 15
-	longSalesForceRecordIDLength      = 18
-	// Re-read a bounded window because upstream timestamps have finite
-	// granularity and indexed changes can become visible after propagation lag.
-	salesForceDeltaOverlap = time.Minute
-)
-
-var salesForceObjectTypePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
-
 func NewSalesForceSyncService(
-	client salesForceSyncClient,
-	repo salesForceSyncRepository,
+	client *clients.SalesForceClient,
+	repo *repository.CatalogItemRepository,
 	objectType string,
 ) *SalesForceSyncService {
 	return &SalesForceSyncService{
@@ -62,7 +32,7 @@ func NewSalesForceSyncService(
 }
 
 // FullSync sincroniza todos os registros do SalesForce.
-// Retorna o número de itens alterados, incluindo desativações.
+// Retorna o número de itens processados (upsertados).
 func (s *SalesForceSyncService) FullSync(ctx context.Context) (int, error) {
 	startedAt := time.Now()
 	eventID, _ := s.repo.RecordSyncEvent(ctx, &models.SyncEvent{
@@ -72,72 +42,50 @@ func (s *SalesForceSyncService) FullSync(ctx context.Context) (int, error) {
 		StartedAt: startedAt,
 	})
 
-	objectType, err := validatedSalesForceObjectType(s.objectType)
+	log.Info().Str("object_type", s.objectType).Msg("salesforce: iniciando full sync")
+
+	records, err := s.client.QueryAll(ctx, s.objectType)
 	if err != nil {
-		s.failSyncEvent(ctx, eventID, startedAt, 0, 0, err)
+		errMsg := err.Error()
+		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, 0, 0, errMsg, int(time.Since(startedAt).Milliseconds()))
 		return 0, err
 	}
 
-	log.Info().Str("object_type", objectType).Msg("salesforce: iniciando full sync")
-
-	records, err := s.client.QueryAll(ctx, objectType)
-	if err != nil {
-		s.failSyncEvent(ctx, eventID, startedAt, 0, 0, err)
-		return 0, err
-	}
-	if len(records) == 0 {
-		err := repository.ErrEmptySalesForceSnapshot
-		s.failSyncEvent(ctx, eventID, startedAt, 0, 0, err)
-		return 0, err
+	items := make([]*models.CatalogItem, 0, len(records))
+	for _, rec := range records {
+		item := s.mapRecord(rec)
+		if item != nil {
+			items = append(items, item)
+		}
 	}
 
-	items, err := s.mapRecords(records, objectType)
-	if err != nil {
-		s.failSyncEvent(ctx, eventID, startedAt, 0, len(records), err)
-		return 0, err
-	}
-	upstreamCursor, err := maximumSalesForceSourceUpdatedAt(items)
-	if err != nil {
-		s.failSyncEvent(ctx, eventID, startedAt, 0, len(records), err)
-		return 0, err
-	}
-
-	upserted, deactivated, err := s.repo.ReconcileSalesForceSnapshot(ctx, objectType, items, upstreamCursor)
+	processed, err := s.repo.UpsertBatch(ctx, items)
 	durationMs := int(time.Since(startedAt).Milliseconds())
 
 	if err != nil {
-		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, 0, len(items), err.Error(), durationMs)
-		return 0, err
+		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, processed, len(items)-processed, err.Error(), durationMs)
+		return processed, err
 	}
 
-	changed := upserted + deactivated
-	_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusCompleted, changed, 0, "", durationMs)
+	now := time.Now()
+	_ = s.repo.UpsertSalesForceCursor(ctx, s.objectType, now, "")
+	_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusCompleted, processed, 0, "", durationMs)
 
 	log.Info().
-		Time("cursor", upstreamCursor).
-		Int("upserted", upserted).
-		Int("deactivated", deactivated).
-		Int("changed", changed).
+		Int("items", processed).
 		Int("duration_ms", durationMs).
 		Msg("salesforce: full sync concluído")
 
-	return changed, nil
+	return processed, nil
 }
 
 // DeltaSync sincroniza apenas os registros modificados desde a última sync.
 // Retorna o número de itens processados (upsertados).
 func (s *SalesForceSyncService) DeltaSync(ctx context.Context) (int, error) {
-	objectType, err := validatedSalesForceObjectType(s.objectType)
-	if err != nil {
-		return 0, err
-	}
-	cursor, err := s.repo.GetSalesForceCursor(ctx, objectType)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && (cursor == nil || cursor.LastSyncAt == nil)) {
+	cursor, err := s.repo.GetSalesForceCursor(ctx, s.objectType)
+	if err != nil || cursor.LastSyncAt == nil {
 		log.Info().Msg("salesforce: cursor não encontrado, executando full sync")
 		return s.FullSync(ctx)
-	}
-	if err != nil {
-		return 0, fmt.Errorf("salesforce: read sync cursor: %w", err)
 	}
 
 	startedAt := time.Now()
@@ -149,50 +97,45 @@ func (s *SalesForceSyncService) DeltaSync(ctx context.Context) (int, error) {
 	})
 
 	log.Info().
-		Time("cursor", *cursor.LastSyncAt).
-		Time("since", cursor.LastSyncAt.Add(-salesForceDeltaOverlap)).
-		Str("object_type", objectType).
+		Time("since", *cursor.LastSyncAt).
+		Str("object_type", s.objectType).
 		Msg("salesforce: iniciando delta sync")
 
-	records, err := s.client.QueryModifiedSince(ctx, objectType, cursor.LastSyncAt.Add(-salesForceDeltaOverlap))
+	records, err := s.client.QueryModifiedSince(ctx, s.objectType, *cursor.LastSyncAt)
 	if err != nil {
-		s.failSyncEvent(ctx, eventID, startedAt, 0, 0, err)
+		errMsg := err.Error()
+		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, 0, 0, errMsg, int(time.Since(startedAt).Milliseconds()))
 		return 0, err
 	}
 
-	items, err := s.mapRecords(records, objectType)
-	if err != nil {
-		s.failSyncEvent(ctx, eventID, startedAt, 0, len(records), err)
-		return 0, err
-	}
-	upstreamCursor := *cursor.LastSyncAt
-	if len(items) > 0 {
-		batchCursor, cursorError := maximumSalesForceSourceUpdatedAt(items)
-		if cursorError != nil {
-			s.failSyncEvent(ctx, eventID, startedAt, 0, len(records), cursorError)
-			return 0, cursorError
-		}
-		if batchCursor.After(upstreamCursor) {
-			upstreamCursor = batchCursor
-		}
-	}
-
-	processed, err := s.repo.UpsertSalesForceDelta(ctx, objectType, items, upstreamCursor)
-	durationMs := int(time.Since(startedAt).Milliseconds())
-
-	if err != nil {
-		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, 0, len(items), err.Error(), durationMs)
-		return 0, err
-	}
-
-	_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusCompleted, processed, 0, "", durationMs)
 	if len(records) == 0 {
+		durationMs := int(time.Since(startedAt).Milliseconds())
+		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusCompleted, 0, 0, "", durationMs)
 		log.Debug().Msg("salesforce: sem registros novos no delta sync")
 		return 0, nil
 	}
 
+	items := make([]*models.CatalogItem, 0, len(records))
+	for _, rec := range records {
+		item := s.mapRecord(rec)
+		if item != nil {
+			items = append(items, item)
+		}
+	}
+
+	processed, err := s.repo.UpsertBatch(ctx, items)
+	durationMs := int(time.Since(startedAt).Milliseconds())
+
+	if err != nil {
+		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, processed, len(items)-processed, err.Error(), durationMs)
+		return processed, err
+	}
+
+	now := time.Now()
+	_ = s.repo.UpsertSalesForceCursor(ctx, s.objectType, now, "")
+	_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusCompleted, processed, 0, "", durationMs)
+
 	log.Info().
-		Time("cursor", upstreamCursor).
 		Int("items", processed).
 		Int("duration_ms", durationMs).
 		Msg("salesforce: delta sync concluído")
@@ -202,15 +145,7 @@ func (s *SalesForceSyncService) DeltaSync(ctx context.Context) (int, error) {
 
 // SyncRecord sincroniza um único registro (para uso em webhooks).
 func (s *SalesForceSyncService) SyncRecord(ctx context.Context, externalID string) error {
-	objectType, err := validatedSalesForceObjectType(s.objectType)
-	if err != nil {
-		return err
-	}
-	externalID, err = validatedSalesForceRecordID(externalID)
-	if err != nil {
-		return err
-	}
-	soql := "SELECT Id, Name, Description__c, ShortDescription__c, Organization__c, URL__c, Status__c, Theme__c, Channel__c, Neighborhood__c, Tags__c, ValidFrom__c, ValidUntil__c, LastModifiedDate FROM " + objectType + " WHERE Id = '" + externalID + "' LIMIT 1"
+	soql := "SELECT Id, Name, Description__c, ShortDescription__c, Organization__c, URL__c, Status__c, Theme__c, Channel__c, Neighborhood__c, Tags__c, ValidFrom__c, ValidUntil__c, LastModifiedDate FROM " + s.objectType + " WHERE Id = '" + externalID + "' LIMIT 1"
 	records, err := s.client.Query(ctx, soql)
 	if err != nil {
 		return err
@@ -218,24 +153,24 @@ func (s *SalesForceSyncService) SyncRecord(ctx context.Context, externalID strin
 	if len(records) == 0 {
 		return s.repo.SoftDelete(ctx, models.SourceSalesForce, externalID)
 	}
-	item, err := s.mapRecord(records[0], objectType)
-	if err != nil {
-		return err
+	item := s.mapRecord(records[0])
+	if item == nil {
+		return nil
 	}
 	return s.repo.Upsert(ctx, item)
 }
 
 // mapRecord converte um record do SalesForce para CatalogItem.
 // Os campos são flexíveis — tudo que não é mapeado vai para source_data.
-func (s *SalesForceSyncService) mapRecord(rec map[string]interface{}, objectType string) (*models.CatalogItem, error) {
+func (s *SalesForceSyncService) mapRecord(rec map[string]interface{}) *models.CatalogItem {
 	id, _ := rec["Id"].(string)
 	if id == "" {
-		return nil, errors.New("salesforce record has no id")
+		return nil
 	}
 
 	title := stringField(rec, "Name")
 	if title == "" {
-		return nil, errors.New("salesforce record has no name")
+		return nil
 	}
 
 	status := models.StatusActive
@@ -256,9 +191,9 @@ func (s *SalesForceSyncService) mapRecord(rec map[string]interface{}, objectType
 		validUntil = v
 	}
 
-	sourceUpdatedAt, err := requiredSalesForceLastModifiedDate(rec)
-	if err != nil {
-		return nil, err
+	var sourceUpdatedAt *time.Time
+	if v := parseTime(rec, "LastModifiedDate"); v != nil {
+		sourceUpdatedAt = v
 	}
 
 	// Tags: campo separado por vírgula ou array JSON
@@ -270,19 +205,7 @@ func (s *SalesForceSyncService) mapRecord(rec map[string]interface{}, objectType
 	// Target audience vazio por padrão para SalesForce (definido no conteúdo)
 	targetAudience := json.RawMessage("{}")
 
-	sourceRecord := make(map[string]interface{}, len(rec)+1)
-	for sourceField, sourceValue := range rec {
-		sourceRecord[sourceField] = sourceValue
-	}
-	sourceRecord[models.SalesForceObjectTypeSourceDataKey] = objectType
-	sourceData, err := json.Marshal(sourceRecord)
-	if err != nil {
-		return nil, fmt.Errorf("salesforce record source data: %w", err)
-	}
-	theme := stringField(rec, "Theme__c")
-	if theme != "" {
-		tags = append(tags, theme)
-	}
+	sourceData, _ := json.Marshal(rec)
 
 	return &models.CatalogItem{
 		ExternalID:      id,
@@ -295,96 +218,14 @@ func (s *SalesForceSyncService) mapRecord(rec map[string]interface{}, objectType
 		URL:             stringField(rec, "URL__c"),
 		Modalidade:      stringField(rec, "Channel__c"),
 		Status:          status,
-		Tags:            tags,
+		Tags:            append(tags, stringField(rec, "Theme__c")),
 		Bairros:         bairros,
 		TargetAudience:  targetAudience,
 		SourceData:      sourceData,
 		ValidFrom:       validFrom,
 		ValidUntil:      validUntil,
-		SourceUpdatedAt: &sourceUpdatedAt,
-	}, nil
-}
-
-func (s *SalesForceSyncService) mapRecords(records []map[string]interface{}, objectType string) ([]*models.CatalogItem, error) {
-	items := make([]*models.CatalogItem, 0, len(records))
-	for recordIndex, record := range records {
-		item, err := s.mapRecord(record, objectType)
-		if err != nil {
-			return nil, fmt.Errorf("salesforce snapshot record %d: %w", recordIndex, err)
-		}
-		items = append(items, item)
+		SourceUpdatedAt: sourceUpdatedAt,
 	}
-	return items, nil
-}
-
-func maximumSalesForceSourceUpdatedAt(items []*models.CatalogItem) (time.Time, error) {
-	var maximumSourceUpdatedAt time.Time
-	for itemIndex, item := range items {
-		if item == nil || item.SourceUpdatedAt == nil || item.SourceUpdatedAt.IsZero() {
-			return time.Time{}, fmt.Errorf("salesforce item %d has no valid LastModifiedDate", itemIndex)
-		}
-		if item.SourceUpdatedAt.After(maximumSourceUpdatedAt) {
-			maximumSourceUpdatedAt = *item.SourceUpdatedAt
-		}
-	}
-	if maximumSourceUpdatedAt.IsZero() {
-		return time.Time{}, errors.New("salesforce records have no valid LastModifiedDate")
-	}
-	return maximumSourceUpdatedAt, nil
-}
-
-func requiredSalesForceLastModifiedDate(record map[string]interface{}) (time.Time, error) {
-	rawLastModifiedDate, ok := record["LastModifiedDate"].(string)
-	if !ok || strings.TrimSpace(rawLastModifiedDate) == "" {
-		return time.Time{}, errors.New("salesforce record has no LastModifiedDate")
-	}
-	lastModifiedDate, err := time.Parse(time.RFC3339, rawLastModifiedDate)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("salesforce record has invalid LastModifiedDate: %w", err)
-	}
-	return lastModifiedDate.UTC(), nil
-}
-
-func (s *SalesForceSyncService) failSyncEvent(
-	ctx context.Context,
-	eventID int64,
-	startedAt time.Time,
-	processed int,
-	failed int,
-	syncError error,
-) {
-	_ = s.repo.UpdateSyncEvent(
-		ctx,
-		eventID,
-		models.SyncStatusFailed,
-		processed,
-		failed,
-		syncError.Error(),
-		int(time.Since(startedAt).Milliseconds()),
-	)
-}
-
-func validatedSalesForceObjectType(objectType string) (string, error) {
-	objectType = strings.TrimSpace(objectType)
-	if len(objectType) > maximumSalesForceObjectTypeLength || !salesForceObjectTypePattern.MatchString(objectType) {
-		return "", errors.New("salesforce object type is invalid")
-	}
-	return objectType, nil
-}
-
-func validatedSalesForceRecordID(externalID string) (string, error) {
-	if len(externalID) != shortSalesForceRecordIDLength && len(externalID) != longSalesForceRecordIDLength {
-		return "", errors.New("salesforce record id is invalid")
-	}
-	for characterIndex := 0; characterIndex < len(externalID); characterIndex++ {
-		character := externalID[characterIndex]
-		if (character < '0' || character > '9') &&
-			(character < 'A' || character > 'Z') &&
-			(character < 'a' || character > 'z') {
-			return "", errors.New("salesforce record id is invalid")
-		}
-	}
-	return externalID, nil
 }
 
 func stringField(rec map[string]interface{}, key string) string {
