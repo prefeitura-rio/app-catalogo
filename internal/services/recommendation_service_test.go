@@ -11,11 +11,11 @@ func TestScoreItem_SemPerfil(t *testing.T) {
 	typeWeights := models.TypeWeightsByContext[models.ContextHomepage]
 
 	item := &models.CatalogItem{
-		Type:     models.TypeCourse,
-		Source:   models.SourceCourses,
-		Title:    "Curso Teste",
-		Bairros:  []string{},
-		Modalidade: "online",
+		Type:           models.TypeCourse,
+		Source:         models.SourceCourses,
+		Title:          "Curso Teste",
+		Bairros:        []string{},
+		Modalidade:     "online",
 		TargetAudience: nil,
 	}
 
@@ -34,10 +34,10 @@ func TestScoreItem_PerfilCompleto_Match(t *testing.T) {
 	typeWeights := models.TypeWeightsByContext[models.ContextHomepage]
 
 	profile := &models.CitizenProfile{
-		Bairro:       "Tijuca",
-		Escolaridade: "medio",
+		Bairro:        "Tijuca",
+		Escolaridade:  "medio",
 		RendaFamiliar: "ate_1sm",
-		FaixaEtaria:  "25-34",
+		FaixaEtaria:   "25-34",
 	}
 
 	audience := []byte(`{"escolaridade":["medio","fundamental"],"renda":"ate_1sm","faixa_etaria":["25-34","18-24"]}`)
@@ -62,10 +62,10 @@ func TestScoreItem_PerfilCompleto_SemMatch(t *testing.T) {
 	typeWeights := models.TypeWeightsByContext[models.ContextHomepage]
 
 	profile := &models.CitizenProfile{
-		Bairro:       "Botafogo",
-		Escolaridade: "superior",
+		Bairro:        "Botafogo",
+		Escolaridade:  "superior",
 		RendaFamiliar: "5_10sm",
-		FaixaEtaria:  "45-59",
+		FaixaEtaria:   "45-59",
 	}
 
 	// Item para jovens de baixa renda no centro
@@ -117,10 +117,10 @@ func TestScoreItem_PCD_ItemComAcessibilidade(t *testing.T) {
 
 func TestMatchLocalizacao(t *testing.T) {
 	cases := []struct {
-		bairro     string
+		bairro      string
 		itemBairros []string
 		modalidade  string
-		wantHigh   bool // score >= 0.6
+		wantHigh    bool // score >= 0.6
 	}{
 		{"Tijuca", []string{"Tijuca"}, "presencial", true},
 		{"Botafogo", []string{"Tijuca"}, "presencial", false},

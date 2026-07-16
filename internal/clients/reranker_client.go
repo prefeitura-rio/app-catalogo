@@ -25,8 +25,8 @@ type RerankerClient struct {
 }
 
 type rerankerRequest struct {
-	Query     string              `json:"query"`
-	Documents []rerankerDocument  `json:"documents"`
+	Query     string             `json:"query"`
+	Documents []rerankerDocument `json:"documents"`
 }
 
 type rerankerDocument struct {
@@ -41,7 +41,7 @@ type RerankerResult struct {
 
 func NewRerankerClient(baseURL string, timeout time.Duration) *RerankerClient {
 	return &RerankerClient{
-		baseURL: baseURL,
+		baseURL:    baseURL,
 		httpClient: &http.Client{Timeout: timeout},
 	}
 }

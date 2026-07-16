@@ -13,25 +13,25 @@ import (
 )
 
 type AppConfig struct {
-	App          AppSettings
-	Database     DatabaseSettings
-	Server       ServerSettings
-	Redis        RedisSettings
-	Tracing      TracingSettings
-	Migrations   MigrationSettings
-	Keycloak     KeycloakSettings
-	RMI          RMISettings
-	AppGoAPI     AppGoAPISettings
-	SalesForce   SalesForceSettings
-	CitizenSync  CitizenSyncSettings
-	Cache        CacheSettings
-	CPFHashSalt  string
-	Swagger      SwaggerSettings
-	Heimdall     HeimdallSettings
-	Typesense    TypesenseSettings
-	Gemini       GeminiSettings
-	Reranker     RerankerSettings
-	Embedding    EmbeddingSettings
+	App         AppSettings
+	Database    DatabaseSettings
+	Server      ServerSettings
+	Redis       RedisSettings
+	Tracing     TracingSettings
+	Migrations  MigrationSettings
+	Keycloak    KeycloakSettings
+	RMI         RMISettings
+	AppGoAPI    AppGoAPISettings
+	SalesForce  SalesForceSettings
+	CitizenSync CitizenSyncSettings
+	Cache       CacheSettings
+	CPFHashSalt string
+	Swagger     SwaggerSettings
+	Heimdall    HeimdallSettings
+	Typesense   TypesenseSettings
+	Gemini      GeminiSettings
+	Reranker    RerankerSettings
+	Embedding   EmbeddingSettings
 }
 
 type AppSettings struct {
@@ -45,15 +45,15 @@ func (a *AppSettings) IsDevelopment() bool {
 }
 
 type DatabaseSettings struct {
-	Host        string
-	Port        int
-	User        string
-	Password    string
-	Name        string
-	SSLMode     string
-	Timezone    string
+	Host         string
+	Port         int
+	User         string
+	Password     string
+	Name         string
+	SSLMode      string
+	Timezone     string
 	MaxOpenConns int
-	MinConns    int
+	MinConns     int
 }
 
 func (db *DatabaseSettings) DSN() string {
@@ -134,12 +134,12 @@ type AppGoAPISettings struct {
 }
 
 type SalesForceSettings struct {
-	InstanceURL    string
-	ClientID       string
-	ClientSecret   string
-	WebhookSecret  string
-	SyncInterval   time.Duration
-	ObjectType     string
+	InstanceURL   string
+	ClientID      string
+	ClientSecret  string
+	WebhookSecret string
+	SyncInterval  time.Duration
+	ObjectType    string
 }
 
 type CitizenSyncSettings struct {
@@ -148,9 +148,9 @@ type CitizenSyncSettings struct {
 }
 
 type CacheSettings struct {
-	SearchTTL                    time.Duration
+	SearchTTL                      time.Duration
 	RecommendationAuthenticatedTTL time.Duration
-	RecommendationClusterTTL     time.Duration
+	RecommendationClusterTTL       time.Duration
 }
 
 type SwaggerSettings struct {
@@ -280,9 +280,9 @@ func Load() (*AppConfig, error) {
 			SyncInterval:   getDuration(v, "CITIZEN_PROFILE_SYNC_INTERVAL", 24*time.Hour),
 		},
 		Cache: CacheSettings{
-			SearchTTL:                    getDuration(v, "CACHE_SEARCH_TTL", 60*time.Second),
+			SearchTTL:                      getDuration(v, "CACHE_SEARCH_TTL", 60*time.Second),
 			RecommendationAuthenticatedTTL: getDuration(v, "CACHE_RECOMMENDATION_AUTHENTICATED_TTL", 5*time.Minute),
-			RecommendationClusterTTL:     getDuration(v, "CACHE_RECOMMENDATION_CLUSTER_TTL", 15*time.Minute),
+			RecommendationClusterTTL:       getDuration(v, "CACHE_RECOMMENDATION_CLUSTER_TTL", 15*time.Minute),
 		},
 		CPFHashSalt: getEnv(v, "CPF_HASH_SALT", ""),
 		Swagger: SwaggerSettings{

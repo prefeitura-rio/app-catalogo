@@ -55,23 +55,23 @@ type CourseCategoria struct {
 // Course representa um curso do app-go-api.
 // Estrutura real: GET /api/public/courses → {"data": {"courses": [...], "pagination": {...}}}
 type Course struct {
-	ID               flexString        `json:"id"`
-	Title            string            `json:"title"`
-	Description      string            `json:"description"`
-	TargetAudience   string            `json:"target_audience"`
-	Organization     string            `json:"organization"`
-	Modalidade       string            `json:"modalidade"`
-	Turno            string            `json:"turno"`
-	Theme            string            `json:"theme"`
-	Categorias       []CourseCategoria `json:"categorias"`
-	URL              string            `json:"link_inscricao"`
-	ImageURL         string            `json:"cover_image"`
-	CargaHoraria     int               `json:"carga_horaria"`
-	HasCertificate   bool              `json:"has_certificate"`
-	IsVisible        bool              `json:"is_visible"`
-	Status           string            `json:"status"` // "published","approved","opened","canceled","draft"
-	DataLimiteInscr  *time.Time        `json:"data_limite_inscricoes"`
-	UpdatedAt        time.Time         `json:"updated_at"`
+	ID              flexString        `json:"id"`
+	Title           string            `json:"title"`
+	Description     string            `json:"description"`
+	TargetAudience  string            `json:"target_audience"`
+	Organization    string            `json:"organization"`
+	Modalidade      string            `json:"modalidade"`
+	Turno           string            `json:"turno"`
+	Theme           string            `json:"theme"`
+	Categorias      []CourseCategoria `json:"categorias"`
+	URL             string            `json:"link_inscricao"`
+	ImageURL        string            `json:"cover_image"`
+	CargaHoraria    int               `json:"carga_horaria"`
+	HasCertificate  bool              `json:"has_certificate"`
+	IsVisible       bool              `json:"is_visible"`
+	Status          string            `json:"status"` // "published","approved","opened","canceled","draft"
+	DataLimiteInscr *time.Time        `json:"data_limite_inscricoes"`
+	UpdatedAt       time.Time         `json:"updated_at"`
 }
 
 type coursesPageResponse struct {
@@ -87,13 +87,13 @@ type coursesPageResponse struct {
 // Job representa uma vaga de emprego do app-go-api.
 // Estrutura real: GET /api/public/empregabilidade/vagas → {"data": [...], "meta": {"total": N, ...}}
 type Job struct {
-	ID               string    `json:"id"`
-	Title            string    `json:"titulo"`
-	Description      string    `json:"descricao"`
-	ValorVaga        float64   `json:"valor_vaga"`
-	Bairro           string    `json:"bairro"`
-	AcessibilidadePCD string   `json:"acessibilidade_pcd"`
-	Contratante      struct {
+	ID                string  `json:"id"`
+	Title             string  `json:"titulo"`
+	Description       string  `json:"descricao"`
+	ValorVaga         float64 `json:"valor_vaga"`
+	Bairro            string  `json:"bairro"`
+	AcessibilidadePCD string  `json:"acessibilidade_pcd"`
+	Contratante       struct {
 		NomeFantasia string `json:"nome_fantasia"`
 		URLLogo      string `json:"url_logo"`
 	} `json:"contratante"`
@@ -113,22 +113,22 @@ type Job struct {
 // MEIOpportunity representa uma oportunidade MEI.
 // Estrutura real: GET /api/public/oportunidades-mei → {"data": [...], "meta": {"total": N, ...}}
 type MEIOpportunity struct {
-	ID                 flexString  `json:"id"`
-	Title              string      `json:"titulo"`
-	Description        string      `json:"descricao_servico"`
-	OutrasInformacoes  string      `json:"outras_informacoes"`
-	OrgaoID            string      `json:"orgao_id"`
-	CNAEIDs            []string    `json:"cnae_ids"`
-	Logradouro         string      `json:"logradouro"`
-	Numero             string      `json:"numero"`
-	Bairro             string      `json:"bairro"`
-	Cidade             string      `json:"cidade"`
-	FormaPagamento     string      `json:"forma_pagamento"`
-	PrazoPagamento     string      `json:"prazo_pagamento"`
-	DataExpiracao      *time.Time  `json:"data_expiracao"`
-	ImageURL           string      `json:"cover_image"`
-	Status             string      `json:"status"`
-	UpdatedAt          time.Time   `json:"updated_at"`
+	ID                flexString `json:"id"`
+	Title             string     `json:"titulo"`
+	Description       string     `json:"descricao_servico"`
+	OutrasInformacoes string     `json:"outras_informacoes"`
+	OrgaoID           string     `json:"orgao_id"`
+	CNAEIDs           []string   `json:"cnae_ids"`
+	Logradouro        string     `json:"logradouro"`
+	Numero            string     `json:"numero"`
+	Bairro            string     `json:"bairro"`
+	Cidade            string     `json:"cidade"`
+	FormaPagamento    string     `json:"forma_pagamento"`
+	PrazoPagamento    string     `json:"prazo_pagamento"`
+	DataExpiracao     *time.Time `json:"data_expiracao"`
+	ImageURL          string     `json:"cover_image"`
+	Status            string     `json:"status"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 type meiPageResponse struct {

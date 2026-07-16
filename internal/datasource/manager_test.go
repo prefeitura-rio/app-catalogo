@@ -14,8 +14,8 @@ type stubSource struct {
 	callCount atomic.Int32
 }
 
-func (s *stubSource) Name() string               { return s.name }
-func (s *stubSource) Source() models.ItemSource  { return models.ItemSource(s.name) }
+func (s *stubSource) Name() string                { return s.name }
+func (s *stubSource) Source() models.ItemSource   { return models.ItemSource(s.name) }
 func (s *stubSource) SyncInterval() time.Duration { return time.Hour } // ticker longo: não dispara em teste
 func (s *stubSource) Sync(_ context.Context) error {
 	s.callCount.Add(1)

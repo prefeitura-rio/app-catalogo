@@ -13,9 +13,9 @@ const (
 	SyncStatusCompleted SyncEventStatus = "completed"
 	SyncStatusFailed    SyncEventStatus = "failed"
 
-	SyncTypeFullSync   SyncEventType = "full_sync"
-	SyncTypeDeltaSync  SyncEventType = "delta_sync"
-	SyncTypeWebhook    SyncEventType = "webhook"
+	SyncTypeFullSync  SyncEventType = "full_sync"
+	SyncTypeDeltaSync SyncEventType = "delta_sync"
+	SyncTypeWebhook   SyncEventType = "webhook"
 )
 
 type SyncEvent struct {
@@ -41,12 +41,12 @@ type SalesForceSyncCursor struct {
 }
 
 type SyncStatus struct {
-	Source         ItemSource      `json:"source"`
-	LastEventType  SyncEventType   `json:"last_event_type"`
-	LastStatus     SyncEventStatus `json:"last_status"`
-	LastStartedAt  time.Time       `json:"last_started_at"`
-	LastCompletedAt *time.Time     `json:"last_completed_at,omitempty"`
-	ItemsProcessed int             `json:"items_processed"`
-	ItemsFailed    int             `json:"items_failed"`
-	ErrorMessage   string          `json:"error_message,omitempty"`
+	Source          ItemSource      `json:"source"`
+	LastEventType   SyncEventType   `json:"last_event_type"`
+	LastStatus      SyncEventStatus `json:"last_status"`
+	LastStartedAt   time.Time       `json:"last_started_at"`
+	LastCompletedAt *time.Time      `json:"last_completed_at,omitempty"`
+	ItemsProcessed  int             `json:"items_processed"`
+	ItemsFailed     int             `json:"items_failed"`
+	ErrorMessage    string          `json:"error_message,omitempty"`
 }

@@ -12,9 +12,9 @@ import (
 // Todos os tokens de Pattern devem estar presentes na query normalizada.
 // Se qualquer token de AntiPatterns estiver presente, a regra não se aplica.
 type synonymRule struct {
-	Pattern     []string
+	Pattern      []string
 	AntiPatterns []string
-	Expansion   string
+	Expansion    string
 }
 
 // synonymRules cobre termos coloquiais, siglas e abreviações comuns nos serviços

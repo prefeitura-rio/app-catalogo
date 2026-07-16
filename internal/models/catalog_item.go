@@ -30,27 +30,27 @@ const (
 )
 
 type CatalogItem struct {
-	ID           uuid.UUID       `json:"id"`
-	ExternalID   string          `json:"external_id"`
-	Source       ItemSource      `json:"source"`
-	Type         ItemType        `json:"type"`
-	Title        string          `json:"title"`
-	Description  string          `json:"description,omitempty"`
-	ShortDesc    string          `json:"short_desc,omitempty"`
-	Organization string          `json:"organization,omitempty"`
-	URL          string          `json:"url,omitempty"`
-	ImageURL     string          `json:"image_url,omitempty"`
-	TargetAudience json.RawMessage `json:"target_audience,omitempty" swaggertype:"object"`
-	Bairros      []string        `json:"bairros,omitempty"`
-	Modalidade   string          `json:"modalidade,omitempty"`
-	Status       ItemStatus      `json:"status"`
-	Tags         []string        `json:"tags,omitempty"`
-	SourceData   json.RawMessage `json:"source_data,omitempty" swaggertype:"object"`
-	ValidFrom    *time.Time      `json:"valid_from,omitempty"`
-	ValidUntil   *time.Time      `json:"valid_until,omitempty"`
-	SourceUpdatedAt *time.Time   `json:"source_updated_at,omitempty"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	ID              uuid.UUID       `json:"id"`
+	ExternalID      string          `json:"external_id"`
+	Source          ItemSource      `json:"source"`
+	Type            ItemType        `json:"type"`
+	Title           string          `json:"title"`
+	Description     string          `json:"description,omitempty"`
+	ShortDesc       string          `json:"short_desc,omitempty"`
+	Organization    string          `json:"organization,omitempty"`
+	URL             string          `json:"url,omitempty"`
+	ImageURL        string          `json:"image_url,omitempty"`
+	TargetAudience  json.RawMessage `json:"target_audience,omitempty" swaggertype:"object"`
+	Bairros         []string        `json:"bairros,omitempty"`
+	Modalidade      string          `json:"modalidade,omitempty"`
+	Status          ItemStatus      `json:"status"`
+	Tags            []string        `json:"tags,omitempty"`
+	SourceData      json.RawMessage `json:"source_data,omitempty" swaggertype:"object"`
+	ValidFrom       *time.Time      `json:"valid_from,omitempty"`
+	ValidUntil      *time.Time      `json:"valid_until,omitempty"`
+	SourceUpdatedAt *time.Time      `json:"source_updated_at,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
 // TargetAudienceData contém os critérios de elegibilidade de um item.

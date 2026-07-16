@@ -224,12 +224,12 @@ func (s *RecommendationService) scoreItem(
 		w.TipoItem*tipoScore
 
 	breakdown := map[string]float64{
-		"escolaridade":  round2(w.Escolaridade * escolaridadeScore),
-		"renda":         round2(w.RendaFamiliar * rendaScore),
-		"localizacao":   round2(w.Localizacao * locScore),
+		"escolaridade":   round2(w.Escolaridade * escolaridadeScore),
+		"renda":          round2(w.RendaFamiliar * rendaScore),
+		"localizacao":    round2(w.Localizacao * locScore),
 		"acessibilidade": round2(w.Acessibilidade * acessibilidadeScore),
-		"faixa_etaria":  round2(w.FaixaEtaria * faixaEtariaScore),
-		"tipo":          round2(w.TipoItem * tipoScore),
+		"faixa_etaria":   round2(w.FaixaEtaria * faixaEtariaScore),
+		"tipo":           round2(w.TipoItem * tipoScore),
 	}
 
 	return round2(total), breakdown

@@ -31,8 +31,8 @@ func NewAppGoAPIDataSource(
 	}
 }
 
-func (s *AppGoAPIDataSource) Name() string               { return "app-go-api" }
-func (s *AppGoAPIDataSource) Source() models.ItemSource  { return models.SourceAppGoAPI }
+func (s *AppGoAPIDataSource) Name() string                { return "app-go-api" }
+func (s *AppGoAPIDataSource) Source() models.ItemSource   { return models.SourceAppGoAPI }
 func (s *AppGoAPIDataSource) SyncInterval() time.Duration { return s.syncInterval }
 
 // Sync sincroniza cursos, vagas e MEI. Sempre busca desde o início (sem cursor por ora).

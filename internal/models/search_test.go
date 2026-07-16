@@ -4,7 +4,7 @@ import "testing"
 
 func TestSearchRequest_Normalize(t *testing.T) {
 	cases := []struct {
-		input   SearchRequest
+		input       SearchRequest
 		wantPage    int
 		wantPerPage int
 	}{
