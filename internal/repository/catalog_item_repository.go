@@ -3,11 +3,9 @@ package repository
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
 )
@@ -95,9 +93,6 @@ func (r *CatalogItemRepository) Upsert(ctx context.Context, item *models.Catalog
 }
 
 // UpsertBatch executa upserts em lote dentro de uma única transação.
-// Retorna quantos itens foram de fato inseridos ou tiveram algum dado alterado —
-// uma sync que reprocessa itens já idênticos ao registrado não conta como
-// alteração, o que evita invalidar o cache de busca sem necessidade real.
 func (r *CatalogItemRepository) UpsertBatch(ctx context.Context, items []*models.CatalogItem) (int, error) {
 	if len(items) == 0 {
 		return 0, nil
@@ -129,8 +124,7 @@ func (r *CatalogItemRepository) UpsertBatch(ctx context.Context, items []*models
 			sourceData = json.RawMessage("{}")
 		}
 
-		var id uuid.UUID
-		err := tx.QueryRow(ctx, `
+		_, err := tx.Exec(ctx, `
 			INSERT INTO catalog_items (
 				external_id, source, type, title, description, short_desc,
 				organization, url, image_url, target_audience, bairros,
@@ -160,9 +154,6 @@ func (r *CatalogItemRepository) UpsertBatch(ctx context.Context, items []*models
 				valid_until      = EXCLUDED.valid_until,
 				source_updated_at = EXCLUDED.source_updated_at,
 				updated_at       = NOW()
-			WHERE
-				catalog_items.source_data IS DISTINCT FROM EXCLUDED.source_data
-			RETURNING id
 		`,
 			item.ExternalID,
 			string(item.Source),
@@ -182,13 +173,8 @@ func (r *CatalogItemRepository) UpsertBatch(ctx context.Context, items []*models
 			item.ValidFrom,
 			item.ValidUntil,
 			item.SourceUpdatedAt,
-		).Scan(&id)
+		)
 		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				// Conflito existente cujo source_data é idêntico ao já
-				// registrado — WHERE bloqueou o UPDATE, nada mudou de fato.
-				continue
-			}
 			return count, err
 		}
 		count++
