@@ -11,12 +11,9 @@ import (
 // Manager orquestra todas as fontes de dados registradas.
 // Cada fonte roda em sua própria goroutine com seu próprio ticker.
 type Manager struct {
-	mu        sync.RWMutex
-	sources   []DataSource
-	syncHooks []SyncHook
+	mu      sync.RWMutex
+	sources []DataSource
 }
-
-type SyncHook func(ctx context.Context, source DataSource) error
 
 func NewManager() *Manager {
 	return &Manager{}
@@ -32,26 +29,6 @@ func (m *Manager) Register(source DataSource) {
 		Str("source", source.Name()).
 		Dur("interval", source.SyncInterval()).
 		Msg("datasource: fonte registrada")
-}
-
-// AddSyncHook registra uma ação executada após uma sync bem-sucedida.
-func (m *Manager) AddSyncHook(hook SyncHook) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.syncHooks = append(m.syncHooks, hook)
-}
-
-// HasSource reports whether a source name or canonical source identifier is
-// registered. It is safe to call while manual triggers are being served.
-func (m *Manager) HasSource(sourceName string) bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, source := range m.sources {
-		if matchesSource(source, sourceName) {
-			return true
-		}
-	}
-	return false
 }
 
 // Start inicia todas as fontes registradas. Bloqueia até o context ser cancelado.
@@ -72,7 +49,7 @@ func (m *Manager) Start(ctx context.Context) {
 		wg.Add(1)
 		go func(s DataSource) {
 			defer wg.Done()
-			m.runSource(ctx, s)
+			runSource(ctx, s)
 		}(src)
 	}
 
@@ -89,7 +66,9 @@ func (m *Manager) TriggerAll(ctx context.Context) {
 
 	for _, src := range sources {
 		go func(s DataSource) {
-			m.syncSource(ctx, s, "datasource: sync manual (all) falhou")
+			if err := s.Sync(ctx); err != nil {
+				log.Error().Err(err).Str("source", s.Name()).Msg("datasource: sync manual (all) falhou")
+			}
 		}(src)
 	}
 }
@@ -101,9 +80,11 @@ func (m *Manager) TriggerSync(ctx context.Context, sourceName string) bool {
 	defer m.mu.RUnlock()
 
 	for _, src := range m.sources {
-		if matchesSource(src, sourceName) {
+		if src.Name() == sourceName || string(src.Source()) == sourceName {
 			go func(s DataSource) {
-				m.syncSource(ctx, s, "datasource: sync manual falhou")
+				if err := s.Sync(ctx); err != nil {
+					log.Error().Err(err).Str("source", s.Name()).Msg("datasource: sync manual falhou")
+				}
 			}(src)
 			return true
 		}
@@ -111,15 +92,13 @@ func (m *Manager) TriggerSync(ctx context.Context, sourceName string) bool {
 	return false
 }
 
-func matchesSource(source DataSource, sourceName string) bool {
-	return source.Name() == sourceName || string(source.Source()) == sourceName
-}
-
-func (m *Manager) runSource(ctx context.Context, s DataSource) {
+func runSource(ctx context.Context, s DataSource) {
 	log.Info().Str("source", s.Name()).Msg("datasource: iniciando")
 
 	// Sync inicial na startup
-	m.syncSource(ctx, s, "datasource: erro na sync inicial")
+	if err := s.Sync(ctx); err != nil {
+		log.Error().Err(err).Str("source", s.Name()).Msg("datasource: erro na sync inicial")
+	}
 
 	ticker := time.NewTicker(s.SyncInterval())
 	defer ticker.Stop()
@@ -130,34 +109,9 @@ func (m *Manager) runSource(ctx context.Context, s DataSource) {
 			log.Info().Str("source", s.Name()).Msg("datasource: encerrado")
 			return
 		case <-ticker.C:
-			m.syncSource(ctx, s, "datasource: erro no sync periódico")
-		}
-	}
-}
-
-func (m *Manager) syncSource(ctx context.Context, s DataSource, errorMsg string) {
-	changed, err := s.Sync(ctx)
-	// Uma fonte pode confirmar alterações em um subconjunto e ainda retornar
-	// erro para outro. O cache precisa ser invalidado para toda mutação efetiva,
-	// mesmo quando a execução global é reportada como parcial/falha.
-	if changed > 0 {
-		m.runSyncHooks(ctx, s)
-	}
-	if err != nil {
-		log.Error().Err(err).Str("source", s.Name()).Msg(errorMsg)
-		return
-	}
-}
-
-func (m *Manager) runSyncHooks(ctx context.Context, source DataSource) {
-	m.mu.RLock()
-	hooks := make([]SyncHook, len(m.syncHooks))
-	copy(hooks, m.syncHooks)
-	m.mu.RUnlock()
-
-	for _, hook := range hooks {
-		if err := hook(ctx, source); err != nil {
-			log.Warn().Err(err).Str("source", source.Name()).Msg("datasource: sync hook falhou")
+			if err := s.Sync(ctx); err != nil {
+				log.Error().Err(err).Str("source", s.Name()).Msg("datasource: erro no sync periódico")
+			}
 		}
 	}
 }

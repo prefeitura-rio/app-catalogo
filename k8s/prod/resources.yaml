@@ -41,52 +41,6 @@ spec:
             }[2m])) > 0) or vector(0)
 
 ---
-# Database migrations run once before workloads receive the new image.
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: catalogo-migrate
-  annotations:
-    argocd.argoproj.io/hook: PreSync
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
-    secrets.infisical.com/auto-reload: "true"
-spec:
-  activeDeadlineSeconds: 300
-  backoffLimit: 1
-  template:
-    metadata:
-      labels:
-        app: catalogo-migrate
-    spec:
-      automountServiceAccountToken: false
-      restartPolicy: Never
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 10001
-        seccompProfile:
-          type: RuntimeDefault
-      containers:
-        - name: catalogo-migrate
-          image: ghcr.io/prefeitura-rio/app-catalogo:stable@sha256:75b9ff767a0528625d0de060f1b64a53bcf14fc0f57821bcb82657c8f483ccce  # Updated by release workflow
-          command: ["./migrate", "up"]
-          envFrom:
-            - secretRef:
-                name: catalogo-secrets
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-              ephemeral-storage: 50Mi
-            limits:
-              cpu: 500m
-              memory: 256Mi
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
-            readOnlyRootFilesystem: true
-
----
 # API — Argo Rollout com Canary + Istio traffic shifting (prod)
 apiVersion: argoproj.io/v1alpha1
 kind: Rollout
@@ -144,11 +98,6 @@ spec:
         sidecar.istio.io/proxyMemoryLimit: "1Gi"
     spec:
       automountServiceAccountToken: false
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 10001
-        seccompProfile:
-          type: RuntimeDefault
       containers:
         - name: catalogo
           image: ghcr.io/prefeitura-rio/app-catalogo:stable@sha256:75b9ff767a0528625d0de060f1b64a53bcf14fc0f57821bcb82657c8f483ccce  # Updated by release workflow
@@ -164,6 +113,8 @@ spec:
               value: "app-catalogo"
             - name: TRACING_SERVICE_VERSION
               value: "v1.0.0"
+            - name: RUN_MIGRATIONS
+              value: "true"
           envFrom:
             - secretRef:
                 name: catalogo-secrets
@@ -175,11 +126,6 @@ spec:
             limits:
               cpu: 2000m
               memory: 1Gi
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
-            readOnlyRootFilesystem: true
           livenessProbe:
             httpGet:
               path: /health
@@ -228,11 +174,6 @@ spec:
         sidecar.istio.io/proxyMemoryLimit: "512Mi"
     spec:
       automountServiceAccountToken: false
-      securityContext:
-        runAsNonRoot: true
-        runAsUser: 10001
-        seccompProfile:
-          type: RuntimeDefault
       containers:
         - name: catalogo-worker
           image: ghcr.io/prefeitura-rio/app-catalogo:stable@sha256:75b9ff767a0528625d0de060f1b64a53bcf14fc0f57821bcb82657c8f483ccce  # Updated by release workflow
@@ -248,11 +189,6 @@ spec:
             limits:
               cpu: 1000m
               memory: 512Mi
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
-            readOnlyRootFilesystem: true
       restartPolicy: Always
 
 ---

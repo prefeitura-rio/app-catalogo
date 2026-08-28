@@ -3,8 +3,8 @@ package clients
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,158 +12,103 @@ import (
 	"time"
 )
 
-const (
-	maximumKeycloakTokenResponseBytes int64 = 64 << 10
-	maximumServiceCredentialBytes           = 16 << 10
-	defaultKeycloakTokenLifetime            = 5 * time.Minute
-	maximumKeycloakTokenLifetime            = 24 * time.Hour
-	keycloakTokenRefreshLead                = 30 * time.Second
-)
-
-// KeycloakTokenManager obtains and renews service-account client_credentials tokens.
+// KeycloakTokenManager obtém e renova tokens de service account via client_credentials.
 type KeycloakTokenManager struct {
-	tokenURL     string
+	keycloakURL  string
+	realm        string
 	clientID     string
 	clientSecret string
 	httpClient   *http.Client
-	now          func() time.Time
 
-	mutex        sync.RWMutex
-	refreshMutex sync.Mutex
-	token        string
-	expiresAt    time.Time
+	mu        sync.RWMutex
+	token     string
+	expiresAt time.Time
 }
 
-func NewKeycloakTokenManager(
-	keycloakURL string,
-	realm string,
-	clientID string,
-	clientSecret string,
-) (*KeycloakTokenManager, error) {
-	parsedBaseURL, baseURLError := validateServiceBaseURL(keycloakURL, true, true)
-	if baseURLError != nil {
-		return nil, fmt.Errorf("keycloak: invalid base URL: %w", baseURLError)
-	}
-	canonicalRealm := strings.TrimSpace(realm)
-	if canonicalRealm == "" || canonicalRealm == "." || canonicalRealm == ".." ||
-		url.PathEscape(canonicalRealm) != canonicalRealm {
-		return nil, errors.New("keycloak: realm must be one safe URL path segment")
-	}
-	if credentialError := validateServiceCredential(clientID, maximumServiceCredentialBytes); credentialError != nil {
-		return nil, errors.New("keycloak: client ID is missing or invalid")
-	}
-	if credentialError := validateServiceCredential(clientSecret, maximumServiceCredentialBytes); credentialError != nil {
-		return nil, errors.New("keycloak: client secret is missing or invalid")
-	}
-	tokenURL, joinError := url.JoinPath(
-		parsedBaseURL.String(),
-		"realms",
-		canonicalRealm,
-		"protocol",
-		"openid-connect",
-		"token",
-	)
-	if joinError != nil {
-		return nil, errors.New("keycloak: build token URL")
-	}
+func NewKeycloakTokenManager(keycloakURL, realm, clientID, clientSecret string) *KeycloakTokenManager {
 	return &KeycloakTokenManager{
-		tokenURL:     tokenURL,
+		keycloakURL:  keycloakURL,
+		realm:        realm,
 		clientID:     clientID,
 		clientSecret: clientSecret,
-		httpClient:   noRedirectHTTPClient(10 * time.Second),
-		now:          time.Now,
-	}, nil
+		httpClient:   &http.Client{Timeout: 10 * time.Second},
+	}
 }
 
-type keycloakTokenResponse struct {
+type kcTokenResponse struct {
 	AccessToken string `json:"access_token"`
 	ExpiresIn   int    `json:"expires_in"`
 }
 
-func (manager *KeycloakTokenManager) fetchToken(ctx context.Context) error {
-	formValues := url.Values{
+func (m *KeycloakTokenManager) fetchToken(ctx context.Context) error {
+	tokenURL := fmt.Sprintf("%s/realms/%s/protocol/openid-connect/token", m.keycloakURL, m.realm)
+
+	data := url.Values{
 		"grant_type":    {"client_credentials"},
-		"client_id":     {manager.clientID},
-		"client_secret": {manager.clientSecret},
-	}
-	request, requestError := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		manager.tokenURL,
-		strings.NewReader(formValues.Encode()),
-	)
-	if requestError != nil {
-		return fmt.Errorf("keycloak: create token request: %w", requestError)
-	}
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	response, requestError := manager.httpClient.Do(request)
-	if requestError != nil {
-		return fmt.Errorf("keycloak: token request failed: %w", requestError)
-	}
-	defer response.Body.Close()
-	encodedBody, readError := readBoundedHTTPBody(response.Body, maximumKeycloakTokenResponseBytes)
-	if readError != nil {
-		return fmt.Errorf("keycloak: invalid token response size: %w", readError)
-	}
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("keycloak: token endpoint returned status %d", response.StatusCode)
+		"client_id":     {m.clientID},
+		"client_secret": {m.clientSecret},
 	}
 
-	var tokenResponse keycloakTokenResponse
-	if decodeError := json.Unmarshal(encodedBody, &tokenResponse); decodeError != nil {
-		return errors.New("keycloak: token endpoint returned invalid JSON")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return fmt.Errorf("keycloak: falha ao criar request: %w", err)
 	}
-	if credentialError := validateServiceCredential(tokenResponse.AccessToken, maximumServiceCredentialBytes); credentialError != nil {
-		return errors.New("keycloak: token endpoint returned an invalid access token")
-	}
-	if tokenResponse.ExpiresIn <= 0 {
-		tokenResponse.ExpiresIn = int(defaultKeycloakTokenLifetime / time.Second)
-	}
-	if tokenResponse.ExpiresIn > int(maximumKeycloakTokenLifetime/time.Second) {
-		return errors.New("keycloak: token endpoint returned an invalid lifetime")
-	}
-	tokenLifetime := time.Duration(tokenResponse.ExpiresIn) * time.Second
-	refreshLead := min(keycloakTokenRefreshLead, tokenLifetime/2)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	manager.mutex.Lock()
-	manager.token = tokenResponse.AccessToken
-	manager.expiresAt = manager.now().Add(tokenLifetime - refreshLead)
-	manager.mutex.Unlock()
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("keycloak: falha na requisição: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("keycloak: retornou %d: %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp kcTokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return fmt.Errorf("keycloak: falha ao decodificar token: %w", err)
+	}
+
+	expiry := tokenResp.ExpiresIn
+	if expiry <= 0 {
+		expiry = 300
+	}
+
+	m.mu.Lock()
+	m.token = tokenResp.AccessToken
+	m.expiresAt = time.Now().Add(time.Duration(expiry-30) * time.Second)
+	m.mu.Unlock()
+
 	return nil
 }
 
-// GetToken returns a valid token, collapsing concurrent refreshes.
-func (manager *KeycloakTokenManager) GetToken(ctx context.Context) (string, error) {
-	if token, valid := manager.cachedToken(); valid {
+// GetToken retorna um token válido, renovando se necessário.
+func (m *KeycloakTokenManager) GetToken(ctx context.Context) (string, error) {
+	m.mu.RLock()
+	token := m.token
+	valid := time.Now().Before(m.expiresAt)
+	m.mu.RUnlock()
+
+	if token != "" && valid {
 		return token, nil
 	}
-	manager.refreshMutex.Lock()
-	defer manager.refreshMutex.Unlock()
-	if token, valid := manager.cachedToken(); valid {
-		return token, nil
+
+	if err := m.fetchToken(ctx); err != nil {
+		return "", err
 	}
-	if fetchError := manager.fetchToken(ctx); fetchError != nil {
-		return "", fetchError
-	}
-	token, valid := manager.cachedToken()
-	if !valid {
-		return "", errors.New("keycloak: refreshed token is not usable")
-	}
-	return token, nil
+
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.token, nil
 }
 
-func (manager *KeycloakTokenManager) cachedToken() (string, bool) {
-	manager.mutex.RLock()
-	defer manager.mutex.RUnlock()
-	return manager.token, manager.token != "" && manager.now().Before(manager.expiresAt)
-}
-
-// BearerToken returns the Authorization header value without exposing it in errors.
-func (manager *KeycloakTokenManager) BearerToken(ctx context.Context) (string, error) {
-	token, tokenError := manager.GetToken(ctx)
-	if tokenError != nil {
-		return "", tokenError
+// BearerToken retorna "Bearer <token>".
+func (m *KeycloakTokenManager) BearerToken(ctx context.Context) (string, error) {
+	token, err := m.GetToken(ctx)
+	if err != nil {
+		return "", err
 	}
 	return "Bearer " + token, nil
 }
