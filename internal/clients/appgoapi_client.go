@@ -149,13 +149,6 @@ type jobsPageResponse struct {
 	} `json:"meta"`
 }
 
-type paginatedResponse[T any] struct {
-	Data    []T `json:"data"`
-	Total   int `json:"total"`
-	Page    int `json:"page"`
-	PerPage int `json:"per_page"`
-}
-
 func (c *AppGoAPIClient) doGet(ctx context.Context, path string, dest interface{}) error {
 	authHeader, err := c.tokenManager.BearerToken(ctx)
 	if err != nil {
@@ -173,7 +166,7 @@ func (c *AppGoAPIClient) doGet(ctx context.Context, path string, dest interface{
 	if err != nil {
 		return fmt.Errorf("appgoapi: falha na requisição: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {

@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
 )
 
@@ -102,7 +103,7 @@ func (r *CatalogItemRepository) UpsertBatch(ctx context.Context, items []*models
 	if err != nil {
 		return 0, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	count := 0
 	for _, item := range items {

@@ -62,7 +62,7 @@ func (c *RMIClient) GetCitizen(ctx context.Context, cpf string) (*CitizenData, e
 	if err != nil {
 		return nil, fmt.Errorf("rmi: falha na requisição: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil

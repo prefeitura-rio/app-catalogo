@@ -63,9 +63,7 @@ func (h *AdminHandler) TriggerSync(c *gin.Context) {
 		if source == "" {
 			h.manager.TriggerAll(ctx)
 		} else {
-			if !h.manager.TriggerSync(ctx, source) {
-				// fonte não encontrada — sem efeito, log já é feito no manager
-			}
+			_ = h.manager.TriggerSync(ctx, source)
 		}
 	}()
 

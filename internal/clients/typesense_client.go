@@ -85,7 +85,7 @@ func (c *TypesenseClient) ExportSince(ctx context.Context, since time.Time, fn f
 	if err != nil {
 		return fmt.Errorf("typesense: erro na requisição: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("typesense: status inesperado %d para coleção %s", resp.StatusCode, c.collection)

@@ -52,7 +52,7 @@ func NewRerankerClient(baseURL string, timeout time.Duration) *RerankerClient {
 func (c *RerankerClient) Rerank(ctx context.Context, query string, docs []RerankerDocument) ([]RerankerResult, error) {
 	reqDocs := make([]rerankerDocument, len(docs))
 	for i, d := range docs {
-		reqDocs[i] = rerankerDocument{ID: d.ID, Text: d.Text}
+		reqDocs[i] = rerankerDocument(d)
 	}
 
 	body, err := json.Marshal(rerankerRequest{Query: query, Documents: reqDocs})
@@ -70,7 +70,7 @@ func (c *RerankerClient) Rerank(ctx context.Context, query string, docs []Rerank
 	if err != nil {
 		return nil, nil // indisponível — fallback gracioso
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("reranker: status %d", resp.StatusCode)

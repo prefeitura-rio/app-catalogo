@@ -24,13 +24,15 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("falha ao abrir conexão para migrations")
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := db.PingContext(context.Background()); err != nil {
 		log.Fatal().Err(err).Msg("falha ao conectar ao banco para migrations")
 	}
 
-	goose.SetDialect("postgres")
+	if err := goose.SetDialect("postgres"); err != nil {
+		log.Fatal().Err(err).Msg("falha ao configurar dialect do goose")
+	}
 
 	dir := "db/migrations"
 	command := "up"

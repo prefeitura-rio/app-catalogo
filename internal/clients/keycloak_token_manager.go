@@ -59,7 +59,7 @@ func (m *KeycloakTokenManager) fetchToken(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("keycloak: falha na requisição: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {

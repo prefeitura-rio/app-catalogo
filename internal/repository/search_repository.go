@@ -82,7 +82,7 @@ func buildFilterClauses(req *models.SearchRequest, startIdx int) (string, []inte
 // Search executa busca FTS melhorada com ts_rank_cd + boost de similaridade de título.
 // Usado como fallback quando embedding não está disponível.
 func (r *SearchRepository) Search(ctx context.Context, req *models.SearchRequest) ([]*SearchResult, int, error) {
-	filterSQL, filterArgs, nextIdx := buildFilterClauses(req, 2) // $1 reservado para a query
+	filterSQL, filterArgs, _ := buildFilterClauses(req, 2) // $1 reservado para a query
 
 	baseWhere := `
 		ci.status = 'active'
@@ -126,14 +126,13 @@ func (r *SearchRepository) Search(ctx context.Context, req *models.SearchRequest
 		countArgs = append([]interface{}{queryArg}, filterArgs...)
 	} else {
 		// Reconstrói filtros a partir de $1 já que não há queryArg
-		filterSQL, filterArgs, nextIdx = buildFilterClauses(req, 1)
+		filterSQL, filterArgs, _ = buildFilterClauses(req, 1)
 		baseWhere = `
 			ci.status = 'active'
 			AND ci.deleted_at IS NULL
 			AND (ci.valid_until IS NULL OR ci.valid_until > NOW())
 			` + filterSQL
 		countArgs = filterArgs
-		_ = nextIdx
 	}
 
 	countSQL := fmt.Sprintf(`
@@ -171,7 +170,7 @@ func (r *SearchRepository) Search(ctx context.Context, req *models.SearchRequest
 		%s
 	`, rankExpr, headlineExpr, baseWhere, tsCondition, orderBy, limitClause)
 
-	results, _, err := r.scanResults(ctx, mainSQL, mainArgs)
+	results, err := r.scanResults(ctx, mainSQL, mainArgs)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -285,7 +284,7 @@ func (r *SearchRepository) SearchHybrid(ctx context.Context, req *models.SearchR
 		%s
 	`, baseWhere, baseWhere, limitClause)
 
-	results, _, err := r.scanResults(ctx, mainSQL, mainArgs)
+	results, err := r.scanResults(ctx, mainSQL, mainArgs)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -406,17 +405,17 @@ func (r *SearchRepository) SearchHybridWithHyDE(ctx context.Context, req *models
 		%s
 	`, baseWhere, baseWhere, baseWhere, limitClause)
 
-	results, _, err := r.scanResults(ctx, mainSQL, mainArgs)
+	results, err := r.scanResults(ctx, mainSQL, mainArgs)
 	if err != nil {
 		return nil, 0, err
 	}
 	return results, total, nil
 }
 
-func (r *SearchRepository) scanResults(ctx context.Context, sql string, args []interface{}) ([]*SearchResult, int, error) {
+func (r *SearchRepository) scanResults(ctx context.Context, sql string, args []interface{}) ([]*SearchResult, error) {
 	rows, err := r.db.Query(ctx, sql, args...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("search query: %w", err)
+		return nil, fmt.Errorf("search query: %w", err)
 	}
 	defer rows.Close()
 
@@ -437,7 +436,7 @@ func (r *SearchRepository) scanResults(ctx context.Context, sql string, args []i
 			&item.CreatedAt, &item.UpdatedAt,
 			&rank, &headline,
 		); err != nil {
-			return nil, 0, fmt.Errorf("search scan: %w", err)
+			return nil, fmt.Errorf("search scan: %w", err)
 		}
 		item.Source = models.ItemSource(source)
 		item.Type = models.ItemType(itemType)
@@ -449,5 +448,5 @@ func (r *SearchRepository) scanResults(ctx context.Context, sql string, args []i
 			Headline: headline,
 		})
 	}
-	return results, len(results), rows.Err()
+	return results, rows.Err()
 }

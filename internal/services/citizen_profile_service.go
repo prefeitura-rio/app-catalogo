@@ -54,7 +54,9 @@ func (s *CitizenProfileService) GetOrSync(ctx context.Context, cpf string) (*mod
 			return profile, nil
 		}
 		// Atualizar em background e retornar o dado existente
-		go s.syncFromRMI(context.Background(), cpf, hash)
+		go func() {
+			_, _ = s.syncFromRMI(context.Background(), cpf, hash)
+		}()
 		return profile, nil
 	}
 

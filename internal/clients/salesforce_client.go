@@ -62,7 +62,7 @@ func (c *SalesForceClient) authenticate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("salesforce: falha na auth: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
@@ -145,7 +145,7 @@ func (c *SalesForceClient) Query(ctx context.Context, soql string) ([]map[string
 		}
 
 		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode == http.StatusUnauthorized {
 			// Tentar renovar token uma vez
