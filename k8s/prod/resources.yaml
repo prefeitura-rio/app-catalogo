@@ -1,46 +1,4 @@
 ---
-# AnalysisTemplate — verifica taxa de sucesso durante o canary
-apiVersion: argoproj.io/v1alpha1
-kind: AnalysisTemplate
-metadata:
-  name: catalogo-success-rate
-spec:
-  args:
-    - name: service-name
-  metrics:
-    - name: success-rate
-      interval: 1m
-      failureLimit: 5
-      successCondition: result[0] >= 0.95
-      provider:
-        prometheus:
-          address: http://prometheus.istio-system.svc.cluster.local:9090
-          query: |
-            (sum(rate(istio_requests_total{
-              destination_service_name=~"{{args.service-name}}",
-              response_code!~"5.."
-            }[2m])) or vector(0)) /
-            (sum(rate(istio_requests_total{
-              destination_service_name=~"{{args.service-name}}"
-            }[2m])) > 0) or vector(1)
-
-    - name: error-rate
-      interval: 1m
-      failureLimit: 5
-      successCondition: result[0] <= 0.05
-      provider:
-        prometheus:
-          address: http://prometheus.istio-system.svc.cluster.local:9090
-          query: |
-            (sum(rate(istio_requests_total{
-              destination_service_name=~"{{args.service-name}}",
-              response_code=~"5.."
-            }[2m])) or vector(0)) /
-            (sum(rate(istio_requests_total{
-              destination_service_name=~"{{args.service-name}}"
-            }[2m])) > 0) or vector(0)
-
----
 # Database migrations run once before workloads receive the new image.
 apiVersion: batch/v1
 kind: Job
@@ -85,6 +43,48 @@ spec:
             capabilities:
               drop: ["ALL"]
             readOnlyRootFilesystem: true
+
+---
+# AnalysisTemplate — verifica taxa de sucesso durante o canary
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: catalogo-success-rate
+spec:
+  args:
+    - name: service-name
+  metrics:
+    - name: success-rate
+      interval: 1m
+      failureLimit: 5
+      successCondition: result[0] >= 0.95
+      provider:
+        prometheus:
+          address: http://prometheus.istio-system.svc.cluster.local:9090
+          query: |
+            (sum(rate(istio_requests_total{
+              destination_service_name=~"{{args.service-name}}",
+              response_code!~"5.."
+            }[2m])) or vector(0)) /
+            (sum(rate(istio_requests_total{
+              destination_service_name=~"{{args.service-name}}"
+            }[2m])) > 0) or vector(1)
+
+    - name: error-rate
+      interval: 1m
+      failureLimit: 5
+      successCondition: result[0] <= 0.05
+      provider:
+        prometheus:
+          address: http://prometheus.istio-system.svc.cluster.local:9090
+          query: |
+            (sum(rate(istio_requests_total{
+              destination_service_name=~"{{args.service-name}}",
+              response_code=~"5.."
+            }[2m])) or vector(0)) /
+            (sum(rate(istio_requests_total{
+              destination_service_name=~"{{args.service-name}}"
+            }[2m])) > 0) or vector(0)
 
 ---
 # API — Argo Rollout com Canary + Istio traffic shifting (prod)
@@ -167,6 +167,11 @@ spec:
           envFrom:
             - secretRef:
                 name: catalogo-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
           resources:
             requests:
               cpu: 500m
@@ -175,11 +180,6 @@ spec:
             limits:
               cpu: 2000m
               memory: 1Gi
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
-            readOnlyRootFilesystem: true
           livenessProbe:
             httpGet:
               path: /health
@@ -240,6 +240,11 @@ spec:
           envFrom:
             - secretRef:
                 name: catalogo-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
           resources:
             requests:
               cpu: 200m
@@ -248,11 +253,6 @@ spec:
             limits:
               cpu: 1000m
               memory: 512Mi
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
-            readOnlyRootFilesystem: true
       restartPolicy: Always
 
 ---

@@ -100,6 +100,11 @@ spec:
           envFrom:
             - secretRef:
                 name: catalogo-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
           resources:
             requests:
               cpu: 250m
@@ -108,11 +113,6 @@ spec:
             limits:
               cpu: 1000m
               memory: 512Mi
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
-            readOnlyRootFilesystem: true
           livenessProbe:
             httpGet:
               path: /health
@@ -173,6 +173,11 @@ spec:
           envFrom:
             - secretRef:
                 name: catalogo-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
           resources:
             requests:
               cpu: 100m
@@ -181,11 +186,6 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop: ["ALL"]
-            readOnlyRootFilesystem: true
       restartPolicy: Always
 
 ---

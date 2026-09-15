@@ -35,7 +35,5 @@ type DataSource interface {
 
 	// Sync executa a sincronização. Deve ser incremental (delta) por padrão;
 	// na primeira execução (sem cursor), deve executar full sync automaticamente.
-	// Retorna o número de itens inseridos/atualizados (usado para decidir a
-	// invalidação de cache) e um erro se a sync falhou.
-	Sync(ctx context.Context) (int, error)
+	Sync(ctx context.Context) error
 }

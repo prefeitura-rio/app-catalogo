@@ -14,23 +14,25 @@ import (
 )
 
 func main() {
-	databaseSettings, err := config.LoadDatabaseSettings()
+	cfg, err := config.Get()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "falha ao carregar configurações: %v\n", err)
 		os.Exit(1)
 	}
 
-	db, err := sql.Open("pgx", databaseSettings.DSN())
+	db, err := sql.Open("pgx", cfg.Database.DSN())
 	if err != nil {
 		log.Fatal().Err(err).Msg("falha ao abrir conexão para migrations")
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	if err := db.PingContext(context.Background()); err != nil {
 		log.Fatal().Err(err).Msg("falha ao conectar ao banco para migrations")
 	}
 
-	goose.SetDialect("postgres")
+	if err := goose.SetDialect("postgres"); err != nil {
+		log.Fatal().Err(err).Msg("falha ao configurar dialect do goose")
+	}
 
 	dir := "db/migrations"
 	command := "up"

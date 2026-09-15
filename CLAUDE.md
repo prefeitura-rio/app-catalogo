@@ -4,9 +4,9 @@ Busca global e recomendação inteligente da Prefeitura Rio. Discovery layer uni
 
 ## Stack
 
-- **Go 1.25** com Gin (HTTP), pgx/v5 (PostgreSQL sem ORM), zerolog (logs), Viper (config)
+- **Go 1.24+** com Gin (HTTP), pgx/v5 (PostgreSQL sem ORM), zerolog (logs), Viper (config)
 - **PostgreSQL 16** + extensões `pgvector`, `pg_trgm`, `unaccent` — busca FTS + vetores semânticos
-- **Redis** — L2 cache for search and authenticated/anonymous recommendation results; rate limiting uses a separate client pool
+- **Redis** — cache L2 (search results, perfis, clusters)
 - **OpenTelemetry** → SigNoz | Prometheus
 - **just** como task runner | **Nix** para ambiente reproduzível | **Docker** + **Kubernetes**
 
@@ -15,7 +15,7 @@ Busca global e recomendação inteligente da Prefeitura Rio. Discovery layer uni
 ```
 cmd/
   api/main.go        ← servidor HTTP (porta 8080)
-  worker/main.go     ← scheduler de datasources e backfill de embeddings
+  worker/main.go     ← workers de sync (SalesForce, app-go-api, perfil cidadão)
   migrate/main.go    ← goose migrations
 internal/
   config/            ← Viper singleton (padrão app-go-api)
@@ -23,45 +23,42 @@ internal/
   services/          ← search, recommendation, citizen_profile, salesforce_sync
   repository/        ← catalog_item, citizen_profile, search (pgx/v5 direto)
   models/            ← catalog_item, citizen_profile, recommendation, search
-  clients/           ← rmi, appgoapi, salesforce, typesense, Keycloak, Gemini e reranker
-  datasource/        ← adapters e scheduler de sincronização
+  clients/           ← rmi, appgoapi, salesforce (HTTP clients)
+  workers/           ← salesforce, appgoapi, citizen_profile
   cache/             ← Redis TTL cache genérico
   db/                ← pool pgx/v5
   observability/     ← OTel tracing + Prometheus metrics
-db/migrations/       ← migrations SQL combinadas com seções Goose Up e Down
+db/migrations/       ← goose SQL migrations (.up.sql / .down.sql)
 k8s/
-  staging/           ← Argo Rollout blue-green, worker Deployment, KEDA e Services
-  prod/              ← Argo Rollout canary, worker Deployment, KEDA e Services
+  staging/           ← Deployment + KEDA + Service
+  prod/              ← idem
 ```
 
 ## Fontes de Dados
 
 | Fonte | Entidades | Estratégia |
 |-------|-----------|-----------|
-| Typesense | Carta de Serviços (**temporário**) | Deltas inclusivos e exportações completas periódicas |
-| SalesForce | Carta de Serviços | Snapshot completo inicial e periódico, deltas entre snapshots e webhooks HMAC-SHA256 |
-| app-go-api | Cursos, Vagas, MEI | Snapshot completo periódico e independente por vertical |
+| Typesense | Carta de Serviços (**temporário**) | Delta sync por `last_update` 30min; full sync na 1ª execução |
+| SalesForce | Carta de Serviços (**futuro**) | Polling 15min + webhooks HMAC — em migração a partir do Typesense |
+| app-go-api | Cursos, Vagas, MEI | Polling HTTP 30min |
 | app-rmi | Perfil do cidadão | Demand-driven + background refresh |
 
 ## Autenticação
 
-Istio injeta o token do cidadão em `X-Auth-Request-Token`, e o serviço verifica novamente a assinatura RS256 contra o JWKS configurado antes de confiar nas claims. Issuer, audience, validade temporal e authorized party opcional também são validados; um token presente e inválido retorna `401`.
+Mesmo padrão do workspace: `Istio valida JWT → injeta X-Auth-Request-Token → serviço decodifica sem re-validar`. `preferred_username` = CPF do cidadão.
 
-`preferred_username` contém o CPF do cidadão. CPF **nunca** persiste em texto — apenas `cpf_hash` (`HMAC-SHA256(CPF_HASH_SALT, CPF)`).
+CPF **nunca** persiste em texto — apenas `cpf_hash` (SHA-256 + salt via `CPF_HASH_SALT`).
 
 ## API
 
 ```
-GET  /api/v1/search               ← transporte autenticado por query string
-POST /api/v1/search               ← mesmo pipeline autenticado via JSON
-GET  /api/public/search           ← transporte público por query string
-POST /api/public/search           ← mesmo pipeline público via JSON
-GET  /api/v1/recommendations      ← recomendação personalizada autenticada
-GET  /api/public/recommendations  ← recomendação anônima com scoring neutro
+POST /api/v1/search          ← busca autenticada (ranking por perfil)
+POST /api/public/search      ← busca pública (ranking por popularidade)
+GET  /api/v1/recommendations
+GET  /api/public/recommendations
 GET  /api/v1/catalog/:id
 GET  /api/public/catalog/:id
 GET  /api/v1/admin/sync/status
-POST /api/v1/admin/sync/trigger
 POST /api/webhooks/salesforce ← HMAC-SHA256 auth própria
 GET  /health | /ready | /metrics
 ```
@@ -80,7 +77,7 @@ just test     # testes
 
 ## Migrations
 
-Usar Goose. Cada migration vive em `db/migrations/NNNNNN_nome.sql` e contém seções `-- +goose Up` e `-- +goose Down`.
+Usar goose. Cada migration: `db/migrations/NNNNNN_nome.up.sql` + `db/migrations/NNNNNN_nome.down.sql`.
 
 ```bash
 just migrate-create nome_da_migration
@@ -89,7 +86,8 @@ just migrate-create nome_da_migration
 ## Princípios
 
 - Sem GORM — queries SQL diretas com pgx/v5 (scoring/ranking requer SQL complexo)
-- CPF hash-only — `HMAC-SHA256(CPF_HASH_SALT, CPF)` antes de qualquer persistência
+- Sem mocking de API — erros reais, não stubs
+- CPF hash-only — `SHA-256(CPF + CPF_HASH_SALT)` antes de qualquer persistência
 - Webhook SalesForce: validar HMAC-SHA256 antes de processar qualquer payload
 
 ## Branch Strategy

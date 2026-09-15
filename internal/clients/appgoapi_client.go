@@ -4,12 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 )
 
-const maximumAppGoAPIResponseBytes int64 = 16 << 20
+const maximumAppGoAPIResponseBytes int64 = 1 << 20 // ~1MiB
 
 // AppGoAPIClient consome a API pública do app-go-api.
 type AppGoAPIClient struct {
@@ -80,8 +79,8 @@ type coursesPageResponse struct {
 	Data struct {
 		Courses    []Course `json:"courses"`
 		Pagination struct {
-			Total *int `json:"total"`
-			Page  *int `json:"page"`
+			Total int `json:"total"`
+			Page  int `json:"page"`
 		} `json:"pagination"`
 	} `json:"data"`
 }
@@ -90,10 +89,8 @@ type coursesPageResponse struct {
 // Estrutura real: GET /api/public/empregabilidade/vagas → {"data": [...], "meta": {"total": N, ...}}
 type Job struct {
 	ID                string  `json:"id"`
-	Slug              string  `json:"slug,omitempty"`
 	Title             string  `json:"titulo"`
 	Description       string  `json:"descricao"`
-	Status            string  `json:"status"`
 	ValorVaga         float64 `json:"valor_vaga"`
 	Bairro            string  `json:"bairro"`
 	AcessibilidadePCD string  `json:"acessibilidade_pcd"`
@@ -111,8 +108,7 @@ type Job struct {
 		Name  string `json:"name"`
 		Sigla string `json:"sigla"`
 	} `json:"orgao_parceiro"`
-	DataLimite *time.Time `json:"data_limite"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // MEIOpportunity representa uma oportunidade MEI.
@@ -139,18 +135,18 @@ type MEIOpportunity struct {
 type meiPageResponse struct {
 	Data []MEIOpportunity `json:"data"`
 	Meta struct {
-		Total    *int `json:"total"`
-		Page     *int `json:"page"`
-		PageSize *int `json:"page_size"`
+		Total    int `json:"total"`
+		Page     int `json:"page"`
+		PageSize int `json:"page_size"`
 	} `json:"meta"`
 }
 
 type jobsPageResponse struct {
 	Data []Job `json:"data"`
 	Meta struct {
-		Total    *int `json:"total"`
-		Page     *int `json:"page"`
-		PageSize *int `json:"page_size"`
+		Total    int `json:"total"`
+		Page     int `json:"page"`
+		PageSize int `json:"page_size"`
 	} `json:"meta"`
 }
 
@@ -171,21 +167,18 @@ func (c *AppGoAPIClient) doGet(ctx context.Context, path string, dest interface{
 	if err != nil {
 		return fmt.Errorf("appgoapi: falha na requisição: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
-	body, readError := io.ReadAll(io.LimitReader(resp.Body, maximumAppGoAPIResponseBytes+1))
-	if readError != nil {
-		return fmt.Errorf("appgoapi: falha ao ler resposta: %w", readError)
-	}
-	if int64(len(body)) > maximumAppGoAPIResponseBytes {
-		return fmt.Errorf("appgoapi: resposta excede o limite de %d bytes", maximumAppGoAPIResponseBytes)
+	body, err := readBoundedHTTPBody(resp.Body, maximumAppGoAPIResponseBytes)
+	if err != nil {
+		return fmt.Errorf("appgoapi: falha ao ler resposta: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("appgoapi: retornou status %d", resp.StatusCode)
 	}
 
-	if unmarshalError := json.Unmarshal(body, dest); unmarshalError != nil {
-		return fmt.Errorf("appgoapi: resposta JSON inválida: %w", unmarshalError)
+	if err := json.Unmarshal(body, dest); err != nil {
+		return fmt.Errorf("appgoapi: resposta JSON inválida: %w", err)
 	}
 	return nil
 }
@@ -201,16 +194,7 @@ func (c *AppGoAPIClient) GetCourses(ctx context.Context, page int, updatedSince 
 	if err := c.doGet(ctx, path, &resp); err != nil {
 		return nil, 0, err
 	}
-	total, paginationError := validateAppGoAPIPagination(
-		"courses",
-		page,
-		resp.Data.Pagination.Total,
-		resp.Data.Pagination.Page,
-	)
-	if paginationError != nil {
-		return nil, 0, paginationError
-	}
-	return resp.Data.Courses, total, nil
+	return resp.Data.Courses, resp.Data.Pagination.Total, nil
 }
 
 // GetJobs retorna vagas de emprego paginadas.
@@ -224,11 +208,7 @@ func (c *AppGoAPIClient) GetJobs(ctx context.Context, page int, updatedSince tim
 	if err := c.doGet(ctx, path, &resp); err != nil {
 		return nil, 0, err
 	}
-	total, paginationError := validateAppGoAPIPagination("jobs", page, resp.Meta.Total, resp.Meta.Page)
-	if paginationError != nil {
-		return nil, 0, paginationError
-	}
-	return resp.Data, total, nil
+	return resp.Data, resp.Meta.Total, nil
 }
 
 // GetMEIOpportunities retorna oportunidades MEI paginadas.
@@ -242,32 +222,5 @@ func (c *AppGoAPIClient) GetMEIOpportunities(ctx context.Context, page int, upda
 	if err := c.doGet(ctx, path, &resp); err != nil {
 		return nil, 0, err
 	}
-	total, paginationError := validateAppGoAPIPagination("MEI opportunities", page, resp.Meta.Total, resp.Meta.Page)
-	if paginationError != nil {
-		return nil, 0, paginationError
-	}
-	return resp.Data, total, nil
-}
-
-func validateAppGoAPIPagination(
-	verticalName string,
-	requestedPage int,
-	reportedTotal *int,
-	reportedPage *int,
-) (int, error) {
-	if reportedTotal == nil {
-		return 0, fmt.Errorf("appgoapi: %s response omitted pagination total", verticalName)
-	}
-	if reportedPage == nil {
-		return 0, fmt.Errorf("appgoapi: %s response omitted pagination page", verticalName)
-	}
-	if *reportedPage != requestedPage {
-		return 0, fmt.Errorf(
-			"appgoapi: %s response page %d does not match requested page %d",
-			verticalName,
-			*reportedPage,
-			requestedPage,
-		)
-	}
-	return *reportedTotal, nil
+	return resp.Data, resp.Meta.Total, nil
 }
