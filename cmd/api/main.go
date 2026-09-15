@@ -6,7 +6,7 @@
 // @BasePath        /
 // @securityDefinitions.apikey BearerAuth
 // @in              header
-// @name            X-Auth-Request-Token
+// @name            Authorization
 // @description     JWT injetado pelo Istio via header X-Auth-Request-Token
 
 package main
@@ -17,7 +17,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -25,7 +24,6 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/api"
-	"github.com/prefeitura-rio/app-catalogo/internal/api/middleware"
 	"github.com/prefeitura-rio/app-catalogo/internal/cache"
 	"github.com/prefeitura-rio/app-catalogo/internal/clients"
 	"github.com/prefeitura-rio/app-catalogo/internal/config"
@@ -54,28 +52,6 @@ func main() {
 	}
 
 	ctx := context.Background()
-	jwtVerifier, jwtVerifierError := middleware.NewJWTVerifier(middleware.JWTVerifierConfig{
-		JWKSURL:                   cfg.JWT.JWKSURL,
-		Issuer:                    cfg.JWT.Issuer,
-		Audience:                  cfg.JWT.Audience,
-		AuthorizedParty:           cfg.JWT.AuthorizedParty,
-		ClockSkew:                 cfg.JWT.ClockSkew,
-		JWKSCacheTTL:              cfg.JWT.JWKSCacheTTL,
-		UnknownKeyRefreshInterval: cfg.JWT.UnknownKeyRefreshInterval,
-		HTTPTimeout:               cfg.JWT.HTTPTimeout,
-		Now:                       time.Now,
-	})
-	if jwtVerifierError != nil {
-		log.Fatal().Err(jwtVerifierError).Msg("failed to configure JWT verification")
-	}
-	catalogSearchClientVerifier, verifierError := middleware.NewCatalogSearchClientVerifier(
-		cfg.InternalAPI.Key,
-		cfg.InternalAPI.CatalogSearchSignatureSkew,
-		time.Now,
-	)
-	if verifierError != nil {
-		log.Fatal().Err(verifierError).Msg("failed to configure catalog search client verification")
-	}
 
 	if cfg.Tracing.Enabled {
 		shutdown, err := observability.InitTracer(
@@ -119,32 +95,8 @@ func main() {
 		cfg.Redis.PoolSize,
 		cfg.Redis.MinIdleConns,
 	)
-	defer func() {
-		if closeError := redisCache.Close(); closeError != nil {
-			log.Error().Err(closeError).Msg("erro ao encerrar cliente Redis de cache")
-		}
-	}()
-	searchCache := redisCache
 	if err := redisCache.Ping(ctx); err != nil {
-		log.Warn().Err(err).Msg("redis de cache indisponível — cache de busca desativado")
-		searchCache = nil
-	}
-
-	rateLimitRedis := cache.NewRedisCache(
-		cfg.Redis.Host,
-		cfg.Redis.Port,
-		cfg.Redis.Password,
-		cfg.Redis.DB,
-		cfg.Redis.PoolSize,
-		cfg.Redis.MinIdleConns,
-	)
-	defer func() {
-		if closeError := rateLimitRedis.Close(); closeError != nil {
-			log.Error().Err(closeError).Msg("erro ao encerrar cliente Redis de rate limit")
-		}
-	}()
-	if pingError := rateLimitRedis.Ping(ctx); pingError != nil {
-		log.Warn().Err(pingError).Msg("redis de rate limit indisponível — proteção local ativada")
+		log.Warn().Err(err).Msg("redis indisponível — cache desativado (dados servidos sem cache)")
 	}
 
 	// Repositórios
@@ -153,33 +105,19 @@ func main() {
 	profileRepo := repository.NewCitizenProfileRepository(db.Pool)
 
 	// Clients externos
-	tokenManager, tokenManagerError := clients.NewKeycloakTokenManager(
+	tokenManager := clients.NewKeycloakTokenManager(
 		cfg.Keycloak.URL,
 		cfg.Keycloak.Realm,
 		cfg.Keycloak.ClientID,
 		cfg.Keycloak.ClientSecret,
 	)
-	if tokenManagerError != nil {
-		log.Fatal().Err(tokenManagerError).Msg("invalid Keycloak service-account configuration")
-	}
 	rmiClient := clients.NewRMIClient(cfg.RMI.BaseURL, tokenManager)
 
-	var salesForceSyncService *services.SalesForceSyncService
-	if cfg.SalesForce.Enabled() {
-		salesForceClient, salesForceClientError := clients.NewSalesForceClient(
-			cfg.SalesForce.InstanceURL,
-			cfg.SalesForce.ClientID,
-			cfg.SalesForce.ClientSecret,
-		)
-		if salesForceClientError != nil {
-			log.Fatal().Err(salesForceClientError).Msg("invalid Salesforce client configuration")
-		}
-		salesForceSyncService = services.NewSalesForceSyncService(
-			salesForceClient,
-			itemRepo,
-			cfg.SalesForce.ObjectType,
-		)
-	}
+	sfClient := clients.NewSalesForceClient(
+		cfg.SalesForce.InstanceURL,
+		cfg.SalesForce.ClientID,
+		cfg.SalesForce.ClientSecret,
+	)
 
 	// Clients opcionais — busca semântica e reranking
 	var geminiClient *clients.GeminiEmbeddingClient
@@ -195,46 +133,13 @@ func main() {
 
 	var rerankerClient *clients.RerankerClient
 	if cfg.Reranker.URL != "" {
-		configuredRerankerClient, rerankerError := clients.NewRerankerClient(cfg.Reranker.URL, cfg.Reranker.Timeout)
-		if rerankerError != nil {
-			log.Fatal().Err(rerankerError).Msg("failed to configure reranker")
-		}
-		rerankerClient = configuredRerankerClient
+		rerankerClient = clients.NewRerankerClient(cfg.Reranker.URL, cfg.Reranker.Timeout)
 		log.Info().Str("url", cfg.Reranker.URL).Msg("reranker cross-encoder ativado")
 	}
 
 	// Serviços
-	searchSvc := services.NewSearchService(
-		searchRepo,
-		searchCache,
-		cfg.Cache.SearchTTL,
-		geminiClient,
-		rerankerClient,
-		services.SearchRuntimeConfig{
-			RankerVersion:           cfg.Search.RankerVersion,
-			RerankerVersion:         cfg.Search.RerankerVersion,
-			CandidatePoolSize:       cfg.Search.CandidatePoolSize,
-			SemanticOverfetchFactor: cfg.Search.SemanticOverfetchFactor,
-			MaximumSemanticDistance: cfg.Search.MaximumSemanticDistance,
-			SemanticTimeout:         cfg.Search.SemanticTimeout,
-			HyDEEnabled:             cfg.Search.HyDEEnabled,
-			Weights: repository.RetrievalWeights{
-				Exact:    cfg.Search.ExactWeight,
-				FullText: cfg.Search.FullTextWeight,
-				Trigram:  cfg.Search.TrigramWeight,
-				Semantic: cfg.Search.SemanticWeight,
-				HyDE:     cfg.Search.HyDEWeight,
-			},
-		},
-	)
-	searchSummarySvc := services.NewSearchSummaryService(
-		itemRepo,
-		geminiClient,
-		redisCache,
-		cfg.Summary.Timeout,
-		cfg.Summary.CacheTTL,
-		cfg.Summary.MaximumConcurrency,
-	)
+	sfSyncSvc := services.NewSalesForceSyncService(sfClient, itemRepo, cfg.SalesForce.ObjectType)
+	searchSvc := services.NewSearchService(searchRepo, redisCache, cfg.Cache.SearchTTL, geminiClient, rerankerClient)
 	citizenSvc := services.NewCitizenProfileService(
 		rmiClient,
 		profileRepo,
@@ -246,18 +151,13 @@ func main() {
 		redisCache,
 		models.DefaultWeights,
 		cfg.Cache.RecommendationAuthenticatedTTL,
-		cfg.Cache.RecommendationAnonymousTTL,
+		cfg.Cache.RecommendationClusterTTL,
 	)
 
 	// Manager com fontes registradas (espelha o worker, mas sem tickers — só para TriggerSync)
 	dsManager := datasource.NewManager()
-	dsManager.AddSyncHook(datasource.NewSearchCacheInvalidationHook(redisCache))
-	if cfg.SalesForce.Enabled() {
-		sfDataSource := datasource.NewSalesForceDataSource(
-			salesForceSyncService,
-			cfg.SalesForce.SyncInterval,
-			cfg.SalesForce.FullSyncInterval,
-		)
+	if cfg.SalesForce.InstanceURL != "" {
+		sfDataSource := datasource.NewSalesForceDataSource(sfSyncSvc, cfg.SalesForce.SyncInterval)
 		dsManager.Register(sfDataSource)
 	}
 	if cfg.AppGoAPI.BaseURL != "" && cfg.AppGoAPI.SyncEnabled {
@@ -265,33 +165,22 @@ func main() {
 		appGoAPIDs := datasource.NewAppGoAPIDataSource(appGoAPIClient, itemRepo, cfg.AppGoAPI.SyncInterval)
 		dsManager.Register(appGoAPIDs)
 	}
-	registerConfiguredTypesenseDataSource(dsManager, cfg.Typesense, itemRepo)
 
-	router, routerError := api.SetupRouter(cfg, db.Pool, api.RouterDeps{
-		SFSyncSvc:                   salesForceSyncService,
-		DSManager:                   dsManager,
-		SearchSvc:                   searchSvc,
-		SearchSummarySvc:            searchSummarySvc,
-		RecomSvc:                    recomSvc,
-		CitizenSvc:                  citizenSvc,
-		ItemRepo:                    itemRepo,
-		RateLimitStore:              rateLimitRedis,
-		CatalogSearchClientVerifier: catalogSearchClientVerifier,
-		JWTVerifier:                 jwtVerifier,
-		WebhookSyncHook: func(webhookContext context.Context) error {
-			deleted, invalidationError := redisCache.DelByPrefix(webhookContext, cache.SearchKeyPrefix)
-			if invalidationError == nil && deleted > 0 {
-				log.Info().Int64("deleted", deleted).Msg("webhook: cache de busca invalidado")
-			}
-			return invalidationError
-		},
+	router := api.SetupRouter(cfg, db.Pool, api.RouterDeps{
+		SFSyncSvc:     sfSyncSvc,
+		DSManager:     dsManager,
+		SearchSvc:     searchSvc,
+		RecomSvc:      recomSvc,
+		CitizenSvc:    citizenSvc,
+		ItemRepo:      itemRepo,
+		WebhookSecret: cfg.SalesForce.WebhookSecret,
 	})
-	if routerError != nil {
-		log.Fatal().Err(routerError).Msg("falha ao configurar roteador HTTP")
-	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	srv := newHTTPServer(addr, router, cfg.Server)
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: router,
+	}
 
 	go func() {
 		log.Info().Str("addr", addr).Msg("servidor iniciado")
@@ -305,42 +194,11 @@ func main() {
 	<-quit
 
 	log.Info().Msg("encerrando servidor...")
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatal().Err(err).Msg("encerramento forçado")
 	}
 	log.Info().Msg("servidor encerrado")
-}
-
-func registerConfiguredTypesenseDataSource(
-	manager *datasource.Manager,
-	settings config.TypesenseSettings,
-	itemRepository *repository.CatalogItemRepository,
-) bool {
-	if strings.TrimSpace(settings.URL) == "" || strings.TrimSpace(settings.APIKey) == "" || !settings.SyncEnabled {
-		return false
-	}
-	typesenseClient := clients.NewTypesenseClient(settings.URL, settings.APIKey, settings.Collection)
-	manager.Register(datasource.NewTypesenseDataSource(
-		typesenseClient,
-		itemRepository,
-		settings.BaseServiceURL,
-		settings.SyncInterval,
-		settings.FullSyncInterval,
-	))
-	return true
-}
-
-func newHTTPServer(address string, handler http.Handler, settings config.ServerSettings) *http.Server {
-	return &http.Server{
-		Addr:              address,
-		Handler:           handler,
-		ReadHeaderTimeout: settings.ReadHeaderTimeout,
-		ReadTimeout:       settings.ReadTimeout,
-		WriteTimeout:      settings.WriteTimeout,
-		IdleTimeout:       settings.IdleTimeout,
-		MaxHeaderBytes:    settings.MaxHeaderBytes,
-	}
 }

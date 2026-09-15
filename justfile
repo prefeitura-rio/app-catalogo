@@ -43,10 +43,6 @@ migrate-create NAME:
 test:
     go test ./... -v -race -coverprofile=coverage.out
 
-# Run all tests against isolated PostgreSQL and Redis containers
-test-integration:
-    bash scripts/test-integration.sh
-
 # Format code
 fmt:
     go fmt ./...
@@ -61,11 +57,6 @@ build:
     go build -o bin/catalogo-api cmd/api/main.go
     go build -o bin/catalogo-worker cmd/worker/main.go
     go build -o bin/catalogo-migrate cmd/migrate/main.go
-
-# Regenerate and validate the committed OpenAPI contract
-openapi:
-    bash scripts/generate-openapi.sh
-    go test -count=1 -run '^TestGeneratedOpenAPIContract$' ./internal/api
 
 # Database shell
 db:

@@ -44,20 +44,9 @@ type SyncStatus struct {
 	Source          ItemSource      `json:"source"`
 	LastEventType   SyncEventType   `json:"last_event_type"`
 	LastStatus      SyncEventStatus `json:"last_status"`
-	LastStartedAt   time.Time       `json:"last_started_at" format:"date-time"`
-	LastCompletedAt *time.Time      `json:"last_completed_at,omitempty" format:"date-time"`
+	LastStartedAt   time.Time       `json:"last_started_at"`
+	LastCompletedAt *time.Time      `json:"last_completed_at,omitempty"`
 	ItemsProcessed  int             `json:"items_processed"`
 	ItemsFailed     int             `json:"items_failed"`
 	ErrorMessage    string          `json:"error_message,omitempty"`
-}
-
-type SyncStatusResponse struct {
-	Syncs []*SyncStatus `json:"syncs"`
-}
-
-func NewSyncStatusResponse(syncStatuses []*SyncStatus) SyncStatusResponse {
-	if syncStatuses == nil {
-		syncStatuses = make([]*SyncStatus, 0)
-	}
-	return SyncStatusResponse{Syncs: syncStatuses}
 }

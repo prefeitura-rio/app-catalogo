@@ -7,11 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
 )
-
-const maximumTypesenseExportLineBytes = 1 << 20
 
 // TypesenseService representa um documento da coleção prefrio_services_base.
 type TypesenseService struct {
@@ -66,23 +63,19 @@ func NewTypesenseClient(baseURL, apiKey, collection string) *TypesenseClient {
 }
 
 // ExportSince exporta documentos via endpoint JSONL do Typesense.
-// Exporta todos os status para que despublicações também atualizem o catálogo.
-// Se since não for zero, inclui filtro de delta inclusivo por last_update.
-// O limite inclusivo reprocessa empates no timestamp de precisão em segundos e
-// evita perder documentos que foram atualizados no mesmo instante do cursor.
+// Filtra apenas documentos publicados (awaiting_approval=false, status>=1).
+// Se since não for zero, inclui filtro de delta por last_update.
 // fn é chamada para cada documento — retornar erro interrompe o export.
 func (c *TypesenseClient) ExportSince(ctx context.Context, since time.Time, fn func(TypesenseService) error) error {
-	exportURL := fmt.Sprintf(
-		"%s/collections/%s/documents/export",
-		strings.TrimRight(c.baseURL, "/"),
-		url.PathEscape(c.collection),
-	)
+	filter := "awaiting_approval:=false && status:>=1"
 	if !since.IsZero() {
-		filter := fmt.Sprintf("last_update:>=%d", since.Unix())
-		exportURL += "?filter_by=" + url.QueryEscape(filter)
+		filter += fmt.Sprintf(" && last_update:>%d", since.Unix())
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, exportURL, nil)
+	u := fmt.Sprintf("%s/collections/%s/documents/export?filter_by=%s",
+		c.baseURL, c.collection, url.QueryEscape(filter))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return fmt.Errorf("typesense: erro ao criar requisição: %w", err)
 	}
@@ -100,25 +93,21 @@ func (c *TypesenseClient) ExportSince(ctx context.Context, since time.Time, fn f
 
 	// O export retorna JSONL — um documento JSON por linha.
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 64<<10), maximumTypesenseExportLineBytes)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // buffer de 1MB por linha
 
-	lineNumber := 0
 	for scanner.Scan() {
-		lineNumber++
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
 		}
 		var svc TypesenseService
 		if err := json.Unmarshal(line, &svc); err != nil {
-			return fmt.Errorf("typesense: linha JSONL %d inválida: %w", lineNumber, err)
+			// Linha malformada: ignora e continua
+			continue
 		}
 		if err := fn(svc); err != nil {
-			return fmt.Errorf("typesense: processar linha JSONL %d: %w", lineNumber, err)
+			return err
 		}
 	}
-	if scanError := scanner.Err(); scanError != nil {
-		return fmt.Errorf("typesense: ler export JSONL: %w", scanError)
-	}
-	return nil
+	return scanner.Err()
 }

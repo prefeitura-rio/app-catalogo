@@ -3,8 +3,6 @@ package datasource
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -12,90 +10,29 @@ import (
 
 	"github.com/prefeitura-rio/app-catalogo/internal/clients"
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
+	"github.com/prefeitura-rio/app-catalogo/internal/repository"
 )
-
-const (
-	maximumTypesenseDocumentsPerSync = 100_000
-	legacyTypesenseCursorVersion     = 1
-	typesenseCursorVersion           = 2
-)
-
-var errEmptyTypesenseSnapshot = errors.New("typesense full snapshot must contain at least one document")
-
-type typesenseExporter interface {
-	ExportSince(ctx context.Context, since time.Time, process func(clients.TypesenseService) error) error
-}
-
-type typesenseSyncRepository interface {
-	WithSourceSyncLease(
-		ctx context.Context,
-		source models.ItemSource,
-		operation func(context.Context) (int, error),
-	) (int, error)
-	RecordSyncEvent(ctx context.Context, event *models.SyncEvent) (int64, error)
-	UpdateSyncEvent(ctx context.Context, id int64, status models.SyncEventStatus, processed, failed int, errorMessage string, durationMilliseconds int) error
-	UpdateSyncEventWithMetadata(ctx context.Context, id int64, status models.SyncEventStatus, processed, failed int, errorMessage string, durationMilliseconds int, metadata json.RawMessage) error
-	GetLastCompletedSyncMetadata(ctx context.Context, source models.ItemSource) (json.RawMessage, bool, error)
-	UpsertBatch(ctx context.Context, items []*models.CatalogItem) (int, error)
-	ReconcileSourceSnapshot(
-		ctx context.Context,
-		source models.ItemSource,
-		items []*models.CatalogItem,
-		expectedItemCount int,
-		sourceUpdatedUpperBound *time.Time,
-		snapshotStartedAt time.Time,
-	) (int, int, error)
-}
-
-type typesenseSyncMetadata struct {
-	CursorVersion        int   `json:"cursor_version"`
-	CursorUnix           int64 `json:"cursor_unix"`
-	LastFullSnapshotUnix int64 `json:"last_full_snapshot_unix"`
-}
 
 // TypesenseDataSource sincroniza serviços da Prefeitura Rio a partir do Typesense.
 // Solução temporária enquanto a migração para o SalesForce não é concluída.
 type TypesenseDataSource struct {
-	client           typesenseExporter
-	repo             typesenseSyncRepository
-	baseServiceURL   string
-	syncInterval     time.Duration
-	fullSyncInterval time.Duration
-	currentTime      func() time.Time
+	client         *clients.TypesenseClient
+	repo           *repository.CatalogItemRepository
+	baseServiceURL string
+	syncInterval   time.Duration
 }
 
 func NewTypesenseDataSource(
-	client typesenseExporter,
-	repo typesenseSyncRepository,
+	client *clients.TypesenseClient,
+	repo *repository.CatalogItemRepository,
 	baseServiceURL string,
 	syncInterval time.Duration,
-	fullSyncInterval time.Duration,
-) *TypesenseDataSource {
-	return newTypesenseDataSource(
-		client,
-		repo,
-		baseServiceURL,
-		syncInterval,
-		fullSyncInterval,
-		time.Now,
-	)
-}
-
-func newTypesenseDataSource(
-	client typesenseExporter,
-	repo typesenseSyncRepository,
-	baseServiceURL string,
-	syncInterval time.Duration,
-	fullSyncInterval time.Duration,
-	currentTime func() time.Time,
 ) *TypesenseDataSource {
 	return &TypesenseDataSource{
-		client:           client,
-		repo:             repo,
-		baseServiceURL:   baseServiceURL,
-		syncInterval:     syncInterval,
-		fullSyncInterval: fullSyncInterval,
-		currentTime:      currentTime,
+		client:         client,
+		repo:           repo,
+		baseServiceURL: baseServiceURL,
+		syncInterval:   syncInterval,
 	}
 }
 
@@ -103,215 +40,82 @@ func (s *TypesenseDataSource) Name() string                { return "typesense" 
 func (s *TypesenseDataSource) Source() models.ItemSource   { return models.SourceTypesense }
 func (s *TypesenseDataSource) SyncInterval() time.Duration { return s.syncInterval }
 
-// Sync usa o maior last_update upstream concluído como cursor. O lote inteiro é
-// validado antes do upsert para que JSONL truncado ou malformado não produza uma
-// sincronização parcialmente confirmada.
-func (s *TypesenseDataSource) Sync(ctx context.Context) (int, error) {
-	return s.repo.WithSourceSyncLease(ctx, models.SourceTypesense, s.syncWithLease)
-}
-
-func (s *TypesenseDataSource) syncWithLease(ctx context.Context) (int, error) {
-	currentTime := s.currentTime().UTC()
-	since, eventType, lastFullSnapshotAt, cursorError := s.resolveCursor(ctx, currentTime)
-	if cursorError != nil {
-		return 0, cursorError
-	}
+// Sync determina o cursor pelo último sync completo e executa delta ou full sync.
+func (s *TypesenseDataSource) Sync(ctx context.Context) error {
+	since, eventType := s.resolveCursor(ctx)
 
 	startedAt := time.Now()
-	eventID, recordEventError := s.repo.RecordSyncEvent(ctx, &models.SyncEvent{
+	eventID, _ := s.repo.RecordSyncEvent(ctx, &models.SyncEvent{
 		Source:    models.SourceTypesense,
 		EventType: eventType,
 		Status:    models.SyncStatusStarted,
 		StartedAt: startedAt,
 	})
-	if recordEventError != nil {
-		return 0, fmt.Errorf("typesense: registrar início da sincronização: %w", recordEventError)
-	}
 
-	items := make([]*models.CatalogItem, 0)
-	seenExternalIDs := make(map[string]struct{})
-	upstreamCursor := since
-	exportError := s.client.ExportSince(ctx, since, func(service clients.TypesenseService) error {
-		externalID := strings.TrimSpace(service.ID)
-		if externalID == "" {
-			return errors.New("documento sem id")
-		}
-		if strings.TrimSpace(service.NomeServico) == "" {
-			return fmt.Errorf("documento %q sem título", externalID)
-		}
-		if service.LastUpdate <= 0 {
-			return fmt.Errorf("documento %q sem last_update válido", externalID)
-		}
-		if _, duplicate := seenExternalIDs[externalID]; duplicate {
-			return fmt.Errorf("export contém id duplicado %q", externalID)
-		}
-		if len(items) >= maximumTypesenseDocumentsPerSync {
-			return fmt.Errorf("export excedeu o limite de %d documentos", maximumTypesenseDocumentsPerSync)
-		}
+	processed, failed := 0, 0
+	var lastErr string
 
-		seenExternalIDs[externalID] = struct{}{}
-		items = append(items, mapTypesenseService(service, s.baseServiceURL))
-		serviceCursor := time.Unix(service.LastUpdate, 0).UTC()
-		if serviceCursor.After(upstreamCursor) {
-			upstreamCursor = serviceCursor
+	err := s.client.ExportSince(ctx, since, func(svc clients.TypesenseService) error {
+		item := mapTypesenseService(svc, s.baseServiceURL)
+		if upsertErr := s.repo.Upsert(ctx, item); upsertErr != nil {
+			failed++
+			lastErr = upsertErr.Error()
+			log.Error().Err(upsertErr).Str("id", svc.ID).Msg("typesense: erro ao upsert")
+			return nil // continua os demais documentos
 		}
+		processed++
 		return nil
 	})
-	if exportError == nil && eventType == models.SyncTypeFullSync && len(items) == 0 {
-		exportError = errEmptyTypesenseSnapshot
-	}
-	if exportError != nil {
-		return 0, s.failSyncEvent(ctx, eventID, len(items), exportError, startedAt)
+
+	finalStatus := models.SyncStatusCompleted
+	if err != nil {
+		finalStatus = models.SyncStatusFailed
+		lastErr = err.Error()
+		log.Error().Err(err).Msg("typesense datasource: sync falhou")
 	}
 
-	changed := 0
-	var persistenceError error
-	if eventType == models.SyncTypeFullSync {
-		snapshotUpperBound := currentTime
-		if upstreamCursor.After(snapshotUpperBound) {
-			snapshotUpperBound = upstreamCursor
-		}
-		upserted, deactivated, reconciliationError := s.repo.ReconcileSourceSnapshot(
-			ctx,
-			models.SourceTypesense,
-			items,
-			len(items),
-			&snapshotUpperBound,
-			currentTime,
-		)
-		changed = upserted + deactivated
-		persistenceError = reconciliationError
-		if persistenceError == nil {
-			lastFullSnapshotAt = s.currentTime().UTC()
-		}
-	} else {
-		changed, persistenceError = s.repo.UpsertBatch(ctx, items)
-	}
-	if persistenceError != nil {
-		return 0, s.failSyncEvent(ctx, eventID, len(items), fmt.Errorf("typesense: persistir lote: %w", persistenceError), startedAt)
-	}
-
-	metadata, marshalError := json.Marshal(typesenseSyncMetadata{
-		CursorVersion:        typesenseCursorVersion,
-		CursorUnix:           upstreamCursor.Unix(),
-		LastFullSnapshotUnix: lastFullSnapshotAt.Unix(),
-	})
-	if marshalError != nil {
-		return changed, s.failSyncEvent(ctx, eventID, len(items), fmt.Errorf("typesense: serializar cursor: %w", marshalError), startedAt)
-	}
-
-	durationMilliseconds := int(time.Since(startedAt).Milliseconds())
-	if updateEventError := s.repo.UpdateSyncEventWithMetadata(
-		ctx,
-		eventID,
-		models.SyncStatusCompleted,
-		len(items),
-		0,
-		"",
-		durationMilliseconds,
-		metadata,
-	); updateEventError != nil {
-		return changed, fmt.Errorf("typesense: concluir evento de sincronização: %w", updateEventError)
-	}
+	durationMs := int(time.Since(startedAt).Milliseconds())
+	_ = s.repo.UpdateSyncEvent(ctx, eventID, finalStatus, processed, failed, lastErr, durationMs)
 
 	log.Info().
-		Int("processed", len(items)).
-		Int("changed", changed).
-		Int("duration_ms", durationMilliseconds).
-		Time("cursor", upstreamCursor).
+		Int("processed", processed).
+		Int("failed", failed).
+		Int("duration_ms", durationMs).
 		Msg("typesense datasource: sync concluído")
 
-	return changed, nil
+	return err
 }
 
-func (s *TypesenseDataSource) failSyncEvent(
-	ctx context.Context,
-	eventID int64,
-	processed int,
-	syncError error,
-	startedAt time.Time,
-) error {
-	durationMilliseconds := int(time.Since(startedAt).Milliseconds())
-	updateEventError := s.repo.UpdateSyncEvent(
-		ctx,
-		eventID,
-		models.SyncStatusFailed,
-		processed,
-		1,
-		syncError.Error(),
-		durationMilliseconds,
-	)
-	log.Error().Err(syncError).Msg("typesense datasource: sync falhou")
-	if updateEventError != nil {
-		return errors.Join(syncError, fmt.Errorf("typesense: registrar falha da sincronização: %w", updateEventError))
-	}
-	return syncError
-}
-
-// resolveCursor lê o maior timestamp upstream confirmado. Eventos legados sem
-// metadata fazem uma nova full sync segura em vez de usar o relógio local.
-func (s *TypesenseDataSource) resolveCursor(
-	ctx context.Context,
-	currentTime time.Time,
-) (time.Time, models.SyncEventType, time.Time, error) {
-	if s.fullSyncInterval <= 0 {
-		return time.Time{}, models.SyncTypeFullSync, time.Time{}, errors.New("typesense full sync interval must be positive")
-	}
-	metadata, found, metadataError := s.repo.GetLastCompletedSyncMetadata(ctx, models.SourceTypesense)
-	if metadataError != nil {
-		return time.Time{}, models.SyncTypeFullSync, time.Time{}, fmt.Errorf("typesense: ler cursor upstream: %w", metadataError)
-	}
-	if !found {
-		log.Info().Msg("typesense datasource: sem cursor, executando full sync")
-		return time.Time{}, models.SyncTypeFullSync, time.Time{}, nil
+// resolveCursor retorna o timestamp do último sync completo.
+// Se não há histórico, retorna zero (full sync).
+func (s *TypesenseDataSource) resolveCursor(ctx context.Context) (time.Time, models.SyncEventType) {
+	statuses, err := s.repo.GetLastSyncEvents(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("typesense: não foi possível ler histórico de sync, executando full sync")
+		return time.Time{}, models.SyncTypeFullSync
 	}
 
-	var cursorMetadata typesenseSyncMetadata
-	if unmarshalError := json.Unmarshal(metadata, &cursorMetadata); unmarshalError != nil {
-		return time.Time{}, models.SyncTypeFullSync, time.Time{}, fmt.Errorf("typesense: decodificar cursor upstream: %w", unmarshalError)
-	}
-	if cursorMetadata.CursorVersion == 0 && cursorMetadata.CursorUnix == 0 {
-		log.Info().Msg("typesense datasource: evento legado sem cursor upstream, executando full sync")
-		return time.Time{}, models.SyncTypeFullSync, time.Time{}, nil
-	}
-	if cursorMetadata.CursorUnix <= 0 {
-		return time.Time{}, models.SyncTypeFullSync, time.Time{}, fmt.Errorf(
-			"typesense: metadata de cursor inválida (versão %d)",
-			cursorMetadata.CursorVersion,
-		)
-	}
-	if cursorMetadata.CursorVersion == legacyTypesenseCursorVersion {
-		log.Info().Msg("typesense datasource: cursor sem prova de full snapshot recente, executando full sync")
-		return time.Time{}, models.SyncTypeFullSync, time.Time{}, nil
-	}
-	if cursorMetadata.CursorVersion != typesenseCursorVersion || cursorMetadata.LastFullSnapshotUnix <= 0 {
-		return time.Time{}, models.SyncTypeFullSync, time.Time{}, fmt.Errorf(
-			"typesense: metadata de cursor inválida (versão %d)",
-			cursorMetadata.CursorVersion,
-		)
+	for _, st := range statuses {
+		if st.Source == models.SourceTypesense &&
+			st.LastStatus == models.SyncStatusCompleted &&
+			st.LastCompletedAt != nil {
+			log.Info().Time("since", *st.LastCompletedAt).Msg("typesense datasource: executando delta sync")
+			return *st.LastCompletedAt, models.SyncTypeDeltaSync
+		}
 	}
 
-	cursor := time.Unix(cursorMetadata.CursorUnix, 0).UTC()
-	lastFullSnapshotAt := time.Unix(cursorMetadata.LastFullSnapshotUnix, 0).UTC()
-	if lastFullSnapshotAt.After(currentTime) {
-		return time.Time{}, models.SyncTypeFullSync, time.Time{}, errors.New("typesense: full snapshot timestamp is in the future")
-	}
-	if !currentTime.Before(lastFullSnapshotAt.Add(s.fullSyncInterval)) {
-		log.Info().Time("last_full_snapshot_at", lastFullSnapshotAt).Msg("typesense datasource: executando full sync periódico")
-		return time.Time{}, models.SyncTypeFullSync, lastFullSnapshotAt, nil
-	}
-	log.Info().Time("since", cursor).Msg("typesense datasource: executando delta sync")
-	return cursor, models.SyncTypeDeltaSync, lastFullSnapshotAt, nil
+	log.Info().Msg("typesense datasource: sem cursor, executando full sync")
+	return time.Time{}, models.SyncTypeFullSync
 }
 
 // mapTypesenseService converte um documento Typesense em CatalogItem.
 func mapTypesenseService(svc clients.TypesenseService, baseURL string) *models.CatalogItem {
 	sourceData, _ := json.Marshal(svc)
 
-	lastUpdate := time.Unix(svc.LastUpdate, 0).UTC()
+	lastUpdate := time.Unix(svc.LastUpdate, 0)
 	var publishedAt *time.Time
 	if svc.PublishedAt != nil && *svc.PublishedAt > 0 {
-		t := time.Unix(*svc.PublishedAt, 0).UTC()
+		t := time.Unix(*svc.PublishedAt, 0)
 		publishedAt = &t
 	}
 
@@ -415,6 +219,10 @@ func mapTypesenseTargetAudience(svc clients.TypesenseService) json.RawMessage {
 		case strings.Contains(pl, "mulher") ||
 			strings.Contains(pl, "feminino"):
 			ta.Genero = append(ta.Genero, p)
+		default:
+			// Público não mapeado para uma dimensão conhecida: preserva em etnia
+			// para não perder a informação até que o mapeamento seja refinado.
+			ta.Etnia = append(ta.Etnia, p)
 		}
 	}
 
