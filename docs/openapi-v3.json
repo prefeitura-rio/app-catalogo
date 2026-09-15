@@ -12,11 +12,11 @@
   "paths": {
     "/api/public/catalog/{id}": {
       "get": {
-        "description": "Retorna todos os campos de um item incluindo source_data original.",
+        "description": "Retorna somente campos públicos de um item ativo e vigente.",
         "tags": [
           "catálogo"
         ],
-        "summary": "Detalhe de item do catálogo",
+        "summary": "Detalhe público de item do catálogo",
         "parameters": [
           {
             "description": "UUID v4 do item",
@@ -34,7 +34,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/models.CatalogItem"
+                  "$ref": "#/components/schemas/models.PublicCatalogItem"
                 }
               }
             }
@@ -446,7 +446,7 @@
     },
     "/api/v1/catalog/{id}": {
       "get": {
-        "description": "Retorna todos os campos de um item incluindo source_data original.",
+        "description": "Retorna todos os campos de um item incluindo source_data original. Requer autenticação.",
         "tags": [
           "catálogo"
         ],
@@ -475,6 +475,19 @@
           },
           "400": {
             "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
@@ -1037,6 +1050,71 @@
           "TypeJob",
           "TypeMEIOpportunity"
         ]
+      },
+      "models.PublicCatalogItem": {
+        "type": "object",
+        "properties": {
+          "bairros": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "external_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "image_url": {
+            "type": "string"
+          },
+          "modalidade": {
+            "type": "string"
+          },
+          "organization": {
+            "type": "string"
+          },
+          "short_desc": {
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/models.ItemSource"
+          },
+          "status": {
+            "$ref": "#/components/schemas/models.ItemStatus"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/models.ItemType"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "valid_from": {
+            "type": "string"
+          },
+          "valid_until": {
+            "type": "string"
+          }
+        }
       },
       "models.RankedItem": {
         "type": "object",
