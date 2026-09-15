@@ -81,7 +81,7 @@ jobs:
       DB_SSL_MODE: disable
       REDIS_HOST: localhost
       REDIS_PORT: 6379
-      CPF_HASH_SALT: test-salt-for-ci-only
+      CPF_HASH_SALT: test-cpf-hmac-key-with-at-least-32-bytes
 
     steps:
       - uses: actions/checkout@v4
