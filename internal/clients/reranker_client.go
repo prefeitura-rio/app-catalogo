@@ -42,7 +42,7 @@ type RerankerResult struct {
 func NewRerankerClient(baseURL string, timeout time.Duration) *RerankerClient {
 	return &RerankerClient{
 		baseURL:    baseURL,
-		httpClient: &http.Client{Timeout: timeout},
+		httpClient: noRedirectHTTPClient(timeout),
 	}
 }
 

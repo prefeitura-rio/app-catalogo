@@ -209,7 +209,7 @@ func (s *SearchService) buildResponse(results []*repository.SearchResult, total 
 			Bairros:        r.Item.Bairros,
 			Tags:           r.Item.Tags,
 			RelevanceScore: r.Rank,
-			Metadata:       r.Item.SourceData,
+			Metadata:       sanitizedSearchMetadata(r.Item.Type, r.Item.SourceData),
 		}
 		if r.Headline != "" {
 			item.Highlights = []string{r.Headline}
@@ -222,6 +222,36 @@ func (s *SearchService) buildResponse(results []*repository.SearchResult, total 
 		PerPage: req.PerPage,
 		Items:   items,
 	}
+}
+
+// sanitizedSearchMetadata allowlists safe keys from source_data for API responses.
+func sanitizedSearchMetadata(itemType models.ItemType, sourceData json.RawMessage) json.RawMessage {
+	if len(sourceData) == 0 {
+		return nil
+	}
+	var sourceFields map[string]json.RawMessage
+	if err := json.Unmarshal(sourceData, &sourceFields); err != nil {
+		return nil
+	}
+
+	allowedFields := []string{"id", "slug"}
+	if itemType == models.TypeService {
+		allowedFields = append(allowedFields, "tema_geral", "tema_especifico", "Tema__c")
+	}
+	sanitizedFields := make(map[string]json.RawMessage, len(allowedFields))
+	for _, allowedField := range allowedFields {
+		if fieldValue, exists := sourceFields[allowedField]; exists && len(fieldValue) > 0 && string(fieldValue) != "null" {
+			sanitizedFields[allowedField] = fieldValue
+		}
+	}
+	if len(sanitizedFields) == 0 {
+		return nil
+	}
+	sanitizedJSON, err := json.Marshal(sanitizedFields)
+	if err != nil {
+		return nil
+	}
+	return sanitizedJSON
 }
 
 func (s *SearchService) cacheKey(req *models.SearchRequest) string {

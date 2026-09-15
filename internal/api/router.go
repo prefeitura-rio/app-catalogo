@@ -58,9 +58,9 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 	// API autenticada
 	apiV1 := r.Group("/api/v1")
 	{
-		apiV1.GET("/search", v1.NewSearchHandler(deps.SearchSvc, deps.CitizenSvc).Search)
+		apiV1.GET("/search", middleware.RequireAuth(), v1.NewSearchHandler(deps.SearchSvc, deps.CitizenSvc).Search)
 		apiV1.GET("/recommendations", middleware.RequireAuth(), v1.NewRecommendationHandler(deps.RecomSvc, deps.CitizenSvc).Authenticated)
-		apiV1.GET("/catalog/:id", adminHandler.GetCatalogItem)
+		apiV1.GET("/catalog/:id", middleware.RequireAuth(), adminHandler.GetCatalogItem)
 
 		admin := apiV1.Group("/admin", middleware.RequireAdmin())
 		{
@@ -74,7 +74,7 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 	{
 		pub.GET("/search", v1.NewSearchHandler(deps.SearchSvc, deps.CitizenSvc).Search)
 		pub.GET("/recommendations", v1.NewRecommendationHandler(deps.RecomSvc, deps.CitizenSvc).Anonymous)
-		pub.GET("/catalog/:id", adminHandler.GetCatalogItem)
+		pub.GET("/catalog/:id", adminHandler.GetPublicCatalogItem)
 	}
 
 	return r

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -36,10 +37,11 @@ func NewCitizenProfileService(
 	}
 }
 
-// HashCPF calcula SHA-256(CPF + salt). CPF nunca é armazenado diretamente.
+// HashCPF calcula HMAC-SHA256(salt, CPF). CPF nunca é armazenado diretamente.
 func (s *CitizenProfileService) HashCPF(cpf string) string {
-	h := sha256.Sum256([]byte(cpf + s.cpfHashSalt))
-	return fmt.Sprintf("%x", h)
+	mac := hmac.New(sha256.New, []byte(s.cpfHashSalt))
+	_, _ = mac.Write([]byte(cpf))
+	return fmt.Sprintf("%x", mac.Sum(nil))
 }
 
 // GetOrSync retorna o perfil do cidadão, sincronizando do RMI se necessário.

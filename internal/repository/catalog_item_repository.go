@@ -270,6 +270,26 @@ func (r *CatalogItemRepository) SoftDelete(ctx context.Context, source models.It
 	return err
 }
 
+// SoftDeleteActiveNotIn soft-deletes active items for a source whose external_id
+// is not in keepExternalIDs. Used after a complete full-sync snapshot.
+func (r *CatalogItemRepository) SoftDeleteActiveNotIn(ctx context.Context, source models.ItemSource, keepExternalIDs []string) (int64, error) {
+	if keepExternalIDs == nil {
+		keepExternalIDs = []string{}
+	}
+	tag, err := r.db.Exec(ctx, `
+		UPDATE catalog_items
+		SET deleted_at = NOW(), status = 'inactive'
+		WHERE source = $1
+		  AND deleted_at IS NULL
+		  AND status = 'active'
+		  AND NOT (external_id = ANY($2::text[]))
+	`, string(source), keepExternalIDs)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // GetBySourceAndExternalID busca um item pelo source + external_id.
 func (r *CatalogItemRepository) GetBySourceAndExternalID(ctx context.Context, source models.ItemSource, externalID string) (*models.CatalogItem, error) {
 	row := r.db.QueryRow(ctx, `
@@ -329,6 +349,22 @@ func (r *CatalogItemRepository) GetByID(ctx context.Context, id uuid.UUID) (*mod
 			valid_from, valid_until, source_updated_at, created_at, updated_at
 		FROM catalog_items
 		WHERE id = $1 AND deleted_at IS NULL
+	`, id)
+	return scanCatalogItem(row)
+}
+
+// GetPublicByID returns only an item eligible for public discovery.
+func (r *CatalogItemRepository) GetPublicByID(ctx context.Context, id uuid.UUID) (*models.CatalogItem, error) {
+	row := r.db.QueryRow(ctx, `
+		SELECT id, external_id, source, type, title, description, short_desc,
+			organization, url, image_url, target_audience, bairros,
+			modalidade, status, tags, source_data,
+			valid_from, valid_until, source_updated_at, created_at, updated_at
+		FROM catalog_items
+		WHERE id = $1
+		  AND status = 'active'
+		  AND deleted_at IS NULL
+		  AND (valid_until IS NULL OR valid_until > NOW())
 	`, id)
 	return scanCatalogItem(row)
 }

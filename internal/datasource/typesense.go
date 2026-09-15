@@ -3,6 +3,7 @@ package datasource
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -15,6 +16,10 @@ import (
 
 // TypesenseDataSource sincroniza serviços da Prefeitura Rio a partir do Typesense.
 // Solução temporária enquanto a migração para o SalesForce não é concluída.
+//
+// Limitation (delta sync): ExportSince only returns published docs
+// (awaiting_approval=false && status>=1). Unpublished/removed docs are therefore
+// invisible to delta sync. SoftDelete of missing IDs runs on full sync only.
 type TypesenseDataSource struct {
 	client         *clients.TypesenseClient
 	repo           *repository.CatalogItemRepository
@@ -43,6 +48,7 @@ func (s *TypesenseDataSource) SyncInterval() time.Duration { return s.syncInterv
 // Sync determina o cursor pelo último sync completo e executa delta ou full sync.
 func (s *TypesenseDataSource) Sync(ctx context.Context) error {
 	since, eventType := s.resolveCursor(ctx)
+	isFullSync := since.IsZero()
 
 	startedAt := time.Now()
 	eventID, _ := s.repo.RecordSyncEvent(ctx, &models.SyncEvent{
@@ -54,6 +60,7 @@ func (s *TypesenseDataSource) Sync(ctx context.Context) error {
 
 	processed, failed := 0, 0
 	var lastErr string
+	exportedIDs := make([]string, 0)
 
 	err := s.client.ExportSince(ctx, since, func(svc clients.TypesenseService) error {
 		item := mapTypesenseService(svc, s.baseServiceURL)
@@ -64,6 +71,7 @@ func (s *TypesenseDataSource) Sync(ctx context.Context) error {
 			return nil // continua os demais documentos
 		}
 		processed++
+		exportedIDs = append(exportedIDs, svc.ID)
 		return nil
 	})
 
@@ -72,6 +80,25 @@ func (s *TypesenseDataSource) Sync(ctx context.Context) error {
 		finalStatus = models.SyncStatusFailed
 		lastErr = err.Error()
 		log.Error().Err(err).Msg("typesense datasource: sync falhou")
+	} else if failed > 0 {
+		finalStatus = models.SyncStatusFailed
+		err = fmt.Errorf("typesense: %d upsert(s) falharam", failed)
+		if lastErr == "" {
+			lastErr = err.Error()
+		}
+		log.Error().Err(err).Msg("typesense datasource: sync incompleto por falhas de upsert")
+	} else if isFullSync {
+		// Soft-delete active typesense items missing from a complete full export.
+		if len(exportedIDs) == 0 {
+			log.Warn().Msg("typesense datasource: full sync retornou 0 docs; SoftDelete de órfãos ignorado")
+		} else if deactivated, softErr := s.repo.SoftDeleteActiveNotIn(ctx, models.SourceTypesense, exportedIDs); softErr != nil {
+			finalStatus = models.SyncStatusFailed
+			err = softErr
+			lastErr = softErr.Error()
+			log.Error().Err(softErr).Msg("typesense datasource: falha ao SoftDelete itens ausentes")
+		} else if deactivated > 0 {
+			log.Info().Int64("deactivated", deactivated).Msg("typesense datasource: itens ausentes do export SoftDeleted")
+		}
 	}
 
 	durationMs := int(time.Since(startedAt).Milliseconds())

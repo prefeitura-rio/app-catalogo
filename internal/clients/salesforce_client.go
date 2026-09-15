@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,7 +13,11 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const sfAPIVersion = "v62.0"
+const (
+	sfAPIVersion                        = "v62.0"
+	maximumSalesForceTokenResponseBytes = 64 << 10
+	maximumSalesForceQueryResponseBytes = 16 << 20
+)
 
 type SalesForceClient struct {
 	instanceURL  string
@@ -64,9 +67,12 @@ func (c *SalesForceClient) authenticate(ctx context.Context) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readBoundedHTTPBody(resp.Body, maximumSalesForceTokenResponseBytes)
+	if err != nil {
+		return fmt.Errorf("salesforce: falha ao ler resposta de auth: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("salesforce: auth retornou %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("salesforce: auth retornou status %d", resp.StatusCode)
 	}
 
 	var tokenResp sfTokenResponse
@@ -144,8 +150,11 @@ func (c *SalesForceClient) Query(ctx context.Context, soql string) ([]map[string
 			return nil, fmt.Errorf("salesforce: falha na query: %w", err)
 		}
 
-		body, _ := io.ReadAll(resp.Body)
+		body, readErr := readBoundedHTTPBody(resp.Body, maximumSalesForceQueryResponseBytes)
 		_ = resp.Body.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("salesforce: falha ao ler resposta da query: %w", readErr)
+		}
 
 		if resp.StatusCode == http.StatusUnauthorized {
 			// Tentar renovar token uma vez
@@ -157,7 +166,7 @@ func (c *SalesForceClient) Query(ctx context.Context, soql string) ([]map[string
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("salesforce: query retornou %d: %s", resp.StatusCode, string(body))
+			return nil, fmt.Errorf("salesforce: query retornou status %d", resp.StatusCode)
 		}
 
 		var qr SFQueryResponse

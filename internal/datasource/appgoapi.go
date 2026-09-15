@@ -69,17 +69,24 @@ func (s *AppGoAPIDataSource) syncCourses(ctx context.Context) error {
 	}
 
 	items := make([]*models.CatalogItem, 0, len(allCourses))
-	skipped := 0
+	deactivated := 0
 	for _, c := range allCourses {
 		if !courseIsIndexable(c) {
-			skipped++
+			if softErr := s.repo.SoftDelete(ctx, models.SourceCourses, string(c.ID)); softErr != nil {
+				log.Warn().Err(softErr).Str("id", string(c.ID)).Msg("appgoapi: falha ao SoftDelete curso não indexável")
+			} else {
+				deactivated++
+			}
 			continue
 		}
 		items = append(items, mapCourse(c))
 	}
 
 	processed, err := s.repo.UpsertBatch(ctx, items)
-	log.Info().Int("processed", processed).Int("skipped_non_visible", skipped).Msg("appgoapi: cursos sincronizados")
+	log.Info().
+		Int("processed", processed).
+		Int("deactivated_non_indexable", deactivated).
+		Msg("appgoapi: cursos sincronizados")
 	return err
 }
 

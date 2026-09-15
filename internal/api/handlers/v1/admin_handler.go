@@ -72,15 +72,15 @@ func (h *AdminHandler) TriggerSync(c *gin.Context) {
 
 // GetCatalogItem godoc
 // @Summary      Detalhe de item do catálogo
-// @Description  Retorna todos os campos de um item incluindo source_data original.
+// @Description  Retorna todos os campos de um item incluindo source_data original. Requer autenticação.
 // @Tags         catálogo
 // @Produce      json
 // @Param        id  path  string  true  "UUID v4 do item"
 // @Success      200  {object}  models.CatalogItem
 // @Failure      400  {object}  map[string]string
+// @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
 // @Router       /api/v1/catalog/{id} [get]
-// @Router       /api/public/catalog/{id} [get]
 func (h *AdminHandler) GetCatalogItem(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -95,4 +95,30 @@ func (h *AdminHandler) GetCatalogItem(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, item)
+}
+
+// GetPublicCatalogItem godoc
+// @Summary      Detalhe público de item do catálogo
+// @Description  Retorna somente campos públicos de um item ativo e vigente.
+// @Tags         catálogo
+// @Produce      json
+// @Param        id  path  string  true  "UUID v4 do item"
+// @Success      200  {object}  models.PublicCatalogItem
+// @Failure      400  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Router       /api/public/catalog/{id} [get]
+func (h *AdminHandler) GetPublicCatalogItem(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ID inválido"})
+		return
+	}
+
+	item, err := h.repo.GetPublicByID(c.Request.Context(), id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "item não encontrado"})
+		return
+	}
+
+	c.JSON(http.StatusOK, models.ToPublicCatalogItem(item))
 }

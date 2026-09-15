@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
+
+const maximumRMIResponseBytes int64 = 1 << 20
 
 // RMIClient consome a API do app-rmi para dados do cidadão.
 type RMIClient struct {
@@ -42,16 +44,36 @@ type CitizenData struct {
 	} `json:"address"`
 }
 
+func isCanonicalCPF(cpf string) bool {
+	if len(cpf) != 11 {
+		return false
+	}
+	for _, character := range cpf {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // GetCitizen busca os dados de um cidadão pelo CPF.
 // Usa service account token — requer permissão adequada no Keycloak.
 func (c *RMIClient) GetCitizen(ctx context.Context, cpf string) (*CitizenData, error) {
+	if !isCanonicalCPF(cpf) {
+		return nil, fmt.Errorf("rmi: CPF inválido")
+	}
+
 	authHeader, err := c.tokenManager.BearerToken(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("rmi: falha ao obter token: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		c.baseURL+"/v1/citizen/"+cpf, nil)
+	requestURL, joinErr := url.JoinPath(c.baseURL, "v1", "citizen", cpf)
+	if joinErr != nil {
+		return nil, fmt.Errorf("rmi: URL base inválida: %w", joinErr)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("rmi: falha ao criar request: %w", err)
 	}
@@ -68,9 +90,12 @@ func (c *RMIClient) GetCitizen(ctx context.Context, cpf string) (*CitizenData, e
 		return nil, nil
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readBoundedHTTPBody(resp.Body, maximumRMIResponseBytes)
+	if err != nil {
+		return nil, fmt.Errorf("rmi: falha ao ler resposta: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("rmi: retornou %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("rmi: retornou status %d", resp.StatusCode)
 	}
 
 	var citizen CitizenData

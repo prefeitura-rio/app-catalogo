@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +14,37 @@ import (
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
 	"github.com/prefeitura-rio/app-catalogo/internal/repository"
 )
+
+const (
+	maximumSalesForceObjectTypeLength = 80
+	shortSalesForceRecordIDLength     = 15
+	longSalesForceRecordIDLength      = 18
+)
+
+var salesForceObjectTypePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(__c)?$`)
+
+func validatedSalesForceObjectType(objectType string) (string, error) {
+	objectType = strings.TrimSpace(objectType)
+	if len(objectType) > maximumSalesForceObjectTypeLength || !salesForceObjectTypePattern.MatchString(objectType) {
+		return "", errors.New("salesforce object type is invalid")
+	}
+	return objectType, nil
+}
+
+func validatedSalesForceRecordID(externalID string) (string, error) {
+	if len(externalID) != shortSalesForceRecordIDLength && len(externalID) != longSalesForceRecordIDLength {
+		return "", errors.New("salesforce record id is invalid")
+	}
+	for characterIndex := 0; characterIndex < len(externalID); characterIndex++ {
+		character := externalID[characterIndex]
+		if (character < '0' || character > '9') &&
+			(character < 'A' || character > 'Z') &&
+			(character < 'a' || character > 'z') {
+			return "", errors.New("salesforce record id is invalid")
+		}
+	}
+	return externalID, nil
+}
 
 type SalesForceSyncService struct {
 	client     *clients.SalesForceClient
@@ -33,6 +66,11 @@ func NewSalesForceSyncService(
 
 // FullSync sincroniza todos os registros do SalesForce.
 func (s *SalesForceSyncService) FullSync(ctx context.Context) error {
+	objectType, err := validatedSalesForceObjectType(s.objectType)
+	if err != nil {
+		return err
+	}
+
 	startedAt := time.Now()
 	eventID, _ := s.repo.RecordSyncEvent(ctx, &models.SyncEvent{
 		Source:    models.SourceSalesForce,
@@ -41,9 +79,9 @@ func (s *SalesForceSyncService) FullSync(ctx context.Context) error {
 		StartedAt: startedAt,
 	})
 
-	log.Info().Str("object_type", s.objectType).Msg("salesforce: iniciando full sync")
+	log.Info().Str("object_type", objectType).Msg("salesforce: iniciando full sync")
 
-	records, err := s.client.QueryAll(ctx, s.objectType)
+	records, err := s.client.QueryAll(ctx, objectType)
 	if err != nil {
 		errMsg := err.Error()
 		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, 0, 0, errMsg, int(time.Since(startedAt).Milliseconds()))
@@ -67,7 +105,7 @@ func (s *SalesForceSyncService) FullSync(ctx context.Context) error {
 	}
 
 	now := time.Now()
-	_ = s.repo.UpsertSalesForceCursor(ctx, s.objectType, now, "")
+	_ = s.repo.UpsertSalesForceCursor(ctx, objectType, now, "")
 	_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusCompleted, processed, 0, "", durationMs)
 
 	log.Info().
@@ -80,7 +118,12 @@ func (s *SalesForceSyncService) FullSync(ctx context.Context) error {
 
 // DeltaSync sincroniza apenas os registros modificados desde a última sync.
 func (s *SalesForceSyncService) DeltaSync(ctx context.Context) error {
-	cursor, err := s.repo.GetSalesForceCursor(ctx, s.objectType)
+	objectType, err := validatedSalesForceObjectType(s.objectType)
+	if err != nil {
+		return err
+	}
+
+	cursor, err := s.repo.GetSalesForceCursor(ctx, objectType)
 	if err != nil || cursor.LastSyncAt == nil {
 		log.Info().Msg("salesforce: cursor não encontrado, executando full sync")
 		return s.FullSync(ctx)
@@ -96,10 +139,10 @@ func (s *SalesForceSyncService) DeltaSync(ctx context.Context) error {
 
 	log.Info().
 		Time("since", *cursor.LastSyncAt).
-		Str("object_type", s.objectType).
+		Str("object_type", objectType).
 		Msg("salesforce: iniciando delta sync")
 
-	records, err := s.client.QueryModifiedSince(ctx, s.objectType, *cursor.LastSyncAt)
+	records, err := s.client.QueryModifiedSince(ctx, objectType, *cursor.LastSyncAt)
 	if err != nil {
 		errMsg := err.Error()
 		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, 0, 0, errMsg, int(time.Since(startedAt).Milliseconds()))
@@ -130,7 +173,7 @@ func (s *SalesForceSyncService) DeltaSync(ctx context.Context) error {
 	}
 
 	now := time.Now()
-	_ = s.repo.UpsertSalesForceCursor(ctx, s.objectType, now, "")
+	_ = s.repo.UpsertSalesForceCursor(ctx, objectType, now, "")
 	_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusCompleted, processed, 0, "", durationMs)
 
 	log.Info().
@@ -143,7 +186,15 @@ func (s *SalesForceSyncService) DeltaSync(ctx context.Context) error {
 
 // SyncRecord sincroniza um único registro (para uso em webhooks).
 func (s *SalesForceSyncService) SyncRecord(ctx context.Context, externalID string) error {
-	soql := "SELECT Id, Name, Description__c, ShortDescription__c, Organization__c, URL__c, Status__c, Theme__c, Channel__c, Neighborhood__c, Tags__c, ValidFrom__c, ValidUntil__c, LastModifiedDate FROM " + s.objectType + " WHERE Id = '" + externalID + "' LIMIT 1"
+	objectType, err := validatedSalesForceObjectType(s.objectType)
+	if err != nil {
+		return err
+	}
+	externalID, err = validatedSalesForceRecordID(externalID)
+	if err != nil {
+		return err
+	}
+	soql := "SELECT Id, Name, Description__c, ShortDescription__c, Organization__c, URL__c, Status__c, Theme__c, Channel__c, Neighborhood__c, Tags__c, ValidFrom__c, ValidUntil__c, LastModifiedDate FROM " + objectType + " WHERE Id = '" + externalID + "' LIMIT 1"
 	records, err := s.client.Query(ctx, soql)
 	if err != nil {
 		return err

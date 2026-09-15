@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 )
+
+const maximumAppGoAPIResponseBytes int64 = 1 << 20 // ~1MiB
 
 // AppGoAPIClient consome a API pública do app-go-api.
 type AppGoAPIClient struct {
@@ -168,12 +169,18 @@ func (c *AppGoAPIClient) doGet(ctx context.Context, path string, dest interface{
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readBoundedHTTPBody(resp.Body, maximumAppGoAPIResponseBytes)
+	if err != nil {
+		return fmt.Errorf("appgoapi: falha ao ler resposta: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("appgoapi: retornou %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("appgoapi: retornou status %d", resp.StatusCode)
 	}
 
-	return json.Unmarshal(body, dest)
+	if err := json.Unmarshal(body, dest); err != nil {
+		return fmt.Errorf("appgoapi: resposta JSON inválida: %w", err)
+	}
+	return nil
 }
 
 // GetCourses retorna cursos paginados.

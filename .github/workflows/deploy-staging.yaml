@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     permissions:
-      contents: write
+      contents: read
       packages: write
 
     steps:
@@ -78,18 +78,9 @@ jobs:
             ]' docs/openapi-v3.json > docs/openapi-v3.json.tmp && \
           mv docs/openapi-v3.json.tmp docs/openapi-v3.json
 
-      - name: Configure Git
+      - name: Verify generated OpenAPI is committed
         if: steps.check-k8s-only.outputs.k8s_only != 'true'
-        run: |
-          git config --global user.name 'GitHub Actions'
-          git config --global user.email 'github-actions@github.com'
-
-      - name: Commit and push OpenAPI v3
-        if: steps.check-k8s-only.outputs.k8s_only != 'true'
-        run: |
-          git add docs/openapi-v3.json
-          git commit -m "chore: atualiza documentação OpenAPI v3" || echo "Sem alterações"
-          git push
+        run: git diff --exit-code -- docs/openapi-v3.json
 
       - name: Login to GHCR
         if: steps.check-k8s-only.outputs.k8s_only != 'true'

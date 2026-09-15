@@ -1,10 +1,12 @@
 package v1
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 
@@ -13,6 +15,8 @@ import (
 
 	"github.com/prefeitura-rio/app-catalogo/internal/services"
 )
+
+const maximumSalesForceWebhookBodyBytes int64 = 64 << 10
 
 type WebhookHandler struct {
 	sfSyncSvc     *services.SalesForceSyncService
@@ -47,19 +51,28 @@ type sfWebhookPayload struct {
 // @Failure      401  {object}  map[string]string
 // @Router       /api/webhooks/salesforce [post]
 func (h *WebhookHandler) SalesForce(c *gin.Context) {
+	if h.webhookSecret == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "webhook não configurado"})
+		return
+	}
+
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maximumSalesForceWebhookBodyBytes)
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "payload excede o limite permitido"})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{"error": "falha ao ler body"})
 		return
 	}
 
-	if h.webhookSecret != "" {
-		sig := c.GetHeader("X-Salesforce-Signature")
-		if !h.validateHMAC(body, sig) {
-			log.Warn().Str("sig", sig).Msg("webhook: assinatura inválida")
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "assinatura inválida"})
-			return
-		}
+	sig := c.GetHeader("X-Salesforce-Signature")
+	if !h.validateHMAC(body, sig) {
+		log.Warn().Msg("webhook: assinatura inválida")
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "assinatura inválida"})
+		return
 	}
 
 	var payload sfWebhookPayload
@@ -73,12 +86,13 @@ func (h *WebhookHandler) SalesForce(c *gin.Context) {
 		return
 	}
 
+	externalID := payload.SObject.ID
+	syncCtx := context.WithoutCancel(c.Request.Context())
 	go func() {
-		ctx := c.Request.Context()
-		if err := h.sfSyncSvc.SyncRecord(ctx, payload.SObject.ID); err != nil {
-			log.Error().Err(err).Str("id", payload.SObject.ID).Msg("webhook: falha ao sincronizar registro")
+		if err := h.sfSyncSvc.SyncRecord(syncCtx, externalID); err != nil {
+			log.Error().Err(err).Str("id", externalID).Msg("webhook: falha ao sincronizar registro")
 		} else {
-			log.Info().Str("id", payload.SObject.ID).Msg("webhook: registro sincronizado")
+			log.Info().Str("id", externalID).Msg("webhook: registro sincronizado")
 		}
 	}()
 

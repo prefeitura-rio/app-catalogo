@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
 )
+
+const maximumKeycloakTokenResponseBytes int64 = 64 << 10
 
 // KeycloakTokenManager obtém e renova tokens de service account via client_credentials.
 type KeycloakTokenManager struct {
@@ -61,9 +62,12 @@ func (m *KeycloakTokenManager) fetchToken(ctx context.Context) error {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readBoundedHTTPBody(resp.Body, maximumKeycloakTokenResponseBytes)
+	if err != nil {
+		return fmt.Errorf("keycloak: falha ao ler resposta: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("keycloak: retornou %d: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("keycloak: retornou status %d", resp.StatusCode)
 	}
 
 	var tokenResp kcTokenResponse

@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"strings"
+	"unicode"
 
 	"github.com/gin-gonic/gin"
 )
@@ -54,15 +55,25 @@ func decodeJWT(token string) *jwtClaims {
 	return &claims
 }
 
+// normalizeCPF strips . and - and accepts only an 11-digit CPF.
+func normalizeCPF(raw string) (string, bool) {
+	canonical := strings.NewReplacer(".", "", "-", "").Replace(strings.TrimSpace(raw))
+	if len(canonical) != 11 {
+		return "", false
+	}
+	for _, r := range canonical {
+		if !unicode.IsDigit(r) || r > unicode.MaxASCII {
+			return "", false
+		}
+	}
+	return canonical, true
+}
+
 // ExtractUserContext decodifica o JWT injetado pelo Istio (X-Auth-Request-Token).
 // A assinatura já foi validada pelo Istio — não re-validamos aqui.
 func ExtractUserContext() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("X-Auth-Request-Token")
-		if authHeader == "" {
-			authHeader = c.GetHeader("Authorization")
-		}
-
 		if authHeader == "" {
 			c.Next()
 			return
@@ -75,8 +86,9 @@ func ExtractUserContext() gin.HandlerFunc {
 		}
 
 		if claims.PreferredUsername != "" {
-			cpf := strings.NewReplacer(".", "", "-", "").Replace(claims.PreferredUsername)
-			c.Set(UserCPFKey, cpf)
+			if cpf, ok := normalizeCPF(claims.PreferredUsername); ok {
+				c.Set(UserCPFKey, cpf)
+			}
 		}
 		if claims.Sub != "" {
 			c.Set(UserIDKey, claims.Sub)

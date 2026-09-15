@@ -183,6 +183,15 @@ type EmbeddingSettings struct {
 	BackfillInterval time.Duration
 }
 
+const minimumCPFHashSecretBytes = 32
+
+func validateCPFHashSecret(secret string) error {
+	if len(secret) < minimumCPFHashSecretBytes {
+		return fmt.Errorf("CPF_HASH_SALT deve conter pelo menos %d bytes", minimumCPFHashSecretBytes)
+	}
+	return nil
+}
+
 var (
 	instance *AppConfig
 	once     sync.Once
@@ -316,6 +325,9 @@ func Load() (*AppConfig, error) {
 	}
 	if err := cfg.Server.Validate(); err != nil {
 		return nil, fmt.Errorf("configuração de servidor inválida: %w", err)
+	}
+	if err := validateCPFHashSecret(cfg.CPFHashSalt); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil
