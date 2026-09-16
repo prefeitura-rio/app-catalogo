@@ -86,27 +86,27 @@ type CartaSubtheme struct {
 
 // CartaServiceListItem é o item retornado por GET /subthemes/{slug}/services.
 type CartaServiceListItem struct {
-	Slug                         string   `json:"slug"`
-	Name                         string   `json:"name"`
-	ServiceCatalogID             string   `json:"serviceCatalogId"`
-	ArticleID                    string   `json:"articleId"`
-	ArticleVersion               int      `json:"articleVersion"`
-	ArticleStatus                string   `json:"articleStatus"`
-	CreatedDate                  string   `json:"createdDate"`
-	LastModifiedDate             string   `json:"lastModifiedDate"`
-	LastPublishedDate            string   `json:"lastPublishedDate"`
-	ResponsibleOrgUnit           string   `json:"responsibleOrgUnit"`
-	ResponsibleOrgUnitShortName  string   `json:"responsibleOrgUnitShortName"`
-	Summary                      string   `json:"summary"`
-	ServiceDeadline              *string  `json:"serviceDeadline"`
-	ServiceDeadlineNotes         *string  `json:"serviceDeadlineNotes"`
-	Cost                         *string  `json:"cost"`
-	CostValue                    *float64 `json:"costValue"`
-	CostNotes                    *string  `json:"costNotes"`
-	IsFree                       bool     `json:"isFree"`
-	FixarDestaque                bool     `json:"fixarDestaque"`
-	AllowTicketSubmission        bool     `json:"allowTicketSubmission"`
-	AllowsAnonymity              bool     `json:"allowsAnonymity"`
+	Slug                        string   `json:"slug"`
+	Name                        string   `json:"name"`
+	ServiceCatalogID            string   `json:"serviceCatalogId"`
+	ArticleID                   string   `json:"articleId"`
+	ArticleVersion              int      `json:"articleVersion"`
+	ArticleStatus               string   `json:"articleStatus"`
+	CreatedDate                 string   `json:"createdDate"`
+	LastModifiedDate            string   `json:"lastModifiedDate"`
+	LastPublishedDate           string   `json:"lastPublishedDate"`
+	ResponsibleOrgUnit          string   `json:"responsibleOrgUnit"`
+	ResponsibleOrgUnitShortName string   `json:"responsibleOrgUnitShortName"`
+	Summary                     string   `json:"summary"`
+	ServiceDeadline             *string  `json:"serviceDeadline"`
+	ServiceDeadlineNotes        *string  `json:"serviceDeadlineNotes"`
+	Cost                        *string  `json:"cost"`
+	CostValue                   *float64 `json:"costValue"`
+	CostNotes                   *string  `json:"costNotes"`
+	IsFree                      bool     `json:"isFree"`
+	FixarDestaque               bool     `json:"fixarDestaque"`
+	AllowTicketSubmission       bool     `json:"allowTicketSubmission"`
+	AllowsAnonymity             bool     `json:"allowsAnonymity"`
 }
 
 // EffectiveModifiedAt retorna o maior timestamp entre lastModified e lastPublished.
@@ -115,29 +115,29 @@ func (s CartaServiceListItem) EffectiveModifiedAt() time.Time {
 }
 
 type CartaServiceDetail struct {
-	Slug                        string              `json:"slug"`
-	Name                        string              `json:"name"`
-	ServiceCatalogID            string              `json:"serviceCatalogId"`
-	ArticleID                   string              `json:"articleId"`
-	ArticleVersion              int                 `json:"articleVersion"`
-	ArticleStatus               string              `json:"articleStatus"`
-	CreatedDate                 string              `json:"createdDate"`
-	LastModifiedDate            string              `json:"lastModifiedDate"`
-	LastPublishedDate           string              `json:"lastPublishedDate"`
-	SlugHistory                 []string            `json:"slugHistory"`
-	ThemeSlug                   string              `json:"themeSlug"`
-	ThemeName                   string              `json:"themeName"`
-	SubthemeSlug                string              `json:"subthemeSlug"`
-	SubthemeName                string              `json:"subthemeName"`
-	ResponsibleOrgUnit          string              `json:"responsibleOrgUnit"`
-	ResponsibleOrgUnitShortName string              `json:"responsibleOrgUnitShortName"`
-	Flags                       CartaServiceFlags   `json:"flags"`
-	Info                        CartaServiceInfo    `json:"info"`
-	HowToRequest                CartaHowToRequest   `json:"howToRequest"`
-	Channels                    []CartaChannel      `json:"channels"`
-	Buttons                     []CartaButton       `json:"buttons"`
-	Legislation                 []CartaLegislation  `json:"legislation"`
-	ServicePoints               []json.RawMessage   `json:"servicePoints"`
+	Slug                        string             `json:"slug"`
+	Name                        string             `json:"name"`
+	ServiceCatalogID            string             `json:"serviceCatalogId"`
+	ArticleID                   string             `json:"articleId"`
+	ArticleVersion              int                `json:"articleVersion"`
+	ArticleStatus               string             `json:"articleStatus"`
+	CreatedDate                 string             `json:"createdDate"`
+	LastModifiedDate            string             `json:"lastModifiedDate"`
+	LastPublishedDate           string             `json:"lastPublishedDate"`
+	SlugHistory                 []string           `json:"slugHistory"`
+	ThemeSlug                   string             `json:"themeSlug"`
+	ThemeName                   string             `json:"themeName"`
+	SubthemeSlug                string             `json:"subthemeSlug"`
+	SubthemeName                string             `json:"subthemeName"`
+	ResponsibleOrgUnit          string             `json:"responsibleOrgUnit"`
+	ResponsibleOrgUnitShortName string             `json:"responsibleOrgUnitShortName"`
+	Flags                       CartaServiceFlags  `json:"flags"`
+	Info                        CartaServiceInfo   `json:"info"`
+	HowToRequest                CartaHowToRequest  `json:"howToRequest"`
+	Channels                    []CartaChannel     `json:"channels"`
+	Buttons                     []CartaButton      `json:"buttons"`
+	Legislation                 []CartaLegislation `json:"legislation"`
+	ServicePoints               []json.RawMessage  `json:"servicePoints"`
 }
 
 type CartaServiceFlags struct {
@@ -165,15 +165,15 @@ type CartaHowToRequest struct {
 }
 
 type CartaChannel struct {
-	Order       int     `json:"order"`
-	Type        string  `json:"type"`
-	Endereco    string  `json:"endereco,omitempty"`
-	Titulo      string  `json:"titulo,omitempty"`
-	MapURL      string  `json:"mapUrl,omitempty"`
-	Value       string  `json:"value,omitempty"`
-	ChannelType string  `json:"channelType,omitempty"`
+	Order        int    `json:"order"`
+	Type         string `json:"type"`
+	Endereco     string `json:"endereco,omitempty"`
+	Titulo       string `json:"titulo,omitempty"`
+	MapURL       string `json:"mapUrl,omitempty"`
+	Value        string `json:"value,omitempty"`
+	ChannelType  string `json:"channelType,omitempty"`
 	WhatsappLink string `json:"whatsappLink,omitempty"`
-	Enabled     bool    `json:"enabled"`
+	Enabled      bool   `json:"enabled"`
 }
 
 type CartaButton struct {

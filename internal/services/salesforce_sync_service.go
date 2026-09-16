@@ -333,7 +333,7 @@ func filterServicesNeedingDetail(listed []clients.CartaServiceListItem, since ti
 }
 
 // fetchDetails busca detalhes em paralelo.
-// Erros individuais não cancelam o lote (degradação parcial): o errgroup só
+// Falha em um item não cancela o lote (degradação parcial): o errgroup só
 // limita concorrência; as goroutines retornam nil de propósito.
 func (s *SalesForceSyncService) fetchDetails(
 	ctx context.Context,
