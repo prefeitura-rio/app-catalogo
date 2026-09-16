@@ -246,10 +246,18 @@ func mapTypesenseTargetAudience(svc clients.TypesenseService) json.RawMessage {
 		case strings.Contains(pl, "mulher") ||
 			strings.Contains(pl, "feminino"):
 			ta.Genero = append(ta.Genero, p)
-		default:
-			// Público não mapeado para uma dimensão conhecida: preserva em etnia
-			// para não perder a informação até que o mapeamento seja refinado.
+		case strings.Contains(pl, "pret") ||
+			strings.Contains(pl, "pard") ||
+			strings.Contains(pl, "branc") ||
+			strings.Contains(pl, "indígena") ||
+			strings.Contains(pl, "indigena") ||
+			strings.Contains(pl, "amarel") ||
+			strings.Contains(pl, "etnia") ||
+			strings.Contains(pl, "raça") ||
+			strings.Contains(pl, "raca"):
 			ta.Etnia = append(ta.Etnia, p)
+		default:
+			ta.Outros = append(ta.Outros, p)
 		}
 	}
 

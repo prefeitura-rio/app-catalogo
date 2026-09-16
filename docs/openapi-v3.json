@@ -767,16 +767,17 @@
     },
     "/api/webhooks/salesforce": {
       "post": {
-        "description": "Recebe notificações de criação/atualização da Carta de Serviços. Valida assinatura HMAC-SHA256 via header X-Salesforce-Signature.",
+        "description": "Recebe notificações de criação/atualização. Valida HMAC-SHA256 via X-Salesforce-Signature. Usa sobject.Slug (ou Id como fallback) como identificador do serviço na API CloudHub. Sem SALESFORCE_WEBHOOK_SECRET retorna 401. Payload > 64KiB retorna 413.",
         "tags": [
           "webhooks"
         ],
-        "summary": "Webhook SalesForce (Change Data Capture)",
+        "summary": "Webhook SalesForce (Carta de Serviços)",
         "parameters": [
           {
             "description": "HMAC-SHA256 do body em hex",
             "name": "X-Salesforce-Signature",
             "in": "header",
+            "required": true,
             "schema": {
               "type": "string"
             }
@@ -822,6 +823,19 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request Entity Too Large",
             "content": {
               "application/json": {
                 "schema": {
@@ -1004,7 +1018,7 @@
         ],
         "x-enum-comments": {
           "SourceAppGoAPI": "fonte composta: courses + jobs + mei",
-          "SourceTypesense": "temporário: Carta de Serviços até migração para SalesForce"
+          "SourceTypesense": "temporário: Carta até migração para SalesForce (CloudHub)"
         },
         "x-enum-descriptions": [
           "",
@@ -1012,7 +1026,7 @@
           "",
           "",
           "fonte composta: courses + jobs + mei",
-          "temporário: Carta de Serviços até migração para SalesForce"
+          "temporário: Carta até migração para SalesForce (CloudHub)"
         ],
         "x-enum-varnames": [
           "SourceSalesForce",
@@ -1338,10 +1352,12 @@
             "type": "object",
             "properties": {
               "created": {
-                "type": "string"
+                "type": "string",
+                "example": "2026-04-08T10:00:00Z"
               },
               "type": {
-                "type": "string"
+                "type": "string",
+                "example": "updated"
               }
             }
           },
@@ -1349,10 +1365,16 @@
             "type": "object",
             "properties": {
               "Id": {
-                "type": "string"
+                "type": "string",
+                "example": "a001Q000003ABCDE"
+              },
+              "Slug": {
+                "type": "string",
+                "example": "iptu-cobranca"
               },
               "type": {
-                "type": "string"
+                "type": "string",
+                "example": "Servico__c"
               }
             }
           }

@@ -367,8 +367,8 @@ paths:
       summary: Dispara sincronização manual
       description: |
         Dispara uma sincronização ad-hoc em background e retorna imediatamente.
-        Se `source` for omitido, sincroniza todas as fontes.
-        Fontes inválidas são ignoradas silenciosamente (sem erro na resposta).
+        Se `source` for omitido, sincroniza todas as fontes registradas no worker.
+        Fontes inválidas ou não registradas são ignoradas silenciosamente (sem erro na resposta).
       security:
         - adminAuth: []
       parameters:
@@ -377,7 +377,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: ["salesforce", "app-go-api"]
+            enum: ["salesforce", "app-go-api", "typesense"]
           description: Nome da fonte. Omitir para sincronizar todas.
       responses:
         "202":
@@ -486,19 +486,26 @@ paths:
   /api/webhooks/salesforce:
     post:
       tags: [Infra]
-      summary: Webhook SalesForce
+      summary: Webhook SalesForce (Carta de Serviços)
       description: |
-        Recebe notificações de criação/atualização de registros da Carta de Serviços.
-        A assinatura HMAC-SHA256 do body deve ser enviada no header `X-Salesforce-Signature` (hex).
-        Quando o `SALESFORCE_WEBHOOK_SECRET` não está configurado, a validação é ignorada.
+        Recebe notificações de criação/atualização de serviços da Carta (API CloudHub).
+        Valida HMAC-SHA256 do body no header `X-Salesforce-Signature` (hex).
+
+        O identificador usado na sincronização é `sobject.Slug` (preferencial) ou
+        `sobject.Id` como fallback. Ambos vazios → resposta `ignored` (sem sync).
+
+        Com slug válido, enfileira `SyncRecord` em background e responde `queued`.
+
+        Se `SALESFORCE_WEBHOOK_SECRET` não estiver configurado, retorna `401`.
+        Payload acima de 64 KiB retorna `413`.
       security: []
       parameters:
         - name: X-Salesforce-Signature
           in: header
-          required: false
+          required: true
           schema:
             type: string
-            pattern: "^[0-9a-f]{64}$"
+            pattern: "^[0-9a-fA-F]{64}$"
           description: HMAC-SHA256 do body em hexadecimal
       requestBody:
         required: true
@@ -508,14 +515,15 @@ paths:
               $ref: "#/components/schemas/SalesForceWebhookPayload"
             example:
               event:
-                type: "created"
+                type: "updated"
                 created: "2026-04-08T10:00:00Z"
               sobject:
                 Id: "a001Q000003ABCDE"
+                Slug: "iptu-cobranca"
                 type: "Servico__c"
       responses:
         "200":
-          description: Webhook processado ou ignorado
+          description: Webhook aceito (enfileirado) ou ignorado
           content:
             application/json:
               schema:
@@ -529,19 +537,32 @@ paths:
                   value:
                     status: "queued"
                 ignorado:
-                  summary: sobject.Id vazio
+                  summary: Slug e Id vazios
                   value:
                     status: "ignored"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          description: Assinatura HMAC inválida
+          description: Assinatura HMAC inválida ou webhook não configurado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                assinatura_invalida:
+                  value:
+                    error: "assinatura inválida"
+                nao_configurado:
+                  value:
+                    error: "webhook não configurado"
+        "413":
+          description: Payload excede o limite de 64 KiB
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
               example:
-                error: "assinatura inválida"
+                error: "payload excede o limite permitido"
 
 # =============================================================================
 # COMPONENTS
@@ -913,9 +934,11 @@ components:
         - jobs
         - mei
         - app-go-api
+        - typesense
       description: |
         Fonte de origem do item:
-        - `salesforce`: Carta de Serviços
+        - `salesforce`: Carta de Serviços (API CloudHub)
+        - `typesense`: Carta de Serviços temporária (Typesense)
         - `courses`: Cursos do app-go-api
         - `jobs`: Vagas do app-go-api
         - `mei`: MEI do app-go-api
@@ -1144,7 +1167,7 @@ components:
           format: uuid
         external_id:
           type: string
-          description: ID na fonte de origem (SalesForce ID, ID do app-go-api, etc.)
+          description: ID na fonte de origem (slug da Carta/CloudHub, ID do app-go-api, etc.)
         source:
           $ref: "#/components/schemas/ItemSource"
         type:
@@ -1284,14 +1307,21 @@ components:
             created:
               type: string
               format: date-time
-              description: Timestamp do evento no SalesForce
+              description: Timestamp do evento
         sobject:
           type: object
-          required: [Id, type]
+          required: [type]
           properties:
             Id:
               type: string
-              description: SalesForce Record ID. Vazio = evento ignorado.
+              description: |
+                Identificador alternativo. Usado como fallback quando `Slug` está vazio
+                (ex. Record ID do SalesForce ou slug legado).
+            Slug:
+              type: string
+              description: |
+                Slug canônico do serviço na API CloudHub da Carta.
+                Preferencial para sincronizar o registro (`GET /services/{slug}`).
             type:
               type: string
-              description: Tipo do objeto SalesForce (ex. `Servico__c`)
+              description: Tipo do objeto (ex. `Servico__c`)
