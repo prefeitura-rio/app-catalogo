@@ -8,7 +8,7 @@ import (
 	"github.com/prefeitura-rio/app-catalogo/internal/services"
 )
 
-// SalesForceDataSource adapta o SalesForceSyncService para a interface DataSource.
+// SalesForceDataSource adapta o SalesForceSyncService (Carta CloudHub) para DataSource.
 type SalesForceDataSource struct {
 	syncSvc      *services.SalesForceSyncService
 	syncInterval time.Duration

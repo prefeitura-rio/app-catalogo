@@ -113,11 +113,7 @@ func main() {
 	)
 	rmiClient := clients.NewRMIClient(cfg.RMI.BaseURL, tokenManager)
 
-	sfClient := clients.NewSalesForceClient(
-		cfg.SalesForce.InstanceURL,
-		cfg.SalesForce.ClientID,
-		cfg.SalesForce.ClientSecret,
-	)
+	cartaClient := clients.NewCartaServicosClient(cfg.SalesForce.InstanceURL)
 
 	// Clients opcionais — busca semântica e reranking
 	var geminiClient *clients.GeminiEmbeddingClient
@@ -138,7 +134,12 @@ func main() {
 	}
 
 	// Serviços
-	sfSyncSvc := services.NewSalesForceSyncService(sfClient, itemRepo, cfg.SalesForce.ObjectType)
+	sfSyncSvc := services.NewSalesForceSyncService(
+		cartaClient,
+		itemRepo,
+		cfg.SalesForce.BaseServiceURL,
+		cfg.SalesForce.DetailConcurrency,
+	)
 	searchSvc := services.NewSearchService(searchRepo, redisCache, cfg.Cache.SearchTTL, geminiClient, rerankerClient)
 	citizenSvc := services.NewCitizenProfileService(
 		rmiClient,
@@ -156,9 +157,8 @@ func main() {
 
 	// Manager com fontes registradas (espelha o worker, mas sem tickers — só para TriggerSync)
 	dsManager := datasource.NewManager()
-	if cfg.SalesForce.InstanceURL != "" {
-		sfDataSource := datasource.NewSalesForceDataSource(sfSyncSvc, cfg.SalesForce.SyncInterval)
-		dsManager.Register(sfDataSource)
+	if cfg.SalesForce.InstanceURL != "" && cfg.SalesForce.SyncEnabled {
+		dsManager.Register(datasource.NewSalesForceDataSource(sfSyncSvc, cfg.SalesForce.SyncInterval))
 	}
 	if cfg.AppGoAPI.BaseURL != "" && cfg.AppGoAPI.SyncEnabled {
 		appGoAPIClient := clients.NewAppGoAPIClient(cfg.AppGoAPI.BaseURL, tokenManager)

@@ -17,7 +17,7 @@ const (
 	SourceJobs       ItemSource = "jobs"
 	SourceMEI        ItemSource = "mei"
 	SourceAppGoAPI   ItemSource = "app-go-api" // fonte composta: courses + jobs + mei
-	SourceTypesense  ItemSource = "typesense"  // temporário: Carta de Serviços até migração para SalesForce
+	SourceTypesense  ItemSource = "typesense"  // temporário: Carta até migração para SalesForce (CloudHub)
 
 	TypeService        ItemType = "service"
 	TypeCourse         ItemType = "course"
@@ -61,6 +61,8 @@ type TargetAudienceData struct {
 	Etnia        []string `json:"etnia,omitempty"`
 	FaixaEtaria  []string `json:"faixa_etaria,omitempty"`
 	Genero       []string `json:"genero,omitempty"`
+	// Outros preserva públicos não classificados (ex.: "Publico_em_geral", "MEI").
+	Outros []string `json:"outros,omitempty"`
 }
 
 func (i *CatalogItem) ParseTargetAudience() (*TargetAudienceData, error) {
