@@ -34,16 +34,16 @@ type CartaMeta struct {
 
 // CartaServiceSummary é o item de listagem local de serviços por subtema.
 type CartaServiceSummary struct {
-	Slug                        string   `json:"slug"`
-	Name                        string   `json:"name"`
-	ArticleStatus               string   `json:"articleStatus,omitempty"`
-	CreatedDate                 string   `json:"createdDate,omitempty"`
-	LastModifiedDate            string   `json:"lastModifiedDate,omitempty"`
-	LastPublishedDate           string   `json:"lastPublishedDate,omitempty"`
-	ResponsibleOrgUnit          string   `json:"responsibleOrgUnit,omitempty"`
-	ResponsibleOrgUnitShortName string   `json:"responsibleOrgUnitShortName,omitempty"`
-	Summary                     string   `json:"summary,omitempty"`
-	IsFree                      bool     `json:"isFree,omitempty"`
-	ThemeSlug                   string   `json:"themeSlug,omitempty"`
-	SubthemeSlug                string   `json:"subthemeSlug,omitempty"`
+	Slug                        string `json:"slug"`
+	Name                        string `json:"name"`
+	ArticleStatus               string `json:"articleStatus,omitempty"`
+	CreatedDate                 string `json:"createdDate,omitempty"`
+	LastModifiedDate            string `json:"lastModifiedDate,omitempty"`
+	LastPublishedDate           string `json:"lastPublishedDate,omitempty"`
+	ResponsibleOrgUnit          string `json:"responsibleOrgUnit,omitempty"`
+	ResponsibleOrgUnitShortName string `json:"responsibleOrgUnitShortName,omitempty"`
+	Summary                     string `json:"summary,omitempty"`
+	IsFree                      bool   `json:"isFree,omitempty"`
+	ThemeSlug                   string `json:"themeSlug,omitempty"`
+	SubthemeSlug                string `json:"subthemeSlug,omitempty"`
 }

@@ -621,7 +621,7 @@ func TestFullSync_PersistsHierarchy(t *testing.T) {
 		},
 		subthemes: map[string][]clients.CartaSubtheme{
 			"tributos": {{Slug: "iptu", Name: "IPTU", PublishedServices: 1}},
-			"saude":     {},
+			"saude":    {},
 		},
 		services: map[string][]clients.CartaServiceListItem{
 			"iptu": {sampleListItem("svc-a", "2026-08-20T00:00:00.000Z")},

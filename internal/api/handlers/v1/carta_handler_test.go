@@ -292,9 +292,9 @@ func TestCartaHandler_ListServicesEmptyAndError(t *testing.T) {
 func TestParseCartaPage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cases := []struct {
-		query        string
-		wantPage     int
-		wantPerPage  int
+		query       string
+		wantPage    int
+		wantPerPage int
 	}{
 		{"", 1, 100},
 		{"page=0&per_page=-1", 1, 100},
