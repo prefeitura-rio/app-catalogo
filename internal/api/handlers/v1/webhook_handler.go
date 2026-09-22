@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
@@ -70,7 +71,7 @@ func (h *WebhookHandler) SalesForce(c *gin.Context) {
 		return
 	}
 
-	sig := c.GetHeader("X-Salesforce-Signature")
+	sig := strings.ToLower(strings.TrimSpace(c.GetHeader("X-Salesforce-Signature")))
 	if !h.validateHMAC(body, sig) {
 		log.Warn().Msg("webhook: assinatura inválida")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "assinatura inválida"})

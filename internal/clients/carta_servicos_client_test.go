@@ -25,10 +25,31 @@ func TestNormalizeCartaServicosBaseURL(t *testing.T) {
 		{"", ""},
 	}
 	for _, tt := range tests {
-		if got := normalizeCartaServicosBaseURL(tt.in); got != tt.want {
+		got, err := normalizeCartaServicosBaseURL(tt.in)
+		if err != nil {
+			t.Errorf("normalize(%q) unexpected err: %v", tt.in, err)
+			continue
+		}
+		if got != tt.want {
 			t.Errorf("normalize(%q)=%q want %q", tt.in, got, tt.want)
 		}
 	}
+
+	invalid := []string{"not-a-url", "javascript:alert(1)", "ftp://example.com", "://missing-scheme"}
+	for _, in := range invalid {
+		if _, err := normalizeCartaServicosBaseURL(in); err == nil {
+			t.Errorf("normalize(%q) expected error", in)
+		}
+	}
+}
+
+func mustCartaClient(t *testing.T, baseURL string) *CartaServicosClient {
+	t.Helper()
+	c, err := NewCartaServicosClient(baseURL)
+	if err != nil {
+		t.Fatalf("NewCartaServicosClient: %v", err)
+	}
+	return c
 }
 
 func TestCartaServicosClient_ListThemes_Happy(t *testing.T) {
@@ -48,7 +69,7 @@ func TestCartaServicosClient_ListThemes_Happy(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewCartaServicosClient(srv.URL)
+	c := mustCartaClient(t, srv.URL)
 	themes, meta, err := c.ListThemes(context.Background(), 1, 10, false)
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +99,7 @@ func TestCartaServicosClient_ListAllThemes_Pagination(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewCartaServicosClient(srv.URL)
+	c := mustCartaClient(t, srv.URL)
 	themes, err := c.ListAllThemes(context.Background(), false)
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +126,7 @@ func TestCartaServicosClient_ListServicesBySubtheme_Happy(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewCartaServicosClient(srv.URL)
+	c := mustCartaClient(t, srv.URL)
 	items, meta, err := c.ListServicesBySubtheme(context.Background(), "iptu", 1, 100)
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +152,7 @@ func TestCartaServicosClient_GetService_Happy(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewCartaServicosClient(srv.URL)
+	c := mustCartaClient(t, srv.URL)
 	detail, err := c.GetService(context.Background(), "iptu-cobranca")
 	if err != nil {
 		t.Fatal(err)
@@ -153,7 +174,7 @@ func TestCartaServicosClient_GetService_Redirect301(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewCartaServicosClient(srv.URL)
+	c := mustCartaClient(t, srv.URL)
 	_, err := c.GetService(context.Background(), "slug-antigo")
 	var redir *ServiceRedirectError
 	if !errors.As(err, &redir) {
@@ -181,7 +202,7 @@ func TestCartaServicosClient_GetServiceCanonical_FollowsRedirect(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewCartaServicosClient(srv.URL)
+	c := mustCartaClient(t, srv.URL)
 	detail, canonical, err := c.GetServiceCanonical(context.Background(), "old")
 	if err != nil {
 		t.Fatal(err)
@@ -198,10 +219,32 @@ func TestCartaServicosClient_GetService_NotFound(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewCartaServicosClient(srv.URL)
+	c := mustCartaClient(t, srv.URL)
 	_, err := c.GetService(context.Background(), "missing")
-	if err == nil || !strings.Contains(err.Error(), "não encontrado") {
-		t.Fatalf("want not found error, got %v", err)
+	if !errors.Is(err, ErrServiceNotFound) {
+		t.Fatalf("want ErrServiceNotFound, got %v", err)
+	}
+}
+
+func TestCartaServicosClient_GetServiceCanonical_RedirectCycle(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/services/a"):
+			w.Header().Set("Location", "/api/services/b")
+			w.WriteHeader(http.StatusMovedPermanently)
+		case strings.HasSuffix(r.URL.Path, "/services/b"):
+			w.Header().Set("Location", "/api/services/a")
+			w.WriteHeader(http.StatusMovedPermanently)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := mustCartaClient(t, srv.URL)
+	_, _, err := c.GetServiceCanonical(context.Background(), "a")
+	if err == nil || !strings.Contains(err.Error(), "ciclo") {
+		t.Fatalf("want cycle error, got %v", err)
 	}
 }
 
@@ -212,7 +255,7 @@ func TestCartaServicosClient_HTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewCartaServicosClient(srv.URL)
+	c := mustCartaClient(t, srv.URL)
 	_, _, err := c.ListThemes(context.Background(), 1, 10, false)
 	if err == nil || !strings.Contains(err.Error(), "status 500") {
 		t.Fatalf("want status 500 error, got %v", err)
@@ -220,7 +263,7 @@ func TestCartaServicosClient_HTTPError(t *testing.T) {
 }
 
 func TestCartaServicosClient_EmptySlug(t *testing.T) {
-	c := NewCartaServicosClient("https://example.com")
+	c := mustCartaClient(t, "https://example.com")
 	if _, err := c.GetService(context.Background(), "  "); err == nil {
 		t.Fatal("expected error for empty slug")
 	}
@@ -247,7 +290,7 @@ func TestCartaServicosClient_MalformedJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewCartaServicosClient(srv.URL)
+	c := mustCartaClient(t, srv.URL)
 	_, _, err := c.ListThemes(context.Background(), 1, 10, false)
 	if err == nil {
 		t.Fatal("expected decode error")

@@ -62,25 +62,30 @@ func (s *stubCartaClient) GetService(ctx context.Context, slug string) (*clients
 	}
 	d, ok := s.details[slug]
 	if !ok {
-		return nil, fmt.Errorf("salesforce: serviço %q não encontrado", slug)
+		return nil, fmt.Errorf("%w: %s", clients.ErrServiceNotFound, slug)
 	}
 	return d, nil
 }
 
 func (s *stubCartaClient) GetServiceCanonical(ctx context.Context, slug string) (*clients.CartaServiceDetail, string, error) {
-	d, err := s.GetService(ctx, slug)
-	if err == nil {
-		return d, d.Slug, nil
+	seen := map[string]struct{}{}
+	current := slug
+	for hop := 0; hop < 3; hop++ {
+		if _, dup := seen[current]; dup {
+			return nil, "", fmt.Errorf("redirect cycle")
+		}
+		seen[current] = struct{}{}
+		d, err := s.GetService(ctx, current)
+		if err == nil {
+			return d, d.Slug, nil
+		}
+		var redir *clients.ServiceRedirectError
+		if !errors.As(err, &redir) {
+			return nil, "", err
+		}
+		current = redir.ToSlug
 	}
-	var redir *clients.ServiceRedirectError
-	if !errors.As(err, &redir) {
-		return nil, "", err
-	}
-	d, err = s.GetService(ctx, redir.ToSlug)
-	if err != nil {
-		return nil, "", err
-	}
-	return d, d.Slug, nil
+	return nil, "", fmt.Errorf("muitos redirects")
 }
 
 type stubSyncRepo struct {
@@ -213,8 +218,75 @@ func sampleListItem(slug string, modified string) clients.CartaServiceListItem {
 	}
 }
 
+type stubHierarchyRepo struct {
+	mu             sync.Mutex
+	themes         []*models.CartaTheme
+	subthemes      []*models.CartaSubtheme
+	themeKeep      []string
+	subthemeKeep   []string
+	refreshCalls   int
+	upsertThemeErr error
+	upsertSubErr   error
+	softThemeErr   error
+	softSubErr     error
+	refreshErr     error
+}
+
+func (h *stubHierarchyRepo) UpsertTheme(ctx context.Context, theme *models.CartaTheme) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.upsertThemeErr != nil {
+		return h.upsertThemeErr
+	}
+	cp := *theme
+	h.themes = append(h.themes, &cp)
+	return nil
+}
+
+func (h *stubHierarchyRepo) UpsertSubtheme(ctx context.Context, st *models.CartaSubtheme) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.upsertSubErr != nil {
+		return h.upsertSubErr
+	}
+	cp := *st
+	h.subthemes = append(h.subthemes, &cp)
+	return nil
+}
+
+func (h *stubHierarchyRepo) SoftDeleteThemesNotIn(ctx context.Context, keep []string) (int64, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.softThemeErr != nil {
+		return 0, h.softThemeErr
+	}
+	h.themeKeep = append([]string{}, keep...)
+	return 1, nil
+}
+
+func (h *stubHierarchyRepo) SoftDeleteSubthemesNotIn(ctx context.Context, keep []string) (int64, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.softSubErr != nil {
+		return 0, h.softSubErr
+	}
+	h.subthemeKeep = append([]string{}, keep...)
+	return 1, nil
+}
+
+func (h *stubHierarchyRepo) RefreshHierarchyCounts(ctx context.Context) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.refreshCalls++
+	return h.refreshErr
+}
+
 func newTestSync(client *stubCartaClient, repo *stubSyncRepo) *SalesForceSyncService {
-	return newSalesForceSyncService(client, repo, "https://prefeitura.rio", 4)
+	return newSalesForceSyncService(client, repo, nil, "https://prefeitura.rio", 4)
+}
+
+func newTestSyncWithHierarchy(client *stubCartaClient, repo *stubSyncRepo, hier *stubHierarchyRepo) *SalesForceSyncService {
+	return newSalesForceSyncService(client, repo, hier, "https://prefeitura.rio", 4)
 }
 
 // --- mapper -----------------------------------------------------------------
@@ -251,6 +323,9 @@ func TestMapCartaServiceDetail_Happy(t *testing.T) {
 	tags := strings.Join(item.Tags, ",")
 	if !strings.Contains(tags, "Tributos") || !strings.Contains(tags, "IPTU") {
 		t.Fatalf("tags=%v", item.Tags)
+	}
+	if item.ThemeSlug != "tributos" || item.SubthemeSlug != "iptu" {
+		t.Fatalf("hierarchy slugs: theme=%q subtheme=%q", item.ThemeSlug, item.SubthemeSlug)
 	}
 }
 
@@ -535,6 +610,117 @@ func TestSyncRecord_EmptySlug(t *testing.T) {
 	svc := newTestSync(&stubCartaClient{}, &stubSyncRepo{})
 	if err := svc.SyncRecord(context.Background(), "  "); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestFullSync_PersistsHierarchy(t *testing.T) {
+	client := &stubCartaClient{
+		themes: []clients.CartaTheme{
+			{Slug: "tributos", Name: "Tributos", SubthemesCount: 1, PublishedServices: 1},
+			{Slug: "saude", Name: "Saúde", SubthemesCount: 0, PublishedServices: 0},
+		},
+		subthemes: map[string][]clients.CartaSubtheme{
+			"tributos": {{Slug: "iptu", Name: "IPTU", PublishedServices: 1}},
+			"saude":     {},
+		},
+		services: map[string][]clients.CartaServiceListItem{
+			"iptu": {sampleListItem("svc-a", "2026-08-20T00:00:00.000Z")},
+		},
+		details: map[string]*clients.CartaServiceDetail{
+			"svc-a": sampleDetail("svc-a", "Serviço A"),
+		},
+	}
+	repo := &stubSyncRepo{}
+	hier := &stubHierarchyRepo{}
+	svc := newTestSyncWithHierarchy(client, repo, hier)
+
+	if err := svc.FullSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(hier.themes) != 2 {
+		t.Fatalf("themes upserted=%d", len(hier.themes))
+	}
+	if len(hier.subthemes) != 1 || hier.subthemes[0].Slug != "iptu" || hier.subthemes[0].ThemeSlug != "tributos" {
+		t.Fatalf("subthemes=%v", hier.subthemes)
+	}
+	if len(hier.themeKeep) != 2 {
+		t.Fatalf("themeKeep=%v", hier.themeKeep)
+	}
+	if len(hier.subthemeKeep) != 1 || hier.subthemeKeep[0] != "iptu" {
+		t.Fatalf("subthemeKeep=%v", hier.subthemeKeep)
+	}
+	if hier.refreshCalls != 1 {
+		t.Fatalf("refreshCalls=%d", hier.refreshCalls)
+	}
+	if len(repo.upserted) != 1 || repo.upserted[0].ThemeSlug != "tributos" {
+		t.Fatalf("catalog theme_slug=%v", repo.upserted)
+	}
+}
+
+func TestFullSync_HierarchyUpsertError(t *testing.T) {
+	client := &stubCartaClient{
+		themes:    []clients.CartaTheme{{Slug: "tributos", Name: "T"}},
+		subthemes: map[string][]clients.CartaSubtheme{"tributos": {{Slug: "iptu", Name: "I"}}},
+		services:  map[string][]clients.CartaServiceListItem{},
+	}
+	repo := &stubSyncRepo{}
+	hier := &stubHierarchyRepo{upsertThemeErr: errors.New("theme db down")}
+	svc := newTestSyncWithHierarchy(client, repo, hier)
+
+	err := svc.FullSync(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "theme db down") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestDeltaSync_SkipsHierarchySoftDelete(t *testing.T) {
+	since := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	client := &stubCartaClient{
+		themes:    []clients.CartaTheme{{Slug: "tributos", Name: "T"}},
+		subthemes: map[string][]clients.CartaSubtheme{"tributos": {{Slug: "iptu", Name: "I"}}},
+		services: map[string][]clients.CartaServiceListItem{
+			"iptu": {sampleListItem("new-svc", "2026-08-20T00:00:00.000Z")},
+		},
+		details: map[string]*clients.CartaServiceDetail{
+			"new-svc": sampleDetail("new-svc", "Novo"),
+		},
+	}
+	repo := &stubSyncRepo{cursor: &models.SalesForceSyncCursor{LastSyncAt: &since}}
+	hier := &stubHierarchyRepo{}
+	svc := newTestSyncWithHierarchy(client, repo, hier)
+
+	if err := svc.DeltaSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(hier.themes) == 0 || len(hier.subthemes) == 0 {
+		t.Fatal("expected hierarchy upserts on delta")
+	}
+	if hier.themeKeep != nil || hier.subthemeKeep != nil {
+		t.Fatalf("delta must not soft-delete hierarchy: themes=%v subs=%v", hier.themeKeep, hier.subthemeKeep)
+	}
+	if hier.refreshCalls != 1 {
+		t.Fatalf("refreshCalls=%d", hier.refreshCalls)
+	}
+}
+
+func TestSyncRecord_UpsertsHierarchy(t *testing.T) {
+	client := &stubCartaClient{
+		details: map[string]*clients.CartaServiceDetail{
+			"svc-a": sampleDetail("svc-a", "Serviço A"),
+		},
+	}
+	repo := &stubSyncRepo{}
+	hier := &stubHierarchyRepo{}
+	svc := newTestSyncWithHierarchy(client, repo, hier)
+
+	if err := svc.SyncRecord(context.Background(), "svc-a"); err != nil {
+		t.Fatal(err)
+	}
+	if len(hier.themes) != 1 || hier.themes[0].Slug != "tributos" {
+		t.Fatalf("themes=%v", hier.themes)
+	}
+	if len(hier.subthemes) != 1 || hier.subthemes[0].Slug != "iptu" {
+		t.Fatalf("subthemes=%v", hier.subthemes)
 	}
 }
 

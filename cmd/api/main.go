@@ -113,7 +113,11 @@ func main() {
 	)
 	rmiClient := clients.NewRMIClient(cfg.RMI.BaseURL, tokenManager)
 
-	cartaClient := clients.NewCartaServicosClient(cfg.SalesForce.InstanceURL)
+	cartaClient, err := clients.NewCartaServicosClient(cfg.SalesForce.InstanceURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("SALESFORCE_INSTANCE_URL inválida")
+	}
+	cartaRepo := repository.NewCartaRepository(db.Pool)
 
 	// Clients opcionais — busca semântica e reranking
 	var geminiClient *clients.GeminiEmbeddingClient
@@ -137,6 +141,7 @@ func main() {
 	sfSyncSvc := services.NewSalesForceSyncService(
 		cartaClient,
 		itemRepo,
+		cartaRepo,
 		cfg.SalesForce.BaseServiceURL,
 		cfg.SalesForce.DetailConcurrency,
 	)
@@ -173,6 +178,7 @@ func main() {
 		RecomSvc:      recomSvc,
 		CitizenSvc:    citizenSvc,
 		ItemRepo:      itemRepo,
+		CartaRepo:     cartaRepo,
 		WebhookSecret: cfg.SalesForce.WebhookSecret,
 	})
 

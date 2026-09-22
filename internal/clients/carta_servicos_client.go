@@ -3,7 +3,9 @@ package clients
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -13,9 +15,14 @@ import (
 
 const (
 	maximumCartaServicosResponseBytes int64 = 8 << 20 // 8 MiB
+	cartaRedirectBodyLimitBytes       int64 = 4 << 10 // 4 KiB
 	cartaServicosDefaultPerPage             = 100
 	cartaServicosMaxPerPage                 = 100
+	maxCartaServiceRedirectHops             = 3
 )
+
+// ErrServiceNotFound indica HTTP 404 na API CloudHub da Carta.
+var ErrServiceNotFound = errors.New("carta-servicos: serviço não encontrado")
 
 // CartaServicosClient consome a API MuleSoft CloudHub da Carta de Serviços.
 type CartaServicosClient struct {
@@ -23,29 +30,31 @@ type CartaServicosClient struct {
 	httpClient *http.Client
 }
 
-func NewCartaServicosClient(baseURL string) *CartaServicosClient {
-	return &CartaServicosClient{
-		baseURL:    normalizeCartaServicosBaseURL(baseURL),
-		httpClient: noRedirectHTTPClient(30 * time.Second),
+func NewCartaServicosClient(baseURL string) (*CartaServicosClient, error) {
+	normalized, err := normalizeCartaServicosBaseURL(baseURL)
+	if err != nil {
+		return nil, err
 	}
+	return &CartaServicosClient{
+		baseURL:    normalized,
+		httpClient: noRedirectHTTPClient(30 * time.Second),
+	}, nil
 }
 
-func normalizeCartaServicosBaseURL(raw string) string {
+func normalizeCartaServicosBaseURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return ""
+		return "", nil
 	}
 
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" || u.Host == "" {
-		trimmed := strings.TrimRight(raw, "/")
-		if trimmed == "" {
-			return ""
-		}
-		if trimmed == "/api" || strings.HasSuffix(trimmed, "/api") || strings.Contains(trimmed, "/api/") {
-			return trimmed
-		}
-		return trimmed + "/api"
+		return "", fmt.Errorf("carta-servicos: URL base inválida: %q", raw)
+	}
+	switch u.Scheme {
+	case "https", "http":
+	default:
+		return "", fmt.Errorf("carta-servicos: scheme não permitido: %q", u.Scheme)
 	}
 
 	path := strings.TrimRight(u.Path, "/")
@@ -59,7 +68,7 @@ func normalizeCartaServicosBaseURL(raw string) string {
 	}
 	u.RawQuery = ""
 	u.Fragment = ""
-	return u.String()
+	return u.String(), nil
 }
 
 // --- DTOs -------------------------------------------------------------------
@@ -137,7 +146,7 @@ type CartaServiceDetail struct {
 	Channels                    []CartaChannel     `json:"channels"`
 	Buttons                     []CartaButton      `json:"buttons"`
 	Legislation                 []CartaLegislation `json:"legislation"`
-	ServicePoints               []json.RawMessage  `json:"servicePoints"`
+	ServicePoints               []json.RawMessage  `json:"servicePoints" swaggertype:"array,object"`
 }
 
 type CartaServiceFlags struct {
@@ -336,13 +345,12 @@ func (c *CartaServicosClient) GetService(ctx context.Context, slug string) (*Car
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := readBoundedHTTPBody(resp.Body, maximumCartaServicosResponseBytes)
-	if err != nil {
-		return nil, fmt.Errorf("carta-servicos: ler resposta: %w", err)
-	}
-
 	switch resp.StatusCode {
 	case http.StatusOK:
+		body, err := readBoundedHTTPBody(resp.Body, maximumCartaServicosResponseBytes)
+		if err != nil {
+			return nil, fmt.Errorf("carta-servicos: ler resposta: %w", err)
+		}
 		var wrapper cartaServiceDetailResponse
 		if err := json.Unmarshal(body, &wrapper); err != nil {
 			return nil, fmt.Errorf("carta-servicos: decodificar detalhe: %w", err)
@@ -353,6 +361,10 @@ func (c *CartaServicosClient) GetService(ctx context.Context, slug string) (*Car
 		return &wrapper.Data, nil
 
 	case http.StatusMovedPermanently, http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+		body, err := readBoundedHTTPBody(resp.Body, cartaRedirectBodyLimitBytes)
+		if err != nil {
+			return nil, fmt.Errorf("carta-servicos: ler redirect: %w", err)
+		}
 		toSlug := extractRedirectSlug(resp.Header.Get("Location"), body)
 		if toSlug == "" {
 			return nil, fmt.Errorf("carta-servicos: redirect sem slug de destino (status %d)", resp.StatusCode)
@@ -360,40 +372,39 @@ func (c *CartaServicosClient) GetService(ctx context.Context, slug string) (*Car
 		return nil, &ServiceRedirectError{FromSlug: slug, ToSlug: toSlug}
 
 	case http.StatusNotFound:
-		return nil, fmt.Errorf("carta-servicos: serviço %q não encontrado", slug)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, cartaRedirectBodyLimitBytes))
+		return nil, fmt.Errorf("%w: %s", ErrServiceNotFound, slug)
 
 	default:
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, cartaRedirectBodyLimitBytes))
 		return nil, fmt.Errorf("carta-servicos: GET /services/%s status %d", slug, resp.StatusCode)
 	}
 }
 
-// GetServiceCanonical resolve redirects e retorna o detalhe no slug canônico.
+// GetServiceCanonical resolve redirects (até maxCartaServiceRedirectHops) e retorna o detalhe canônico.
 func (c *CartaServicosClient) GetServiceCanonical(ctx context.Context, slug string) (*CartaServiceDetail, string, error) {
-	detail, err := c.GetService(ctx, slug)
-	if err == nil {
-		return detail, detail.Slug, nil
-	}
-	var redir *ServiceRedirectError
-	if !asServiceRedirect(err, &redir) {
-		return nil, "", err
-	}
-	detail, err = c.GetService(ctx, redir.ToSlug)
-	if err != nil {
-		return nil, "", err
-	}
-	return detail, detail.Slug, nil
-}
+	seen := make(map[string]struct{}, maxCartaServiceRedirectHops)
+	current := strings.TrimSpace(slug)
+	for hop := 0; hop < maxCartaServiceRedirectHops; hop++ {
+		if current == "" {
+			return nil, "", fmt.Errorf("carta-servicos: service slug vazio")
+		}
+		if _, dup := seen[current]; dup {
+			return nil, "", fmt.Errorf("carta-servicos: ciclo de redirect em %q", slug)
+		}
+		seen[current] = struct{}{}
 
-func asServiceRedirect(err error, target **ServiceRedirectError) bool {
-	if err == nil {
-		return false
+		detail, err := c.GetService(ctx, current)
+		if err == nil {
+			return detail, detail.Slug, nil
+		}
+		var redir *ServiceRedirectError
+		if !errors.As(err, &redir) {
+			return nil, "", err
+		}
+		current = strings.TrimSpace(redir.ToSlug)
 	}
-	re, ok := err.(*ServiceRedirectError)
-	if !ok {
-		return false
-	}
-	*target = re
-	return true
+	return nil, "", fmt.Errorf("carta-servicos: muitos redirects para %q", slug)
 }
 
 func extractRedirectSlug(location string, body []byte) string {

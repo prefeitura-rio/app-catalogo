@@ -64,10 +64,15 @@ func main() {
 
 	// SalesForce — Carta de Serviços (API CloudHub)
 	if cfg.SalesForce.InstanceURL != "" && cfg.SalesForce.SyncEnabled {
-		cartaClient := clients.NewCartaServicosClient(cfg.SalesForce.InstanceURL)
+		cartaClient, err := clients.NewCartaServicosClient(cfg.SalesForce.InstanceURL)
+		if err != nil {
+			log.Fatal().Err(err).Msg("SALESFORCE_INSTANCE_URL inválida")
+		}
+		cartaRepo := repository.NewCartaRepository(db.Pool)
 		sfSyncSvc := services.NewSalesForceSyncService(
 			cartaClient,
 			itemRepo,
+			cartaRepo,
 			cfg.SalesForce.BaseServiceURL,
 			cfg.SalesForce.DetailConcurrency,
 		)

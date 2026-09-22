@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -47,10 +48,19 @@ type cartaSyncRepository interface {
 	SoftDeleteActiveNotIn(ctx context.Context, source models.ItemSource, keepExternalIDs []string) (int64, error)
 }
 
+type cartaHierarchyRepository interface {
+	UpsertTheme(ctx context.Context, theme *models.CartaTheme) error
+	UpsertSubtheme(ctx context.Context, st *models.CartaSubtheme) error
+	SoftDeleteThemesNotIn(ctx context.Context, keep []string) (int64, error)
+	SoftDeleteSubthemesNotIn(ctx context.Context, keep []string) (int64, error)
+	RefreshHierarchyCounts(ctx context.Context) error
+}
+
 // SalesForceSyncService sincroniza a Carta de Serviços (API CloudHub) para catalog_items.
 type SalesForceSyncService struct {
 	client            cartaServicosAPI
 	repo              cartaSyncRepository
+	hierarchy         cartaHierarchyRepository
 	baseServiceURL    string
 	detailConcurrency int
 }
@@ -58,15 +68,17 @@ type SalesForceSyncService struct {
 func NewSalesForceSyncService(
 	client *clients.CartaServicosClient,
 	repo *repository.CatalogItemRepository,
+	hierarchy *repository.CartaRepository,
 	baseServiceURL string,
 	detailConcurrency int,
 ) *SalesForceSyncService {
-	return newSalesForceSyncService(client, repo, baseServiceURL, detailConcurrency)
+	return newSalesForceSyncService(client, repo, hierarchy, baseServiceURL, detailConcurrency)
 }
 
 func newSalesForceSyncService(
 	client cartaServicosAPI,
 	repo cartaSyncRepository,
+	hierarchy cartaHierarchyRepository,
 	baseServiceURL string,
 	detailConcurrency int,
 ) *SalesForceSyncService {
@@ -79,6 +91,7 @@ func newSalesForceSyncService(
 	return &SalesForceSyncService{
 		client:            client,
 		repo:              repo,
+		hierarchy:         hierarchy,
 		baseServiceURL:    strings.TrimRight(baseServiceURL, "/"),
 		detailConcurrency: detailConcurrency,
 	}
@@ -105,7 +118,7 @@ func (s *SalesForceSyncService) SyncRecord(ctx context.Context, slug string) err
 
 	detail, canonical, err := s.client.GetServiceCanonical(ctx, slug)
 	if err != nil {
-		if strings.Contains(err.Error(), "não encontrado") {
+		if errors.Is(err, clients.ErrServiceNotFound) {
 			return s.repo.SoftDelete(ctx, models.SourceSalesForce, slug)
 		}
 		return err
@@ -117,6 +130,21 @@ func (s *SalesForceSyncService) SyncRecord(ctx context.Context, slug string) err
 	}
 	if err := s.repo.Upsert(ctx, item); err != nil {
 		return err
+	}
+	if s.hierarchy != nil {
+		if detail.ThemeSlug != "" {
+			_ = s.hierarchy.UpsertTheme(ctx, &models.CartaTheme{
+				Slug: detail.ThemeSlug,
+				Name: coalesceCartaName(detail.ThemeName, detail.ThemeSlug),
+			})
+		}
+		if detail.SubthemeSlug != "" && detail.ThemeSlug != "" {
+			_ = s.hierarchy.UpsertSubtheme(ctx, &models.CartaSubtheme{
+				Slug:      detail.SubthemeSlug,
+				ThemeSlug: detail.ThemeSlug,
+				Name:      coalesceCartaName(detail.SubthemeName, detail.SubthemeSlug),
+			})
+		}
 	}
 
 	if canonical != slug {
@@ -144,7 +172,7 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 		Time("since", since).
 		Msg("salesforce: iniciando sync")
 
-	listed, err := s.listAllServiceSummaries(ctx)
+	listed, err := s.listAndPersistHierarchy(ctx, isFull)
 	if err != nil {
 		s.finishEvent(ctx, eventID, startedAt, models.SyncStatusFailed, 0, 0, err.Error())
 		return err
@@ -163,14 +191,21 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 	}
 
 	items := make([]*models.CatalogItem, 0, len(details))
+	mappingFailed := 0
 	for _, d := range details {
 		if item := MapCartaServiceDetail(d, s.baseServiceURL); item != nil {
 			items = append(items, item)
+		} else {
+			mappingFailed++
 		}
 	}
 
 	processed, upsertErr := s.repo.UpsertBatch(ctx, items)
-	failed := fetchFailed + (len(items) - processed)
+	upsertFailed := len(items) - processed
+	if upsertFailed < 0 {
+		upsertFailed = 0
+	}
+	failed := fetchFailed + mappingFailed + upsertFailed
 	if upsertErr != nil {
 		s.finishEvent(ctx, eventID, startedAt, models.SyncStatusFailed, processed, failed, upsertErr.Error())
 		return upsertErr
@@ -213,6 +248,11 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 
 	if finalStatus == models.SyncStatusCompleted {
 		_ = s.repo.UpsertSalesForceCursor(ctx, cartaServicosCursorObjectType, time.Now().UTC(), "")
+		if s.hierarchy != nil {
+			if err := s.hierarchy.RefreshHierarchyCounts(ctx); err != nil {
+				log.Warn().Err(err).Msg("salesforce: falha ao recalcular contagens da hierarquia")
+			}
+		}
 	} else {
 		log.Warn().
 			Int("failed", failed).
@@ -242,17 +282,21 @@ func (s *SalesForceSyncService) finishEvent(
 	_ = s.repo.UpdateSyncEvent(ctx, eventID, status, processed, failed, errMsg, int(time.Since(startedAt).Milliseconds()))
 }
 
-func (s *SalesForceSyncService) listAllServiceSummaries(ctx context.Context) ([]clients.CartaServiceListItem, error) {
+func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isFull bool) ([]clients.CartaServiceListItem, error) {
 	themes, err := s.client.ListAllThemes(ctx, false)
 	if err != nil {
 		return nil, fmt.Errorf("listar temas: %w", err)
 	}
 
-	// Fase 1: subtemas por tema (paralelo).
 	var (
-		subMu    sync.Mutex
-		subSlugs []string
+		subMu        sync.Mutex
+		subSlugs     []string
+		themeKeep    []string
+		subthemeKeep []string
+		themeSeen    = make(map[string]struct{})
+		subthemeSeen = make(map[string]struct{})
 	)
+
 	themeGroup, themeCtx := errgroup.WithContext(ctx)
 	themeGroup.SetLimit(defaultListConcurrency)
 
@@ -262,14 +306,50 @@ func (s *SalesForceSyncService) listAllServiceSummaries(ctx context.Context) ([]
 			continue
 		}
 		themeGroup.Go(func() error {
+			if s.hierarchy != nil {
+				if err := s.hierarchy.UpsertTheme(themeCtx, &models.CartaTheme{
+					Slug:              theme.Slug,
+					Name:              theme.Name,
+					SubthemesCount:    theme.SubthemesCount,
+					PublishedServices: theme.PublishedServices,
+				}); err != nil {
+					return fmt.Errorf("upsert tema %q: %w", theme.Slug, err)
+				}
+			}
+
 			subthemes, err := s.client.ListAllSubthemes(themeCtx, theme.Slug)
 			if err != nil {
 				return fmt.Errorf("listar subtemas de %q: %w", theme.Slug, err)
 			}
-			subMu.Lock()
+
+			localSubs := make([]string, 0, len(subthemes))
 			for _, st := range subthemes {
-				if st.Slug != "" {
-					subSlugs = append(subSlugs, st.Slug)
+				if st.Slug == "" {
+					continue
+				}
+				if s.hierarchy != nil {
+					if err := s.hierarchy.UpsertSubtheme(themeCtx, &models.CartaSubtheme{
+						Slug:              st.Slug,
+						ThemeSlug:         theme.Slug,
+						Name:              st.Name,
+						PublishedServices: st.PublishedServices,
+					}); err != nil {
+						return fmt.Errorf("upsert subtema %q: %w", st.Slug, err)
+					}
+				}
+				localSubs = append(localSubs, st.Slug)
+			}
+
+			subMu.Lock()
+			if _, ok := themeSeen[theme.Slug]; !ok {
+				themeSeen[theme.Slug] = struct{}{}
+				themeKeep = append(themeKeep, theme.Slug)
+			}
+			for _, slug := range localSubs {
+				if _, ok := subthemeSeen[slug]; !ok {
+					subthemeSeen[slug] = struct{}{}
+					subthemeKeep = append(subthemeKeep, slug)
+					subSlugs = append(subSlugs, slug)
 				}
 			}
 			subMu.Unlock()
@@ -280,7 +360,15 @@ func (s *SalesForceSyncService) listAllServiceSummaries(ctx context.Context) ([]
 		return nil, err
 	}
 
-	// Fase 2: serviços por subtema (paralelo).
+	if isFull && s.hierarchy != nil {
+		if _, err := s.hierarchy.SoftDeleteThemesNotIn(ctx, themeKeep); err != nil {
+			log.Warn().Err(err).Msg("salesforce: SoftDelete de temas órfãos falhou")
+		}
+		if _, err := s.hierarchy.SoftDeleteSubthemesNotIn(ctx, subthemeKeep); err != nil {
+			log.Warn().Err(err).Msg("salesforce: SoftDelete de subtemas órfãos falhou")
+		}
+	}
+
 	var (
 		svcMu sync.Mutex
 		seen  = make(map[string]struct{})
@@ -356,13 +444,7 @@ func (s *SalesForceSyncService) fetchDetails(
 	for _, item := range items {
 		item := item
 		g.Go(func() error {
-			detail, err := s.client.GetService(gctx, item.Slug)
-			if err != nil {
-				var redir *clients.ServiceRedirectError
-				if errors.As(err, &redir) {
-					detail, err = s.client.GetService(gctx, redir.ToSlug)
-				}
-			}
+			detail, _, err := s.client.GetServiceCanonical(gctx, item.Slug)
 
 			mu.Lock()
 			defer mu.Unlock()
@@ -421,9 +503,19 @@ func MapCartaServiceDetail(detail *clients.CartaServiceDetail, baseServiceURL st
 		Bairros:         []string{},
 		TargetAudience:  mapCartaTargetAudience(detail.Info.TargetAudience),
 		SourceData:      sourceData,
+		ThemeSlug:       detail.ThemeSlug,
+		SubthemeSlug:    detail.SubthemeSlug,
 		ValidFrom:       validFrom,
 		SourceUpdatedAt: sourceUpdatedAt,
 	}
+}
+
+func coalesceCartaName(name, fallback string) string {
+	name = strings.TrimSpace(name)
+	if name != "" {
+		return name
+	}
+	return fallback
 }
 
 func mapCartaArticleStatus(status string) models.ItemStatus {
@@ -442,19 +534,31 @@ func mapCartaArticleStatus(status string) models.ItemStatus {
 
 func buildCartaServiceURL(detail *clients.CartaServiceDetail, baseServiceURL string) string {
 	for _, b := range detail.Buttons {
-		if b.Enabled && strings.TrimSpace(b.URL) != "" {
-			return b.URL
+		if b.Enabled && isAllowedCartaURL(b.URL) {
+			return strings.TrimSpace(b.URL)
 		}
 	}
 	for _, b := range detail.Buttons {
-		if strings.TrimSpace(b.URL) != "" {
-			return b.URL
+		if isAllowedCartaURL(b.URL) {
+			return strings.TrimSpace(b.URL)
 		}
 	}
 	if detail.Slug != "" && baseServiceURL != "" {
 		return strings.TrimRight(baseServiceURL, "/") + "/servicos/" + detail.Slug
 	}
 	return ""
+}
+
+func isAllowedCartaURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "https" || u.Scheme == "http"
 }
 
 func inferCartaModalidade(channels []clients.CartaChannel) string {

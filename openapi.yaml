@@ -41,6 +41,8 @@ tags:
     description: Recomendações personalizadas ou anônimas
   - name: Catálogo
     description: Detalhes de itens individuais do catálogo
+  - name: Carta
+    description: Navegação hierárquica da Carta de Serviços (dados locais sincronizados)
   - name: Admin
     description: Operações administrativas de sincronização
   - name: Infra
@@ -291,6 +293,161 @@ paths:
           $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+
+  # ---------------------------------------------------------------------------
+  # CARTA DE SERVIÇOS (proxy CloudHub)
+  # ---------------------------------------------------------------------------
+
+  /api/public/themes:
+    get:
+      tags: [Carta]
+      summary: Lista temas da Carta de Serviços
+      description: |
+        Lista temas ativos a partir da base local (`carta_themes`),
+        sincronizada periodicamente do CloudHub.
+      security: []
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+        - name: include_empty
+          in: query
+          schema: { type: boolean, default: false }
+          description: Inclui temas sem serviços publicados
+      responses:
+        "200":
+          description: Lista paginada de temas
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CartaPagedThemes"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          description: Carta não configurada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/public/themes/{slug}/subthemes:
+    get:
+      tags: [Carta]
+      summary: Lista subtemas de um tema
+      description: Lista subtemas a partir da base local (`carta_subthemes`).
+      security: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+      responses:
+        "200":
+          description: Lista paginada de subtemas
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CartaPagedSubthemes"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          description: Carta não configurada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/public/subthemes/{slug}/services:
+    get:
+      tags: [Carta]
+      summary: Lista serviços de um subtema
+      description: Lista serviços ativos do catálogo local filtrados por `subtheme_slug`.
+      security: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+      responses:
+        "200":
+          description: Lista paginada de serviços (resumo)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CartaPagedServices"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          description: Carta não configurada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/public/services/{slug}:
+    get:
+      tags: [Carta]
+      summary: Detalhe completo de um serviço
+      description: |
+        Retorna o detalhe completo do serviço a partir de `catalog_items.source_data`
+        (sincronizado do CloudHub).
+      security: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Detalhe do serviço
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CartaServiceDetail"
+        "301":
+          description: Slug redirecionado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  redirect:
+                    type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+        "503":
+          description: Carta não configurada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /api/public/catalog/{id}:
     get:
@@ -869,6 +1026,18 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
 
+    BadGateway:
+      description: Falha ao consultar upstream (CloudHub)
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/X-Request-ID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "falha ao consultar carta de serviços"
+
     CatalogItemResponse:
       description: Detalhe completo de um item do catálogo
       headers:
@@ -1325,3 +1494,79 @@ components:
             type:
               type: string
               description: Tipo do objeto (ex. `Servico__c`)
+
+    # --- Carta (CloudHub) ---
+
+    CartaMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        per_page: { type: integer }
+        total: { type: integer }
+        total_pages: { type: integer }
+
+    CartaTheme:
+      type: object
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        subthemesCount: { type: integer }
+        publishedServices: { type: integer }
+
+    CartaSubtheme:
+      type: object
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        publishedServices: { type: integer }
+
+    CartaServiceListItem:
+      type: object
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        articleStatus: { type: string }
+        lastModifiedDate: { type: string }
+        lastPublishedDate: { type: string }
+        summary: { type: string }
+        responsibleOrgUnit: { type: string }
+
+    CartaServiceDetail:
+      type: object
+      description: Payload completo do serviço conforme CloudHub (campos adicionais possíveis).
+      additionalProperties: true
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        themeSlug: { type: string }
+        themeName: { type: string }
+        subthemeSlug: { type: string }
+        subthemeName: { type: string }
+        articleStatus: { type: string }
+
+    CartaPagedThemes:
+      type: object
+      required: [meta, data]
+      properties:
+        meta: { $ref: "#/components/schemas/CartaMeta" }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/CartaTheme" }
+
+    CartaPagedSubthemes:
+      type: object
+      required: [meta, data]
+      properties:
+        meta: { $ref: "#/components/schemas/CartaMeta" }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/CartaSubtheme" }
+
+    CartaPagedServices:
+      type: object
+      required: [meta, data]
+      properties:
+        meta: { $ref: "#/components/schemas/CartaMeta" }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/CartaServiceListItem" }
