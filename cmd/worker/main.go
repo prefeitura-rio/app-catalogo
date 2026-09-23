@@ -62,17 +62,23 @@ func main() {
 	// -------------------------------------------------------------------------
 	manager := datasource.NewManager()
 
-	// SalesForce — Carta de Serviços
-	if cfg.SalesForce.InstanceURL != "" {
-		sfClient := clients.NewSalesForceClient(
-			cfg.SalesForce.InstanceURL,
-			cfg.SalesForce.ClientID,
-			cfg.SalesForce.ClientSecret,
+	// SalesForce — Carta de Serviços (API CloudHub)
+	if cfg.SalesForce.InstanceURL != "" && cfg.SalesForce.SyncEnabled {
+		cartaClient, err := clients.NewCartaServicosClient(cfg.SalesForce.InstanceURL)
+		if err != nil {
+			log.Fatal().Err(err).Msg("SALESFORCE_INSTANCE_URL inválida")
+		}
+		cartaRepo := repository.NewCartaRepository(db.Pool)
+		sfSyncSvc := services.NewSalesForceSyncService(
+			cartaClient,
+			itemRepo,
+			cartaRepo,
+			cfg.SalesForce.BaseServiceURL,
+			cfg.SalesForce.DetailConcurrency,
 		)
-		sfSyncSvc := services.NewSalesForceSyncService(sfClient, itemRepo, cfg.SalesForce.ObjectType)
 		manager.Register(datasource.NewSalesForceDataSource(sfSyncSvc, cfg.SalesForce.SyncInterval))
 	} else {
-		log.Warn().Msg("worker: SalesForce não configurado (SALESFORCE_INSTANCE_URL vazia), fonte ignorada")
+		log.Warn().Msg("worker: SalesForce/Carta não configurado ou desabilitado, fonte ignorada")
 	}
 
 	// app-go-api — Cursos, Vagas, MEI
@@ -89,7 +95,7 @@ func main() {
 		log.Warn().Msg("worker: app-go-api não configurado ou desabilitado, fonte ignorada")
 	}
 
-	// Typesense — Carta de Serviços (temporário, até migração para SalesForce)
+	// Typesense — Carta de Serviços (temporário, até migração para SalesForce CloudHub)
 	if cfg.Typesense.URL != "" && cfg.Typesense.APIKey != "" && cfg.Typesense.SyncEnabled {
 		tsClient := clients.NewTypesenseClient(
 			cfg.Typesense.URL,

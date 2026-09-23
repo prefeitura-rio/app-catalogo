@@ -308,6 +308,343 @@
         }
       }
     },
+    "/api/public/services/{slug}": {
+      "get": {
+        "description": "Retorna o payload completo do serviço a partir de catalog_items.source_data.",
+        "tags": [
+          "carta"
+        ],
+        "summary": "Detalhe de um serviço da Carta",
+        "parameters": [
+          {
+            "description": "Slug do serviço",
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.cartaDetailJSON"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/public/subthemes/{slug}/services": {
+      "get": {
+        "description": "Lista serviços ativos do catálogo local filtrados por subtema.",
+        "tags": [
+          "carta"
+        ],
+        "summary": "Lista serviços de um subtema",
+        "parameters": [
+          {
+            "description": "Slug do subtema",
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Página (1-based)",
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "description": "Itens por página (máx. 100)",
+            "name": "per_page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.cartaPagedJSON"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/public/themes": {
+      "get": {
+        "description": "Lista temas ativos a partir da base local (sincronizada do CloudHub).",
+        "tags": [
+          "carta"
+        ],
+        "summary": "Lista temas da Carta de Serviços",
+        "parameters": [
+          {
+            "description": "Página (1-based)",
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "description": "Itens por página (máx. 100)",
+            "name": "per_page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 100
+            }
+          },
+          {
+            "description": "Inclui temas sem serviços publicados",
+            "name": "include_empty",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.cartaPagedJSON"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/public/themes/{slug}/subthemes": {
+      "get": {
+        "description": "Lista subtemas a partir da base local.",
+        "tags": [
+          "carta"
+        ],
+        "summary": "Lista subtemas de um tema",
+        "parameters": [
+          {
+            "description": "Slug do tema",
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Página (1-based)",
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 1
+            }
+          },
+          {
+            "description": "Itens por página (máx. 100)",
+            "name": "per_page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.cartaPagedJSON"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/sync/status": {
       "get": {
         "security": [
@@ -767,16 +1104,17 @@
     },
     "/api/webhooks/salesforce": {
       "post": {
-        "description": "Recebe notificações de criação/atualização da Carta de Serviços. Valida assinatura HMAC-SHA256 via header X-Salesforce-Signature.",
+        "description": "Recebe notificações de criação/atualização. Valida HMAC-SHA256 via X-Salesforce-Signature. Usa sobject.Slug (ou Id como fallback) como identificador do serviço na API CloudHub. Sem SALESFORCE_WEBHOOK_SECRET retorna 401. Payload > 64KiB retorna 413.",
         "tags": [
           "webhooks"
         ],
-        "summary": "Webhook SalesForce (Change Data Capture)",
+        "summary": "Webhook SalesForce (Carta de Serviços)",
         "parameters": [
           {
             "description": "HMAC-SHA256 do body em hex",
             "name": "X-Salesforce-Signature",
             "in": "header",
+            "required": true,
             "schema": {
               "type": "string"
             }
@@ -822,6 +1160,19 @@
           },
           "401": {
             "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request Entity Too Large",
             "content": {
               "application/json": {
                 "schema": {
@@ -918,6 +1269,23 @@
       }
     },
     "schemas": {
+      "models.CartaMeta": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer"
+          },
+          "per_page": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          },
+          "total_pages": {
+            "type": "integer"
+          }
+        }
+      },
       "models.CatalogItem": {
         "type": "object",
         "properties": {
@@ -963,6 +1331,9 @@
           "status": {
             "$ref": "#/components/schemas/models.ItemStatus"
           },
+          "subtheme_slug": {
+            "type": "string"
+          },
           "tags": {
             "type": "array",
             "items": {
@@ -971,6 +1342,9 @@
           },
           "target_audience": {
             "type": "object"
+          },
+          "theme_slug": {
+            "type": "string"
           },
           "title": {
             "type": "string"
@@ -1004,7 +1378,7 @@
         ],
         "x-enum-comments": {
           "SourceAppGoAPI": "fonte composta: courses + jobs + mei",
-          "SourceTypesense": "temporário: Carta de Serviços até migração para SalesForce"
+          "SourceTypesense": "temporário: Carta até migração para SalesForce (CloudHub)"
         },
         "x-enum-descriptions": [
           "",
@@ -1012,7 +1386,7 @@
           "",
           "",
           "fonte composta: courses + jobs + mei",
-          "temporário: Carta de Serviços até migração para SalesForce"
+          "temporário: Carta até migração para SalesForce (CloudHub)"
         ],
         "x-enum-varnames": [
           "SourceSalesForce",
@@ -1331,6 +1705,23 @@
           }
         }
       },
+      "v1.cartaDetailJSON": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "object"
+          }
+        }
+      },
+      "v1.cartaPagedJSON": {
+        "type": "object",
+        "properties": {
+          "data": {},
+          "meta": {
+            "$ref": "#/components/schemas/models.CartaMeta"
+          }
+        }
+      },
       "v1.sfWebhookPayload": {
         "type": "object",
         "properties": {
@@ -1338,10 +1729,12 @@
             "type": "object",
             "properties": {
               "created": {
-                "type": "string"
+                "type": "string",
+                "example": "2026-04-08T10:00:00Z"
               },
               "type": {
-                "type": "string"
+                "type": "string",
+                "example": "updated"
               }
             }
           },
@@ -1349,10 +1742,16 @@
             "type": "object",
             "properties": {
               "Id": {
-                "type": "string"
+                "type": "string",
+                "example": "a001Q000003ABCDE"
+              },
+              "Slug": {
+                "type": "string",
+                "example": "iptu-cobranca"
               },
               "type": {
-                "type": "string"
+                "type": "string",
+                "example": "Servico__c"
               }
             }
           }

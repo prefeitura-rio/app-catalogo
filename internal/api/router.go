@@ -24,6 +24,7 @@ type RouterDeps struct {
 	RecomSvc      *services.RecommendationService
 	CitizenSvc    *services.CitizenProfileService
 	ItemRepo      *repository.CatalogItemRepository
+	CartaRepo     *repository.CartaRepository
 	WebhookSecret string
 }
 
@@ -75,6 +76,13 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 		pub.GET("/search", v1.NewSearchHandler(deps.SearchSvc, deps.CitizenSvc).Search)
 		pub.GET("/recommendations", v1.NewRecommendationHandler(deps.RecomSvc, deps.CitizenSvc).Anonymous)
 		pub.GET("/catalog/:id", adminHandler.GetPublicCatalogItem)
+
+		// Navegação Carta de Serviços (base local)
+		cartaHandler := v1.NewCartaHandler(deps.CartaRepo)
+		pub.GET("/themes", cartaHandler.ListThemes)
+		pub.GET("/themes/:slug/subthemes", cartaHandler.ListSubthemes)
+		pub.GET("/subthemes/:slug/services", cartaHandler.ListServicesBySubtheme)
+		pub.GET("/services/:slug", cartaHandler.GetService)
 	}
 
 	return r

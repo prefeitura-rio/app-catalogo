@@ -17,7 +17,7 @@ const (
 	SourceJobs       ItemSource = "jobs"
 	SourceMEI        ItemSource = "mei"
 	SourceAppGoAPI   ItemSource = "app-go-api" // fonte composta: courses + jobs + mei
-	SourceTypesense  ItemSource = "typesense"  // temporário: Carta de Serviços até migração para SalesForce
+	SourceTypesense  ItemSource = "typesense"  // temporário: Carta até migração para SalesForce (CloudHub)
 
 	TypeService        ItemType = "service"
 	TypeCourse         ItemType = "course"
@@ -46,6 +46,8 @@ type CatalogItem struct {
 	Status          ItemStatus      `json:"status"`
 	Tags            []string        `json:"tags,omitempty"`
 	SourceData      json.RawMessage `json:"source_data,omitempty" swaggertype:"object"`
+	ThemeSlug       string          `json:"theme_slug,omitempty"`
+	SubthemeSlug    string          `json:"subtheme_slug,omitempty"`
 	ValidFrom       *time.Time      `json:"valid_from,omitempty"`
 	ValidUntil      *time.Time      `json:"valid_until,omitempty"`
 	SourceUpdatedAt *time.Time      `json:"source_updated_at,omitempty"`
@@ -61,6 +63,8 @@ type TargetAudienceData struct {
 	Etnia        []string `json:"etnia,omitempty"`
 	FaixaEtaria  []string `json:"faixa_etaria,omitempty"`
 	Genero       []string `json:"genero,omitempty"`
+	// Outros preserva públicos não classificados (ex.: "Publico_em_geral", "MEI").
+	Outros []string `json:"outros,omitempty"`
 }
 
 func (i *CatalogItem) ParseTargetAudience() (*TargetAudienceData, error) {

@@ -4,11 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"html"
+	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/clients"
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
@@ -16,299 +21,691 @@ import (
 )
 
 const (
-	maximumSalesForceObjectTypeLength = 80
-	shortSalesForceRecordIDLength     = 15
-	longSalesForceRecordIDLength      = 18
+	cartaServicosCursorObjectType = "carta_servicos"
+	defaultDetailConcurrency      = 8
+	maxDetailConcurrency          = 32
+	defaultListConcurrency        = 8
 )
 
-var salesForceObjectTypePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(__c)?$`)
+var htmlTagPattern = regexp.MustCompile(`(?i)<[^>]*>`)
 
-func validatedSalesForceObjectType(objectType string) (string, error) {
-	objectType = strings.TrimSpace(objectType)
-	if len(objectType) > maximumSalesForceObjectTypeLength || !salesForceObjectTypePattern.MatchString(objectType) {
-		return "", errors.New("salesforce object type is invalid")
-	}
-	return objectType, nil
+type cartaServicosAPI interface {
+	ListAllThemes(ctx context.Context, includeEmpty bool) ([]clients.CartaTheme, error)
+	ListAllSubthemes(ctx context.Context, themeSlug string) ([]clients.CartaSubtheme, error)
+	ListAllServicesBySubtheme(ctx context.Context, subthemeSlug string) ([]clients.CartaServiceListItem, error)
+	GetService(ctx context.Context, slug string) (*clients.CartaServiceDetail, error)
+	GetServiceCanonical(ctx context.Context, slug string) (*clients.CartaServiceDetail, string, error)
 }
 
-func validatedSalesForceRecordID(externalID string) (string, error) {
-	if len(externalID) != shortSalesForceRecordIDLength && len(externalID) != longSalesForceRecordIDLength {
-		return "", errors.New("salesforce record id is invalid")
-	}
-	for characterIndex := 0; characterIndex < len(externalID); characterIndex++ {
-		character := externalID[characterIndex]
-		if (character < '0' || character > '9') &&
-			(character < 'A' || character > 'Z') &&
-			(character < 'a' || character > 'z') {
-			return "", errors.New("salesforce record id is invalid")
-		}
-	}
-	return externalID, nil
+type cartaSyncRepository interface {
+	RecordSyncEvent(ctx context.Context, event *models.SyncEvent) (int64, error)
+	UpdateSyncEvent(ctx context.Context, id int64, status models.SyncEventStatus, processed, failed int, errMsg string, durationMs int) error
+	GetSalesForceCursor(ctx context.Context, objectType string) (*models.SalesForceSyncCursor, error)
+	UpsertSalesForceCursor(ctx context.Context, objectType string, lastSyncAt time.Time, deltaToken string) error
+	Upsert(ctx context.Context, item *models.CatalogItem) error
+	UpsertBatch(ctx context.Context, items []*models.CatalogItem) (int, error)
+	SoftDelete(ctx context.Context, source models.ItemSource, externalID string) error
+	SoftDeleteActiveNotIn(ctx context.Context, source models.ItemSource, keepExternalIDs []string) (int64, error)
 }
 
+type cartaHierarchyRepository interface {
+	UpsertTheme(ctx context.Context, theme *models.CartaTheme) error
+	UpsertSubtheme(ctx context.Context, st *models.CartaSubtheme) error
+	SoftDeleteThemesNotIn(ctx context.Context, keep []string) (int64, error)
+	SoftDeleteSubthemesNotIn(ctx context.Context, keep []string) (int64, error)
+	RefreshHierarchyCounts(ctx context.Context) error
+}
+
+// SalesForceSyncService sincroniza a Carta de Serviços (API CloudHub) para catalog_items.
 type SalesForceSyncService struct {
-	client     *clients.SalesForceClient
-	repo       *repository.CatalogItemRepository
-	objectType string
+	client            cartaServicosAPI
+	repo              cartaSyncRepository
+	hierarchy         cartaHierarchyRepository
+	baseServiceURL    string
+	detailConcurrency int
 }
 
 func NewSalesForceSyncService(
-	client *clients.SalesForceClient,
+	client *clients.CartaServicosClient,
 	repo *repository.CatalogItemRepository,
-	objectType string,
+	hierarchy *repository.CartaRepository,
+	baseServiceURL string,
+	detailConcurrency int,
 ) *SalesForceSyncService {
+	return newSalesForceSyncService(client, repo, hierarchy, baseServiceURL, detailConcurrency)
+}
+
+func newSalesForceSyncService(
+	client cartaServicosAPI,
+	repo cartaSyncRepository,
+	hierarchy cartaHierarchyRepository,
+	baseServiceURL string,
+	detailConcurrency int,
+) *SalesForceSyncService {
+	if detailConcurrency <= 0 {
+		detailConcurrency = defaultDetailConcurrency
+	}
+	if detailConcurrency > maxDetailConcurrency {
+		detailConcurrency = maxDetailConcurrency
+	}
 	return &SalesForceSyncService{
-		client:     client,
-		repo:       repo,
-		objectType: objectType,
+		client:            client,
+		repo:              repo,
+		hierarchy:         hierarchy,
+		baseServiceURL:    strings.TrimRight(baseServiceURL, "/"),
+		detailConcurrency: detailConcurrency,
 	}
 }
 
-// FullSync sincroniza todos os registros do SalesForce.
 func (s *SalesForceSyncService) FullSync(ctx context.Context) error {
-	objectType, err := validatedSalesForceObjectType(s.objectType)
-	if err != nil {
-		return err
-	}
-
-	startedAt := time.Now()
-	eventID, _ := s.repo.RecordSyncEvent(ctx, &models.SyncEvent{
-		Source:    models.SourceSalesForce,
-		EventType: models.SyncTypeFullSync,
-		Status:    models.SyncStatusStarted,
-		StartedAt: startedAt,
-	})
-
-	log.Info().Str("object_type", objectType).Msg("salesforce: iniciando full sync")
-
-	records, err := s.client.QueryAll(ctx, objectType)
-	if err != nil {
-		errMsg := err.Error()
-		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, 0, 0, errMsg, int(time.Since(startedAt).Milliseconds()))
-		return err
-	}
-
-	items := make([]*models.CatalogItem, 0, len(records))
-	for _, rec := range records {
-		item := s.mapRecord(rec)
-		if item != nil {
-			items = append(items, item)
-		}
-	}
-
-	processed, err := s.repo.UpsertBatch(ctx, items)
-	durationMs := int(time.Since(startedAt).Milliseconds())
-
-	if err != nil {
-		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, processed, len(items)-processed, err.Error(), durationMs)
-		return err
-	}
-
-	now := time.Now()
-	_ = s.repo.UpsertSalesForceCursor(ctx, objectType, now, "")
-	_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusCompleted, processed, 0, "", durationMs)
-
-	log.Info().
-		Int("items", processed).
-		Int("duration_ms", durationMs).
-		Msg("salesforce: full sync concluído")
-
-	return nil
+	return s.runSync(ctx, time.Time{}, models.SyncTypeFullSync)
 }
 
-// DeltaSync sincroniza apenas os registros modificados desde a última sync.
 func (s *SalesForceSyncService) DeltaSync(ctx context.Context) error {
-	objectType, err := validatedSalesForceObjectType(s.objectType)
-	if err != nil {
-		return err
-	}
-
-	cursor, err := s.repo.GetSalesForceCursor(ctx, objectType)
-	if err != nil || cursor.LastSyncAt == nil {
+	cursor, err := s.repo.GetSalesForceCursor(ctx, cartaServicosCursorObjectType)
+	if err != nil || cursor == nil || cursor.LastSyncAt == nil {
 		log.Info().Msg("salesforce: cursor não encontrado, executando full sync")
 		return s.FullSync(ctx)
 	}
+	return s.runSync(ctx, *cursor.LastSyncAt, models.SyncTypeDeltaSync)
+}
 
+func (s *SalesForceSyncService) SyncRecord(ctx context.Context, slug string) error {
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return errors.New("salesforce: slug vazio")
+	}
+
+	detail, canonical, err := s.client.GetServiceCanonical(ctx, slug)
+	if err != nil {
+		if errors.Is(err, clients.ErrServiceNotFound) {
+			return s.repo.SoftDelete(ctx, models.SourceSalesForce, slug)
+		}
+		return err
+	}
+
+	item := MapCartaServiceDetail(detail, s.baseServiceURL)
+	if item == nil {
+		return fmt.Errorf("salesforce: falha ao mapear serviço %q", canonical)
+	}
+	if err := s.repo.Upsert(ctx, item); err != nil {
+		return err
+	}
+	if s.hierarchy != nil {
+		if detail.ThemeSlug != "" {
+			_ = s.hierarchy.UpsertTheme(ctx, &models.CartaTheme{
+				Slug: detail.ThemeSlug,
+				Name: coalesceCartaName(detail.ThemeName, detail.ThemeSlug),
+			})
+		}
+		if detail.SubthemeSlug != "" && detail.ThemeSlug != "" {
+			_ = s.hierarchy.UpsertSubtheme(ctx, &models.CartaSubtheme{
+				Slug:      detail.SubthemeSlug,
+				ThemeSlug: detail.ThemeSlug,
+				Name:      coalesceCartaName(detail.SubthemeName, detail.SubthemeSlug),
+			})
+		}
+	}
+
+	if canonical != slug {
+		if softErr := s.repo.SoftDelete(ctx, models.SourceSalesForce, slug); softErr != nil {
+			log.Warn().Err(softErr).Str("old_slug", slug).Str("new_slug", canonical).
+				Msg("salesforce: falha ao SoftDelete slug antigo após redirect")
+		}
+	}
+	return nil
+}
+
+func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, eventType models.SyncEventType) error {
+	isFull := since.IsZero()
 	startedAt := time.Now()
+
 	eventID, _ := s.repo.RecordSyncEvent(ctx, &models.SyncEvent{
 		Source:    models.SourceSalesForce,
-		EventType: models.SyncTypeDeltaSync,
+		EventType: eventType,
 		Status:    models.SyncStatusStarted,
 		StartedAt: startedAt,
 	})
 
 	log.Info().
-		Time("since", *cursor.LastSyncAt).
-		Str("object_type", objectType).
-		Msg("salesforce: iniciando delta sync")
+		Bool("full", isFull).
+		Time("since", since).
+		Msg("salesforce: iniciando sync")
 
-	records, err := s.client.QueryModifiedSince(ctx, objectType, *cursor.LastSyncAt)
+	listed, err := s.listAndPersistHierarchy(ctx, isFull)
 	if err != nil {
-		errMsg := err.Error()
-		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, 0, 0, errMsg, int(time.Since(startedAt).Milliseconds()))
+		s.finishEvent(ctx, eventID, startedAt, models.SyncStatusFailed, 0, 0, err.Error())
 		return err
 	}
 
-	if len(records) == 0 {
-		durationMs := int(time.Since(startedAt).Milliseconds())
-		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusCompleted, 0, 0, "", durationMs)
-		log.Debug().Msg("salesforce: sem registros novos no delta sync")
-		return nil
+	toFetch := filterServicesNeedingDetail(listed, since)
+	log.Info().
+		Int("listed", len(listed)).
+		Int("to_fetch", len(toFetch)).
+		Msg("salesforce: listagem concluída")
+
+	details, fetchFailed, fetchErr := s.fetchDetails(ctx, toFetch)
+	if fetchErr != nil && len(details) == 0 {
+		s.finishEvent(ctx, eventID, startedAt, models.SyncStatusFailed, 0, fetchFailed, fetchErr.Error())
+		return fetchErr
 	}
 
-	items := make([]*models.CatalogItem, 0, len(records))
-	for _, rec := range records {
-		item := s.mapRecord(rec)
-		if item != nil {
+	items := make([]*models.CatalogItem, 0, len(details))
+	mappingFailed := 0
+	for _, d := range details {
+		if item := MapCartaServiceDetail(d, s.baseServiceURL); item != nil {
 			items = append(items, item)
+		} else {
+			mappingFailed++
 		}
 	}
 
-	processed, err := s.repo.UpsertBatch(ctx, items)
-	durationMs := int(time.Since(startedAt).Milliseconds())
-
-	if err != nil {
-		_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusFailed, processed, len(items)-processed, err.Error(), durationMs)
-		return err
+	processed, upsertErr := s.repo.UpsertBatch(ctx, items)
+	upsertFailed := len(items) - processed
+	if upsertFailed < 0 {
+		upsertFailed = 0
+	}
+	failed := fetchFailed + mappingFailed + upsertFailed
+	if upsertErr != nil {
+		s.finishEvent(ctx, eventID, startedAt, models.SyncStatusFailed, processed, failed, upsertErr.Error())
+		return upsertErr
 	}
 
-	now := time.Now()
-	_ = s.repo.UpsertSalesForceCursor(ctx, objectType, now, "")
-	_ = s.repo.UpdateSyncEvent(ctx, eventID, models.SyncStatusCompleted, processed, 0, "", durationMs)
+	var softErr error
+	if isFull {
+		seen := make([]string, 0, len(listed))
+		for _, item := range listed {
+			if item.Slug != "" {
+				seen = append(seen, item.Slug)
+			}
+		}
+		if len(seen) == 0 {
+			log.Warn().Msg("salesforce: full sync listou 0 serviços; SoftDelete de órfãos ignorado")
+		} else if deactivated, err := s.repo.SoftDeleteActiveNotIn(ctx, models.SourceSalesForce, seen); err != nil {
+			softErr = err
+			log.Error().Err(err).Msg("salesforce: SoftDelete de órfãos falhou")
+		} else if deactivated > 0 {
+			log.Info().Int64("deactivated", deactivated).Msg("salesforce: órfãos SoftDeleted")
+		}
+	}
+
+	finalStatus := models.SyncStatusCompleted
+	errMsg := ""
+	var retErr error
+	if softErr != nil {
+		finalStatus = models.SyncStatusFailed
+		errMsg = softErr.Error()
+		retErr = softErr
+	} else if fetchFailed > 0 {
+		finalStatus = models.SyncStatusFailed
+		errMsg = fmt.Sprintf("%d detalhe(s) falharam", fetchFailed)
+		retErr = fmt.Errorf("salesforce: %s", errMsg)
+	} else if fetchErr != nil {
+		finalStatus = models.SyncStatusFailed
+		errMsg = fetchErr.Error()
+		retErr = fetchErr
+	}
+
+	if finalStatus == models.SyncStatusCompleted {
+		_ = s.repo.UpsertSalesForceCursor(ctx, cartaServicosCursorObjectType, time.Now().UTC(), "")
+		if s.hierarchy != nil {
+			if err := s.hierarchy.RefreshHierarchyCounts(ctx); err != nil {
+				log.Warn().Err(err).Msg("salesforce: falha ao recalcular contagens da hierarquia")
+			}
+		}
+	} else {
+		log.Warn().
+			Int("failed", failed).
+			Str("status", string(finalStatus)).
+			Msg("salesforce: cursor não avançado devido a falhas — próximo sync re-tentará itens afetados")
+	}
+
+	s.finishEvent(ctx, eventID, startedAt, finalStatus, processed, failed, errMsg)
 
 	log.Info().
-		Int("items", processed).
-		Int("duration_ms", durationMs).
-		Msg("salesforce: delta sync concluído")
+		Int("processed", processed).
+		Int("failed", failed).
+		Int("duration_ms", int(time.Since(startedAt).Milliseconds())).
+		Msg("salesforce: sync concluído")
 
-	return nil
+	return retErr
 }
 
-// SyncRecord sincroniza um único registro (para uso em webhooks).
-func (s *SalesForceSyncService) SyncRecord(ctx context.Context, externalID string) error {
-	objectType, err := validatedSalesForceObjectType(s.objectType)
-	if err != nil {
-		return err
-	}
-	externalID, err = validatedSalesForceRecordID(externalID)
-	if err != nil {
-		return err
-	}
-	soql := "SELECT Id, Name, Description__c, ShortDescription__c, Organization__c, URL__c, Status__c, Theme__c, Channel__c, Neighborhood__c, Tags__c, ValidFrom__c, ValidUntil__c, LastModifiedDate FROM " + objectType + " WHERE Id = '" + externalID + "' LIMIT 1"
-	records, err := s.client.Query(ctx, soql)
-	if err != nil {
-		return err
-	}
-	if len(records) == 0 {
-		return s.repo.SoftDelete(ctx, models.SourceSalesForce, externalID)
-	}
-	item := s.mapRecord(records[0])
-	if item == nil {
-		return nil
-	}
-	return s.repo.Upsert(ctx, item)
+func (s *SalesForceSyncService) finishEvent(
+	ctx context.Context,
+	eventID int64,
+	startedAt time.Time,
+	status models.SyncEventStatus,
+	processed, failed int,
+	errMsg string,
+) {
+	_ = s.repo.UpdateSyncEvent(ctx, eventID, status, processed, failed, errMsg, int(time.Since(startedAt).Milliseconds()))
 }
 
-// mapRecord converte um record do SalesForce para CatalogItem.
-// Os campos são flexíveis — tudo que não é mapeado vai para source_data.
-func (s *SalesForceSyncService) mapRecord(rec map[string]interface{}) *models.CatalogItem {
-	id, _ := rec["Id"].(string)
-	if id == "" {
-		return nil
+func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isFull bool) ([]clients.CartaServiceListItem, error) {
+	themes, err := s.client.ListAllThemes(ctx, false)
+	if err != nil {
+		return nil, fmt.Errorf("listar temas: %w", err)
 	}
 
-	title := stringField(rec, "Name")
-	if title == "" {
-		return nil
+	var (
+		subMu        sync.Mutex
+		subSlugs     []string
+		themeKeep    []string
+		subthemeKeep []string
+		themeSeen    = make(map[string]struct{})
+		subthemeSeen = make(map[string]struct{})
+	)
+
+	themeGroup, themeCtx := errgroup.WithContext(ctx)
+	themeGroup.SetLimit(defaultListConcurrency)
+
+	for _, theme := range themes {
+		theme := theme
+		if theme.Slug == "" {
+			continue
+		}
+		themeGroup.Go(func() error {
+			if s.hierarchy != nil {
+				if err := s.hierarchy.UpsertTheme(themeCtx, &models.CartaTheme{
+					Slug:              theme.Slug,
+					Name:              theme.Name,
+					SubthemesCount:    theme.SubthemesCount,
+					PublishedServices: theme.PublishedServices,
+				}); err != nil {
+					return fmt.Errorf("upsert tema %q: %w", theme.Slug, err)
+				}
+			}
+
+			subthemes, err := s.client.ListAllSubthemes(themeCtx, theme.Slug)
+			if err != nil {
+				return fmt.Errorf("listar subtemas de %q: %w", theme.Slug, err)
+			}
+
+			localSubs := make([]string, 0, len(subthemes))
+			for _, st := range subthemes {
+				if st.Slug == "" {
+					continue
+				}
+				if s.hierarchy != nil {
+					if err := s.hierarchy.UpsertSubtheme(themeCtx, &models.CartaSubtheme{
+						Slug:              st.Slug,
+						ThemeSlug:         theme.Slug,
+						Name:              st.Name,
+						PublishedServices: st.PublishedServices,
+					}); err != nil {
+						return fmt.Errorf("upsert subtema %q: %w", st.Slug, err)
+					}
+				}
+				localSubs = append(localSubs, st.Slug)
+			}
+
+			subMu.Lock()
+			if _, ok := themeSeen[theme.Slug]; !ok {
+				themeSeen[theme.Slug] = struct{}{}
+				themeKeep = append(themeKeep, theme.Slug)
+			}
+			for _, slug := range localSubs {
+				if _, ok := subthemeSeen[slug]; !ok {
+					subthemeSeen[slug] = struct{}{}
+					subthemeKeep = append(subthemeKeep, slug)
+					subSlugs = append(subSlugs, slug)
+				}
+			}
+			subMu.Unlock()
+			return nil
+		})
+	}
+	if err := themeGroup.Wait(); err != nil {
+		return nil, err
 	}
 
-	status := models.StatusActive
-	if sfStatus, ok := rec["Status__c"].(string); ok {
-		switch strings.ToLower(sfStatus) {
-		case "inactive", "inativo", "rascunho":
-			status = models.StatusInactive
-		case "draft":
-			status = models.StatusDraft
+	if isFull && s.hierarchy != nil {
+		if _, err := s.hierarchy.SoftDeleteThemesNotIn(ctx, themeKeep); err != nil {
+			log.Warn().Err(err).Msg("salesforce: SoftDelete de temas órfãos falhou")
+		}
+		if _, err := s.hierarchy.SoftDeleteSubthemesNotIn(ctx, subthemeKeep); err != nil {
+			log.Warn().Err(err).Msg("salesforce: SoftDelete de subtemas órfãos falhou")
 		}
 	}
 
-	var validFrom, validUntil *time.Time
-	if v := parseTime(rec, "ValidFrom__c"); v != nil {
-		validFrom = v
+	var (
+		svcMu sync.Mutex
+		seen  = make(map[string]struct{})
+		all   []clients.CartaServiceListItem
+	)
+	subGroup, subCtx := errgroup.WithContext(ctx)
+	subGroup.SetLimit(defaultListConcurrency)
+
+	for _, subSlug := range subSlugs {
+		subSlug := subSlug
+		subGroup.Go(func() error {
+			services, err := s.client.ListAllServicesBySubtheme(subCtx, subSlug)
+			if err != nil {
+				return fmt.Errorf("listar serviços de %q: %w", subSlug, err)
+			}
+			svcMu.Lock()
+			for _, svc := range services {
+				if svc.Slug == "" {
+					continue
+				}
+				if _, ok := seen[svc.Slug]; ok {
+					continue
+				}
+				seen[svc.Slug] = struct{}{}
+				all = append(all, svc)
+			}
+			svcMu.Unlock()
+			return nil
+		})
 	}
-	if v := parseTime(rec, "ValidUntil__c"); v != nil {
-		validUntil = v
+	if err := subGroup.Wait(); err != nil {
+		return nil, err
 	}
+
+	return all, nil
+}
+
+func filterServicesNeedingDetail(listed []clients.CartaServiceListItem, since time.Time) []clients.CartaServiceListItem {
+	if since.IsZero() {
+		return listed
+	}
+	out := make([]clients.CartaServiceListItem, 0, len(listed)/4)
+	for _, item := range listed {
+		mod := item.EffectiveModifiedAt()
+		if mod.IsZero() || mod.After(since) {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+// fetchDetails busca detalhes em paralelo.
+// Falha em um item não cancela o lote (degradação parcial): o errgroup só
+// limita concorrência; as goroutines retornam nil de propósito.
+func (s *SalesForceSyncService) fetchDetails(
+	ctx context.Context,
+	items []clients.CartaServiceListItem,
+) ([]*clients.CartaServiceDetail, int, error) {
+	if len(items) == 0 {
+		return nil, 0, nil
+	}
+
+	var (
+		mu       sync.Mutex
+		details  []*clients.CartaServiceDetail
+		failed   int
+		firstErr error
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(s.detailConcurrency)
+
+	for _, item := range items {
+		item := item
+		g.Go(func() error {
+			detail, _, err := s.client.GetServiceCanonical(gctx, item.Slug)
+
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				failed++
+				log.Error().Err(err).Str("slug", item.Slug).Msg("salesforce: falha ao buscar detalhe")
+				if firstErr == nil {
+					firstErr = err
+				}
+				return nil
+			}
+			details = append(details, detail)
+			return nil
+		})
+	}
+
+	_ = g.Wait()
+	return details, failed, firstErr
+}
+
+func MapCartaServiceDetail(detail *clients.CartaServiceDetail, baseServiceURL string) *models.CatalogItem {
+	if detail == nil || detail.Slug == "" || detail.Name == "" {
+		return nil
+	}
+
+	sourceData, _ := json.Marshal(detail)
+	status := mapCartaArticleStatus(detail.ArticleStatus)
 
 	var sourceUpdatedAt *time.Time
-	if v := parseTime(rec, "LastModifiedDate"); v != nil {
-		sourceUpdatedAt = v
+	if t := maxNonZeroTime(
+		parseOptionalCartaTime(detail.LastModifiedDate),
+		parseOptionalCartaTime(detail.LastPublishedDate),
+	); t != nil {
+		sourceUpdatedAt = t
 	}
 
-	// Tags: campo separado por vírgula ou array JSON
-	tags := parseTags(rec, "Tags__c")
-
-	// Bairros: campo Neighborhood__c pode ser separado por vírgula
-	bairros := parseTags(rec, "Neighborhood__c")
-
-	// Target audience vazio por padrão para SalesForce (definido no conteúdo)
-	targetAudience := json.RawMessage("{}")
-
-	sourceData, _ := json.Marshal(rec)
+	var validFrom *time.Time
+	if t := parseOptionalCartaTime(detail.LastPublishedDate); t != nil {
+		validFrom = t
+	} else if t := parseOptionalCartaTime(detail.CreatedDate); t != nil {
+		validFrom = t
+	}
 
 	return &models.CatalogItem{
-		ExternalID:      id,
+		ExternalID:      detail.Slug,
 		Source:          models.SourceSalesForce,
 		Type:            models.TypeService,
-		Title:           title,
-		Description:     stringField(rec, "Description__c"),
-		ShortDesc:       stringField(rec, "ShortDescription__c"),
-		Organization:    stringField(rec, "Organization__c"),
-		URL:             stringField(rec, "URL__c"),
-		Modalidade:      stringField(rec, "Channel__c"),
+		Title:           detail.Name,
+		Description:     buildCartaDescription(detail),
+		ShortDesc:       stripHTML(detail.Info.Summary),
+		Organization:    detail.ResponsibleOrgUnit,
+		URL:             buildCartaServiceURL(detail, baseServiceURL),
+		Modalidade:      inferCartaModalidade(detail.Channels),
 		Status:          status,
-		Tags:            append(tags, stringField(rec, "Theme__c")),
-		Bairros:         bairros,
-		TargetAudience:  targetAudience,
+		Tags:            buildCartaTags(detail),
+		Bairros:         []string{},
+		TargetAudience:  mapCartaTargetAudience(detail.Info.TargetAudience),
 		SourceData:      sourceData,
+		ThemeSlug:       detail.ThemeSlug,
+		SubthemeSlug:    detail.SubthemeSlug,
 		ValidFrom:       validFrom,
-		ValidUntil:      validUntil,
 		SourceUpdatedAt: sourceUpdatedAt,
 	}
 }
 
-func stringField(rec map[string]interface{}, key string) string {
-	if v, ok := rec[key].(string); ok {
-		return v
+func coalesceCartaName(name, fallback string) string {
+	name = strings.TrimSpace(name)
+	if name != "" {
+		return name
+	}
+	return fallback
+}
+
+func mapCartaArticleStatus(status string) models.ItemStatus {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "online", "published", "ativo", "active":
+		return models.StatusActive
+	case "draft", "rascunho":
+		return models.StatusDraft
+	default:
+		if status == "" {
+			return models.StatusActive
+		}
+		return models.StatusInactive
+	}
+}
+
+func buildCartaServiceURL(detail *clients.CartaServiceDetail, baseServiceURL string) string {
+	for _, b := range detail.Buttons {
+		if b.Enabled && isAllowedCartaURL(b.URL) {
+			return strings.TrimSpace(b.URL)
+		}
+	}
+	for _, b := range detail.Buttons {
+		if isAllowedCartaURL(b.URL) {
+			return strings.TrimSpace(b.URL)
+		}
+	}
+	if detail.Slug != "" && baseServiceURL != "" {
+		return strings.TrimRight(baseServiceURL, "/") + "/servicos/" + detail.Slug
 	}
 	return ""
 }
 
-func parseTime(rec map[string]interface{}, key string) *time.Time {
-	s := stringField(rec, key)
-	if s == "" {
+func isAllowedCartaURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "https" || u.Scheme == "http"
+}
+
+func inferCartaModalidade(channels []clients.CartaChannel) string {
+	hasDigital, hasPresencial := false, false
+	for _, ch := range channels {
+		switch strings.ToLower(strings.TrimSpace(ch.Type)) {
+		case "digital":
+			hasDigital = true
+		case "presencial":
+			hasPresencial = true
+		}
+	}
+	switch {
+	case hasDigital && hasPresencial:
+		return "hibrido"
+	case hasDigital:
+		return "digital"
+	case hasPresencial:
+		return "presencial"
+	default:
+		return ""
+	}
+}
+
+func buildCartaTags(detail *clients.CartaServiceDetail) []string {
+	tags := make([]string, 0, 4)
+	if detail.ThemeName != "" {
+		tags = append(tags, detail.ThemeName)
+	}
+	if detail.SubthemeName != "" {
+		tags = append(tags, detail.SubthemeName)
+	}
+	if detail.Info.Cost != nil && *detail.Info.Cost != "" {
+		tags = append(tags, *detail.Info.Cost)
+	} else if detail.Info.IsFree {
+		tags = append(tags, "Gratuito")
+	}
+	if detail.ResponsibleOrgUnitShortName != "" {
+		tags = append(tags, detail.ResponsibleOrgUnitShortName)
+	}
+	return tags
+}
+
+func buildCartaDescription(detail *clients.CartaServiceDetail) string {
+	summary := stripHTML(detail.Info.Summary)
+	fullDesc := stripHTML(detail.Info.FullDescription)
+
+	parts := make([]string, 0, 4)
+	if fullDesc != "" && fullDesc != summary {
+		parts = append(parts, fullDesc)
+	}
+	if d := stripHTML(detail.HowToRequest.Instructions); d != "" {
+		parts = append(parts, d)
+	}
+	if d := stripHTML(detail.HowToRequest.ServiceResult); d != "" {
+		parts = append(parts, d)
+	}
+	if len(detail.HowToRequest.RequiredDocs) > 0 {
+		parts = append(parts, "Documentos: "+strings.Join(detail.HowToRequest.RequiredDocs, ", "))
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func mapCartaTargetAudience(audiences []string) json.RawMessage {
+	if len(audiences) == 0 {
+		return json.RawMessage("{}")
+	}
+
+	ta := models.TargetAudienceData{}
+	for _, p := range audiences {
+		pl := strings.ToLower(p)
+		switch {
+		case strings.Contains(pl, "pcd") ||
+			strings.Contains(pl, "deficiência") ||
+			strings.Contains(pl, "deficiencia"):
+			ta.Deficiencia = append(ta.Deficiencia, p)
+		case strings.Contains(pl, "idoso") ||
+			strings.Contains(pl, "terceira_idade") ||
+			strings.Contains(pl, "terceira idade"):
+			ta.FaixaEtaria = append(ta.FaixaEtaria, "60+")
+		case strings.Contains(pl, "criança") ||
+			strings.Contains(pl, "crianca") ||
+			strings.Contains(pl, "menor"):
+			ta.FaixaEtaria = append(ta.FaixaEtaria, "menor-18")
+		case strings.Contains(pl, "mulher") ||
+			strings.Contains(pl, "feminino"):
+			ta.Genero = append(ta.Genero, p)
+		case strings.Contains(pl, "pret") ||
+			strings.Contains(pl, "pard") ||
+			strings.Contains(pl, "branc") ||
+			strings.Contains(pl, "indígena") ||
+			strings.Contains(pl, "indigena") ||
+			strings.Contains(pl, "amarel") ||
+			strings.Contains(pl, "etnia") ||
+			strings.Contains(pl, "raça") ||
+			strings.Contains(pl, "raca"):
+			ta.Etnia = append(ta.Etnia, p)
+		default:
+			ta.Outros = append(ta.Outros, p)
+		}
+	}
+
+	raw, err := json.Marshal(ta)
+	if err != nil {
+		return json.RawMessage("{}")
+	}
+	return raw
+}
+
+func stripHTML(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	plain := htmlTagPattern.ReplaceAllString(raw, " ")
+	plain = html.UnescapeString(plain)
+	plain = strings.Join(strings.Fields(plain), " ")
+	return strings.TrimSpace(plain)
+}
+
+func parseOptionalCartaTime(raw string) *time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
 		return nil
 	}
-	formats := []string{time.RFC3339, "2006-01-02T15:04:05.000Z", "2006-01-02"}
+	formats := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04:05.000Z",
+		"2006-01-02T15:04:05Z",
+	}
 	for _, f := range formats {
-		if t, err := time.Parse(f, s); err == nil {
+		if t, err := time.Parse(f, raw); err == nil {
 			return &t
 		}
 	}
 	return nil
 }
 
-func parseTags(rec map[string]interface{}, key string) []string {
-	raw := stringField(rec, key)
-	if raw == "" {
-		return []string{}
-	}
-	parts := strings.Split(raw, ",")
-	var result []string
-	for _, p := range parts {
-		if t := strings.TrimSpace(p); t != "" {
-			result = append(result, t)
+func maxNonZeroTime(times ...*time.Time) *time.Time {
+	var best *time.Time
+	for _, t := range times {
+		if t == nil {
+			continue
+		}
+		if best == nil || t.After(*best) {
+			best = t
 		}
 	}
-	return result
+	return best
 }

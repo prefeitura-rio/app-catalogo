@@ -41,6 +41,8 @@ tags:
     description: Recomendações personalizadas ou anônimas
   - name: Catálogo
     description: Detalhes de itens individuais do catálogo
+  - name: Carta
+    description: Navegação hierárquica da Carta de Serviços (dados locais sincronizados)
   - name: Admin
     description: Operações administrativas de sincronização
   - name: Infra
@@ -292,6 +294,152 @@ paths:
         "429":
           $ref: "#/components/responses/TooManyRequests"
 
+  # ---------------------------------------------------------------------------
+  # CARTA DE SERVIÇOS (base local)
+  # ---------------------------------------------------------------------------
+
+  /api/public/themes:
+    get:
+      tags: [Carta]
+      summary: Lista temas da Carta de Serviços
+      description: |
+        Lista temas ativos a partir da base local (`carta_themes`),
+        sincronizada periodicamente do CloudHub.
+      security: []
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+        - name: include_empty
+          in: query
+          schema: { type: boolean, default: false }
+          description: Inclui temas sem serviços publicados
+      responses:
+        "200":
+          description: Lista paginada de temas
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CartaPagedThemes"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: Carta de serviços não disponível
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/public/themes/{slug}/subthemes:
+    get:
+      tags: [Carta]
+      summary: Lista subtemas de um tema
+      description: Lista subtemas a partir da base local (`carta_subthemes`).
+      security: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+      responses:
+        "200":
+          description: Lista paginada de subtemas
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CartaPagedSubthemes"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: Carta de serviços não disponível
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/public/subthemes/{slug}/services:
+    get:
+      tags: [Carta]
+      summary: Lista serviços de um subtema
+      description: Lista serviços ativos do catálogo local filtrados por `subtheme_slug`.
+      security: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+      responses:
+        "200":
+          description: Lista paginada de serviços (resumo)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CartaPagedServices"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: Carta de serviços não disponível
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/public/services/{slug}:
+    get:
+      tags: [Carta]
+      summary: Detalhe completo de um serviço
+      description: |
+        Retorna o detalhe completo do serviço a partir de `catalog_items.source_data`
+        (sincronizado do CloudHub). Redirects de slug são resolvidos no sync, não nesta API.
+      security: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Detalhe do serviço
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    $ref: "#/components/schemas/CartaServiceDetail"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: Carta de serviços não disponível
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/public/catalog/{id}:
     get:
       tags: [Catálogo]
@@ -367,8 +515,8 @@ paths:
       summary: Dispara sincronização manual
       description: |
         Dispara uma sincronização ad-hoc em background e retorna imediatamente.
-        Se `source` for omitido, sincroniza todas as fontes.
-        Fontes inválidas são ignoradas silenciosamente (sem erro na resposta).
+        Se `source` for omitido, sincroniza todas as fontes registradas no worker.
+        Fontes inválidas ou não registradas são ignoradas silenciosamente (sem erro na resposta).
       security:
         - adminAuth: []
       parameters:
@@ -377,7 +525,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: ["salesforce", "app-go-api"]
+            enum: ["salesforce", "app-go-api", "typesense"]
           description: Nome da fonte. Omitir para sincronizar todas.
       responses:
         "202":
@@ -486,19 +634,26 @@ paths:
   /api/webhooks/salesforce:
     post:
       tags: [Infra]
-      summary: Webhook SalesForce
+      summary: Webhook SalesForce (Carta de Serviços)
       description: |
-        Recebe notificações de criação/atualização de registros da Carta de Serviços.
-        A assinatura HMAC-SHA256 do body deve ser enviada no header `X-Salesforce-Signature` (hex).
-        Quando o `SALESFORCE_WEBHOOK_SECRET` não está configurado, a validação é ignorada.
+        Recebe notificações de criação/atualização de serviços da Carta (API CloudHub).
+        Valida HMAC-SHA256 do body no header `X-Salesforce-Signature` (hex).
+
+        O identificador usado na sincronização é `sobject.Slug` (preferencial) ou
+        `sobject.Id` como fallback. Ambos vazios → resposta `ignored` (sem sync).
+
+        Com slug válido, enfileira `SyncRecord` em background e responde `queued`.
+
+        Se `SALESFORCE_WEBHOOK_SECRET` não estiver configurado, retorna `401`.
+        Payload acima de 64 KiB retorna `413`.
       security: []
       parameters:
         - name: X-Salesforce-Signature
           in: header
-          required: false
+          required: true
           schema:
             type: string
-            pattern: "^[0-9a-f]{64}$"
+            pattern: "^[0-9a-fA-F]{64}$"
           description: HMAC-SHA256 do body em hexadecimal
       requestBody:
         required: true
@@ -508,14 +663,15 @@ paths:
               $ref: "#/components/schemas/SalesForceWebhookPayload"
             example:
               event:
-                type: "created"
+                type: "updated"
                 created: "2026-04-08T10:00:00Z"
               sobject:
                 Id: "a001Q000003ABCDE"
+                Slug: "iptu-cobranca"
                 type: "Servico__c"
       responses:
         "200":
-          description: Webhook processado ou ignorado
+          description: Webhook aceito (enfileirado) ou ignorado
           content:
             application/json:
               schema:
@@ -529,19 +685,32 @@ paths:
                   value:
                     status: "queued"
                 ignorado:
-                  summary: sobject.Id vazio
+                  summary: Slug e Id vazios
                   value:
                     status: "ignored"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
-          description: Assinatura HMAC inválida
+          description: Assinatura HMAC inválida ou webhook não configurado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                assinatura_invalida:
+                  value:
+                    error: "assinatura inválida"
+                nao_configurado:
+                  value:
+                    error: "webhook não configurado"
+        "413":
+          description: Payload excede o limite de 64 KiB
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
               example:
-                error: "assinatura inválida"
+                error: "payload excede o limite permitido"
 
 # =============================================================================
 # COMPONENTS
@@ -847,6 +1016,8 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
+          example:
+            error: "falha ao consultar carta de serviços"
 
     CatalogItemResponse:
       description: Detalhe completo de um item do catálogo
@@ -913,9 +1084,11 @@ components:
         - jobs
         - mei
         - app-go-api
+        - typesense
       description: |
         Fonte de origem do item:
-        - `salesforce`: Carta de Serviços
+        - `salesforce`: Carta de Serviços (API CloudHub)
+        - `typesense`: Carta de Serviços temporária (Typesense)
         - `courses`: Cursos do app-go-api
         - `jobs`: Vagas do app-go-api
         - `mei`: MEI do app-go-api
@@ -1144,7 +1317,7 @@ components:
           format: uuid
         external_id:
           type: string
-          description: ID na fonte de origem (SalesForce ID, ID do app-go-api, etc.)
+          description: ID na fonte de origem (slug da Carta/CloudHub, ID do app-go-api, etc.)
         source:
           $ref: "#/components/schemas/ItemSource"
         type:
@@ -1284,14 +1457,97 @@ components:
             created:
               type: string
               format: date-time
-              description: Timestamp do evento no SalesForce
+              description: Timestamp do evento
         sobject:
           type: object
-          required: [Id, type]
+          required: [type]
           properties:
             Id:
               type: string
-              description: SalesForce Record ID. Vazio = evento ignorado.
+              description: |
+                Identificador alternativo. Usado como fallback quando `Slug` está vazio
+                (ex. Record ID do SalesForce ou slug legado).
+            Slug:
+              type: string
+              description: |
+                Slug canônico do serviço na API CloudHub da Carta.
+                Preferencial para sincronizar o registro (`GET /services/{slug}`).
             type:
               type: string
-              description: Tipo do objeto SalesForce (ex. `Servico__c`)
+              description: Tipo do objeto (ex. `Servico__c`)
+
+    # --- Carta (CloudHub) ---
+
+    CartaMeta:
+      type: object
+      properties:
+        page: { type: integer }
+        per_page: { type: integer }
+        total: { type: integer }
+        total_pages: { type: integer }
+
+    CartaTheme:
+      type: object
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        subthemesCount: { type: integer }
+        publishedServices: { type: integer }
+
+    CartaSubtheme:
+      type: object
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        publishedServices: { type: integer }
+
+    CartaServiceListItem:
+      type: object
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        articleStatus: { type: string }
+        lastModifiedDate: { type: string }
+        lastPublishedDate: { type: string }
+        summary: { type: string }
+        responsibleOrgUnit: { type: string }
+
+    CartaServiceDetail:
+      type: object
+      description: Payload completo do serviço conforme CloudHub (campos adicionais possíveis).
+      additionalProperties: true
+      properties:
+        slug: { type: string }
+        name: { type: string }
+        themeSlug: { type: string }
+        themeName: { type: string }
+        subthemeSlug: { type: string }
+        subthemeName: { type: string }
+        articleStatus: { type: string }
+
+    CartaPagedThemes:
+      type: object
+      required: [meta, data]
+      properties:
+        meta: { $ref: "#/components/schemas/CartaMeta" }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/CartaTheme" }
+
+    CartaPagedSubthemes:
+      type: object
+      required: [meta, data]
+      properties:
+        meta: { $ref: "#/components/schemas/CartaMeta" }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/CartaSubtheme" }
+
+    CartaPagedServices:
+      type: object
+      required: [meta, data]
+      properties:
+        meta: { $ref: "#/components/schemas/CartaMeta" }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/CartaServiceListItem" }

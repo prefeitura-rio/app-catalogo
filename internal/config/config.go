@@ -134,12 +134,16 @@ type AppGoAPISettings struct {
 }
 
 type SalesForceSettings struct {
-	InstanceURL   string
-	ClientID      string
-	ClientSecret  string
-	WebhookSecret string
-	SyncInterval  time.Duration
-	ObjectType    string
+	// InstanceURL é a base URL da API CloudHub da Carta de Serviços
+	// (ex: https://dev-....cloudhub.io). O path /api é acrescentado automaticamente.
+	InstanceURL string
+	// BaseServiceURL monta o fallback de URL pública do serviço (/servicos/{slug}).
+	BaseServiceURL string
+	WebhookSecret  string
+	SyncInterval   time.Duration
+	SyncEnabled    bool
+	// DetailConcurrency limita fetches paralelos de GET /services/{slug}.
+	DetailConcurrency int
 }
 
 type CitizenSyncSettings struct {
@@ -277,12 +281,12 @@ func Load() (*AppConfig, error) {
 			SyncEnabled:  getBool(v, "APP_GO_API_SYNC_ENABLED", true),
 		},
 		SalesForce: SalesForceSettings{
-			InstanceURL:   getEnv(v, "SALESFORCE_INSTANCE_URL", ""),
-			ClientID:      getEnv(v, "SALESFORCE_CLIENT_ID", ""),
-			ClientSecret:  getEnv(v, "SALESFORCE_CLIENT_SECRET", ""),
-			WebhookSecret: getEnv(v, "SALESFORCE_WEBHOOK_SECRET", ""),
-			SyncInterval:  getDuration(v, "SALESFORCE_SYNC_INTERVAL", 15*time.Minute),
-			ObjectType:    getEnv(v, "SALESFORCE_OBJECT_TYPE", "Service__c"),
+			InstanceURL:       getEnv(v, "SALESFORCE_INSTANCE_URL", ""),
+			BaseServiceURL:    getEnv(v, "SALESFORCE_BASE_SERVICE_URL", "https://prefeitura.rio"),
+			WebhookSecret:     getEnv(v, "SALESFORCE_WEBHOOK_SECRET", ""),
+			SyncInterval:      getDuration(v, "SALESFORCE_SYNC_INTERVAL", 15*time.Minute),
+			SyncEnabled:       getBool(v, "SALESFORCE_SYNC_ENABLED", true),
+			DetailConcurrency: getInt(v, "SALESFORCE_DETAIL_CONCURRENCY", 8),
 		},
 		CitizenSync: CitizenSyncSettings{
 			StaleThreshold: getDuration(v, "CITIZEN_PROFILE_STALE_THRESHOLD", 1*time.Hour),

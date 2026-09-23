@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
@@ -29,26 +30,28 @@ func NewWebhookHandler(sfSyncSvc *services.SalesForceSyncService, webhookSecret 
 
 type sfWebhookPayload struct {
 	Event struct {
-		Type    string `json:"type"`
-		Created string `json:"created"`
+		Type    string `json:"type" example:"updated"`
+		Created string `json:"created" example:"2026-04-08T10:00:00Z"`
 	} `json:"event"`
 	SObject struct {
-		ID   string `json:"Id"`
-		Type string `json:"type"`
+		ID   string `json:"Id" example:"a001Q000003ABCDE"`
+		Slug string `json:"Slug" example:"iptu-cobranca"`
+		Type string `json:"type" example:"Servico__c"`
 	} `json:"sobject"`
 }
 
 // SalesForce godoc
-// @Summary      Webhook SalesForce (Change Data Capture)
-// @Description  Recebe notificações de criação/atualização da Carta de Serviços. Valida assinatura HMAC-SHA256 via header X-Salesforce-Signature.
+// @Summary      Webhook SalesForce (Carta de Serviços)
+// @Description  Recebe notificações de criação/atualização. Valida HMAC-SHA256 via X-Salesforce-Signature. Usa sobject.Slug (ou Id como fallback) como identificador do serviço na API CloudHub. Sem SALESFORCE_WEBHOOK_SECRET retorna 401. Payload > 64KiB retorna 413.
 // @Tags         webhooks
 // @Accept       json
 // @Produce      json
-// @Param        X-Salesforce-Signature  header  string                 false  "HMAC-SHA256 do body em hex"
+// @Param        X-Salesforce-Signature  header  string                 true   "HMAC-SHA256 do body em hex"
 // @Param        payload                 body    sfWebhookPayload        true   "Payload do evento"
 // @Success      200  {object}  map[string]string
 // @Failure      400  {object}  map[string]string
 // @Failure      401  {object}  map[string]string
+// @Failure      413  {object}  map[string]string
 // @Router       /api/webhooks/salesforce [post]
 func (h *WebhookHandler) SalesForce(c *gin.Context) {
 	if h.webhookSecret == "" {
@@ -68,7 +71,7 @@ func (h *WebhookHandler) SalesForce(c *gin.Context) {
 		return
 	}
 
-	sig := c.GetHeader("X-Salesforce-Signature")
+	sig := strings.ToLower(strings.TrimSpace(c.GetHeader("X-Salesforce-Signature")))
 	if !h.validateHMAC(body, sig) {
 		log.Warn().Msg("webhook: assinatura inválida")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "assinatura inválida"})
@@ -81,18 +84,21 @@ func (h *WebhookHandler) SalesForce(c *gin.Context) {
 		return
 	}
 
-	if payload.SObject.ID == "" {
+	slug := payload.SObject.Slug
+	if slug == "" {
+		slug = payload.SObject.ID
+	}
+	if slug == "" {
 		c.JSON(http.StatusOK, gin.H{"status": "ignored"})
 		return
 	}
 
-	externalID := payload.SObject.ID
 	syncCtx := context.WithoutCancel(c.Request.Context())
 	go func() {
-		if err := h.sfSyncSvc.SyncRecord(syncCtx, externalID); err != nil {
-			log.Error().Err(err).Str("id", externalID).Msg("webhook: falha ao sincronizar registro")
+		if err := h.sfSyncSvc.SyncRecord(syncCtx, slug); err != nil {
+			log.Error().Err(err).Str("slug", slug).Msg("webhook: falha ao sincronizar registro")
 		} else {
-			log.Info().Str("id", externalID).Msg("webhook: registro sincronizado")
+			log.Info().Str("slug", slug).Msg("webhook: registro sincronizado")
 		}
 	}()
 

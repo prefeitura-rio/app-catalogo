@@ -44,13 +44,13 @@ func (r *CatalogItemRepository) Upsert(ctx context.Context, item *models.Catalog
 		INSERT INTO catalog_items (
 			external_id, source, type, title, description, short_desc,
 			organization, url, image_url, target_audience, bairros,
-			modalidade, status, tags, source_data,
+			modalidade, status, tags, source_data, theme_slug, subtheme_slug,
 			valid_from, valid_until, source_updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
 			$7, $8, $9, $10, $11,
-			$12, $13, $14, $15,
-			$16, $17, $18
+			$12, $13, $14, $15, NULLIF($16, ''), NULLIF($17, ''),
+			$18, $19, $20
 		)
 		ON CONFLICT (source, external_id) DO UPDATE SET
 			type             = EXCLUDED.type,
@@ -66,6 +66,8 @@ func (r *CatalogItemRepository) Upsert(ctx context.Context, item *models.Catalog
 			status           = EXCLUDED.status,
 			tags             = EXCLUDED.tags,
 			source_data      = EXCLUDED.source_data,
+			theme_slug       = EXCLUDED.theme_slug,
+			subtheme_slug    = EXCLUDED.subtheme_slug,
 			valid_from       = EXCLUDED.valid_from,
 			valid_until      = EXCLUDED.valid_until,
 			source_updated_at = EXCLUDED.source_updated_at,
@@ -86,6 +88,8 @@ func (r *CatalogItemRepository) Upsert(ctx context.Context, item *models.Catalog
 		string(item.Status),
 		tags,
 		sourceData,
+		item.ThemeSlug,
+		item.SubthemeSlug,
 		item.ValidFrom,
 		item.ValidUntil,
 		item.SourceUpdatedAt,
@@ -129,13 +133,13 @@ func (r *CatalogItemRepository) UpsertBatch(ctx context.Context, items []*models
 			INSERT INTO catalog_items (
 				external_id, source, type, title, description, short_desc,
 				organization, url, image_url, target_audience, bairros,
-				modalidade, status, tags, source_data,
+				modalidade, status, tags, source_data, theme_slug, subtheme_slug,
 				valid_from, valid_until, source_updated_at
 			) VALUES (
 				$1, $2, $3, $4, $5, $6,
 				$7, $8, $9, $10, $11,
-				$12, $13, $14, $15,
-				$16, $17, $18
+				$12, $13, $14, $15, NULLIF($16, ''), NULLIF($17, ''),
+				$18, $19, $20
 			)
 			ON CONFLICT (source, external_id) DO UPDATE SET
 				type             = EXCLUDED.type,
@@ -151,6 +155,8 @@ func (r *CatalogItemRepository) UpsertBatch(ctx context.Context, items []*models
 				status           = EXCLUDED.status,
 				tags             = EXCLUDED.tags,
 				source_data      = EXCLUDED.source_data,
+				theme_slug       = EXCLUDED.theme_slug,
+				subtheme_slug    = EXCLUDED.subtheme_slug,
 				valid_from       = EXCLUDED.valid_from,
 				valid_until      = EXCLUDED.valid_until,
 				source_updated_at = EXCLUDED.source_updated_at,
@@ -171,6 +177,8 @@ func (r *CatalogItemRepository) UpsertBatch(ctx context.Context, items []*models
 			string(item.Status),
 			tags,
 			sourceData,
+			item.ThemeSlug,
+			item.SubthemeSlug,
 			item.ValidFrom,
 			item.ValidUntil,
 			item.SourceUpdatedAt,
@@ -190,6 +198,7 @@ func (r *CatalogItemRepository) GetItemsWithoutEmbedding(ctx context.Context, li
 		SELECT id, external_id, source, type, title, description, short_desc,
 			organization, url, image_url, target_audience, bairros,
 			modalidade, status, tags, source_data,
+			COALESCE(theme_slug, ''), COALESCE(subtheme_slug, ''),
 			valid_from, valid_until, source_updated_at, created_at, updated_at
 		FROM catalog_items
 		WHERE embedding IS NULL
@@ -296,6 +305,7 @@ func (r *CatalogItemRepository) GetBySourceAndExternalID(ctx context.Context, so
 		SELECT id, external_id, source, type, title, description, short_desc,
 			organization, url, image_url, target_audience, bairros,
 			modalidade, status, tags, source_data,
+			COALESCE(theme_slug, ''), COALESCE(subtheme_slug, ''),
 			valid_from, valid_until, source_updated_at, created_at, updated_at
 		FROM catalog_items
 		WHERE source = $1 AND external_id = $2 AND deleted_at IS NULL
@@ -315,6 +325,7 @@ func (r *CatalogItemRepository) GetCandidates(ctx context.Context, types []model
 		SELECT id, external_id, source, type, title, description, short_desc,
 			organization, url, image_url, target_audience, bairros,
 			modalidade, status, tags, source_data,
+			COALESCE(theme_slug, ''), COALESCE(subtheme_slug, ''),
 			valid_from, valid_until, source_updated_at, created_at, updated_at
 		FROM catalog_items
 		WHERE status = 'active'
@@ -346,6 +357,7 @@ func (r *CatalogItemRepository) GetByID(ctx context.Context, id uuid.UUID) (*mod
 		SELECT id, external_id, source, type, title, description, short_desc,
 			organization, url, image_url, target_audience, bairros,
 			modalidade, status, tags, source_data,
+			COALESCE(theme_slug, ''), COALESCE(subtheme_slug, ''),
 			valid_from, valid_until, source_updated_at, created_at, updated_at
 		FROM catalog_items
 		WHERE id = $1 AND deleted_at IS NULL
@@ -359,6 +371,7 @@ func (r *CatalogItemRepository) GetPublicByID(ctx context.Context, id uuid.UUID)
 		SELECT id, external_id, source, type, title, description, short_desc,
 			organization, url, image_url, target_audience, bairros,
 			modalidade, status, tags, source_data,
+			COALESCE(theme_slug, ''), COALESCE(subtheme_slug, ''),
 			valid_from, valid_until, source_updated_at, created_at, updated_at
 		FROM catalog_items
 		WHERE id = $1
@@ -382,7 +395,8 @@ func scanCatalogItem(row rowScanner) (*models.CatalogItem, error) {
 		&item.Organization, &item.URL, &item.ImageURL,
 		&item.TargetAudience, &item.Bairros,
 		&item.Modalidade, &status, &item.Tags,
-		&item.SourceData, &item.ValidFrom, &item.ValidUntil,
+		&item.SourceData, &item.ThemeSlug, &item.SubthemeSlug,
+		&item.ValidFrom, &item.ValidUntil,
 		&item.SourceUpdatedAt, &item.CreatedAt, &item.UpdatedAt,
 	)
 	if err != nil {
