@@ -295,7 +295,7 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
 
   # ---------------------------------------------------------------------------
-  # CARTA DE SERVIÇOS (proxy CloudHub)
+  # CARTA DE SERVIÇOS (base local)
   # ---------------------------------------------------------------------------
 
   /api/public/themes:
@@ -324,10 +324,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CartaPagedThemes"
-        "502":
-          $ref: "#/components/responses/BadGateway"
+        "500":
+          $ref: "#/components/responses/InternalError"
         "503":
-          description: Carta não configurada
+          description: Carta de serviços não disponível
           content:
             application/json:
               schema:
@@ -359,10 +359,10 @@ paths:
                 $ref: "#/components/schemas/CartaPagedSubthemes"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "502":
-          $ref: "#/components/responses/BadGateway"
+        "500":
+          $ref: "#/components/responses/InternalError"
         "503":
-          description: Carta não configurada
+          description: Carta de serviços não disponível
           content:
             application/json:
               schema:
@@ -394,10 +394,10 @@ paths:
                 $ref: "#/components/schemas/CartaPagedServices"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "502":
-          $ref: "#/components/responses/BadGateway"
+        "500":
+          $ref: "#/components/responses/InternalError"
         "503":
-          description: Carta não configurada
+          description: Carta de serviços não disponível
           content:
             application/json:
               schema:
@@ -409,7 +409,7 @@ paths:
       summary: Detalhe completo de um serviço
       description: |
         Retorna o detalhe completo do serviço a partir de `catalog_items.source_data`
-        (sincronizado do CloudHub).
+        (sincronizado do CloudHub). Redirects de slug são resolvidos no sync, não nesta API.
       security: []
       parameters:
         - name: slug
@@ -427,23 +427,14 @@ paths:
                 properties:
                   data:
                     $ref: "#/components/schemas/CartaServiceDetail"
-        "301":
-          description: Slug redirecionado
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  redirect:
-                    type: string
         "400":
           $ref: "#/components/responses/BadRequest"
         "404":
           $ref: "#/components/responses/NotFound"
-        "502":
-          $ref: "#/components/responses/BadGateway"
+        "500":
+          $ref: "#/components/responses/InternalError"
         "503":
-          description: Carta não configurada
+          description: Carta de serviços não disponível
           content:
             application/json:
               schema:
@@ -1018,16 +1009,6 @@ components:
 
     InternalError:
       description: Erro interno do servidor
-      headers:
-        X-Request-ID:
-          $ref: "#/components/headers/X-Request-ID"
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
-
-    BadGateway:
-      description: Falha ao consultar upstream (CloudHub)
       headers:
         X-Request-ID:
           $ref: "#/components/headers/X-Request-ID"
