@@ -27,8 +27,9 @@ CREATE TYPE item_type AS ENUM (
 -- +goose StatementBegin
 CREATE OR REPLACE FUNCTION immutable_unaccent(text)
 RETURNS text AS $$
-  SELECT unaccent($1)
-$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE;
+  SELECT public.unaccent($1)
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE
+SET search_path = public, pg_temp;
 -- +goose StatementEnd
 
 -- Tabela central do catálogo

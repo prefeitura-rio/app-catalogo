@@ -17,6 +17,14 @@ END;
 $$;
 -- +goose StatementEnd
 
+-- +goose StatementBegin
+CREATE OR REPLACE FUNCTION immutable_unaccent(text)
+RETURNS text AS $$
+  SELECT public.unaccent($1)
+$$ LANGUAGE sql IMMUTABLE PARALLEL SAFE
+SET search_path = public, pg_temp;
+-- +goose StatementEnd
+
 CREATE INDEX idx_catalog_items_active_title_trigram
     ON catalog_items USING gist (immutable_unaccent(lower(title)) gist_trgm_ops)
     WHERE status = 'active' AND deleted_at IS NULL;
