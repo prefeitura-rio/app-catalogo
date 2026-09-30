@@ -296,3 +296,61 @@ func TestCartaServicosClient_MalformedJSON(t *testing.T) {
 		t.Fatal("expected decode error")
 	}
 }
+
+func TestCartaServicosClient_RetriesOnNetworkError(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < 2 {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				http.Error(w, "hijack not supported", http.StatusInternalServerError)
+				return
+			}
+			conn, _, _ := hj.Hijack()
+			conn.Close()
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"meta": map[string]int{"page": 1, "per_page": 100, "total": 1, "total_pages": 1},
+			"data": []map[string]any{{"slug": "tributos", "name": "Tributos"}},
+		})
+	}))
+	defer srv.Close()
+
+	c := mustCartaClient(t, srv.URL)
+	themes, err := c.ListAllThemes(context.Background(), false)
+	if err != nil {
+		t.Fatalf("expected success after retry, got %v", err)
+	}
+	if len(themes) != 1 || themes[0].Slug != "tributos" {
+		t.Fatalf("unexpected themes: %+v", themes)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", attempts)
+	}
+}
+
+func TestCartaServicosClient_ExhaustsRetries(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "hijack not supported", http.StatusInternalServerError)
+			return
+		}
+		conn, _, _ := hj.Hijack()
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	c := mustCartaClient(t, srv.URL)
+	_, err := c.ListAllThemes(context.Background(), false)
+	if err == nil {
+		t.Fatal("expected error after exhausting retries")
+	}
+	if attempts != cartaServicosRetryAttempts {
+		t.Fatalf("expected %d attempts, got %d", cartaServicosRetryAttempts, attempts)
+	}
+}

@@ -19,6 +19,8 @@ const (
 	cartaServicosDefaultPerPage             = 100
 	cartaServicosMaxPerPage                 = 100
 	maxCartaServiceRedirectHops             = 3
+	cartaServicosRetryAttempts              = 3
+	cartaServicosRetryBaseDelay             = time.Second
 )
 
 // ErrServiceNotFound indica HTTP 404 na API CloudHub da Carta.
@@ -333,52 +335,70 @@ func (c *CartaServicosClient) GetService(ctx context.Context, slug string) (*Car
 	}
 
 	reqURL := c.baseURL + "/services/" + url.PathEscape(slug)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("carta-servicos: criar request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("carta-servicos: request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+	var lastErr error
+	for attempt := range cartaServicosRetryAttempts {
+		if attempt > 0 {
+			delay := cartaServicosRetryBaseDelay * (1 << (attempt - 1))
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("carta-servicos: request: %w", ctx.Err())
+			case <-time.After(delay):
+			}
+		}
 
-	switch resp.StatusCode {
-	case http.StatusOK:
-		body, err := readBoundedHTTPBody(resp.Body, maximumCartaServicosResponseBytes)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 		if err != nil {
-			return nil, fmt.Errorf("carta-servicos: ler resposta: %w", err)
+			return nil, fmt.Errorf("carta-servicos: criar request: %w", err)
 		}
-		var wrapper cartaServiceDetailResponse
-		if err := json.Unmarshal(body, &wrapper); err != nil {
-			return nil, fmt.Errorf("carta-servicos: decodificar detalhe: %w", err)
-		}
-		if wrapper.Data.Slug == "" {
-			return nil, fmt.Errorf("carta-servicos: detalhe sem slug")
-		}
-		return &wrapper.Data, nil
+		req.Header.Set("Accept", "application/json")
 
-	case http.StatusMovedPermanently, http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
-		body, err := readBoundedHTTPBody(resp.Body, cartaRedirectBodyLimitBytes)
+		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("carta-servicos: ler redirect: %w", err)
+			lastErr = fmt.Errorf("carta-servicos: request: %w", err)
+			continue
 		}
-		toSlug := extractRedirectSlug(resp.Header.Get("Location"), body)
-		if toSlug == "" {
-			return nil, fmt.Errorf("carta-servicos: redirect sem slug de destino (status %d)", resp.StatusCode)
+
+		switch resp.StatusCode {
+		case http.StatusOK:
+			body, err := readBoundedHTTPBody(resp.Body, maximumCartaServicosResponseBytes)
+			_ = resp.Body.Close()
+			if err != nil {
+				return nil, fmt.Errorf("carta-servicos: ler resposta: %w", err)
+			}
+			var wrapper cartaServiceDetailResponse
+			if err := json.Unmarshal(body, &wrapper); err != nil {
+				return nil, fmt.Errorf("carta-servicos: decodificar detalhe: %w", err)
+			}
+			if wrapper.Data.Slug == "" {
+				return nil, fmt.Errorf("carta-servicos: detalhe sem slug")
+			}
+			return &wrapper.Data, nil
+
+		case http.StatusMovedPermanently, http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect:
+			body, err := readBoundedHTTPBody(resp.Body, cartaRedirectBodyLimitBytes)
+			_ = resp.Body.Close()
+			if err != nil {
+				return nil, fmt.Errorf("carta-servicos: ler redirect: %w", err)
+			}
+			toSlug := extractRedirectSlug(resp.Header.Get("Location"), body)
+			if toSlug == "" {
+				return nil, fmt.Errorf("carta-servicos: redirect sem slug de destino (status %d)", resp.StatusCode)
+			}
+			return nil, &ServiceRedirectError{FromSlug: slug, ToSlug: toSlug}
+
+		case http.StatusNotFound:
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, cartaRedirectBodyLimitBytes))
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("%w: %s", ErrServiceNotFound, slug)
+
+		default:
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, cartaRedirectBodyLimitBytes))
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("carta-servicos: GET /services/%s status %d", slug, resp.StatusCode)
 		}
-		return nil, &ServiceRedirectError{FromSlug: slug, ToSlug: toSlug}
-
-	case http.StatusNotFound:
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, cartaRedirectBodyLimitBytes))
-		return nil, fmt.Errorf("%w: %s", ErrServiceNotFound, slug)
-
-	default:
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, cartaRedirectBodyLimitBytes))
-		return nil, fmt.Errorf("carta-servicos: GET /services/%s status %d", slug, resp.StatusCode)
 	}
+	return nil, lastErr
 }
 
 // GetServiceCanonical resolve redirects (até maxCartaServiceRedirectHops) e retorna o detalhe canônico.
@@ -435,29 +455,43 @@ func (c *CartaServicosClient) getJSON(ctx context.Context, path string, query ur
 		reqURL += "?" + query.Encode()
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return fmt.Errorf("carta-servicos: criar request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
+	var lastErr error
+	for attempt := range cartaServicosRetryAttempts {
+		if attempt > 0 {
+			delay := cartaServicosRetryBaseDelay * (1 << (attempt - 1))
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("carta-servicos: request: %w", ctx.Err())
+			case <-time.After(delay):
+			}
+		}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("carta-servicos: request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+		if err != nil {
+			return fmt.Errorf("carta-servicos: criar request: %w", err)
+		}
+		req.Header.Set("Accept", "application/json")
 
-	body, err := readBoundedHTTPBody(resp.Body, maximumCartaServicosResponseBytes)
-	if err != nil {
-		return fmt.Errorf("carta-servicos: ler resposta: %w", err)
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("carta-servicos: request: %w", err)
+			continue
+		}
+
+		body, err := readBoundedHTTPBody(resp.Body, maximumCartaServicosResponseBytes)
+		_ = resp.Body.Close()
+		if err != nil {
+			return fmt.Errorf("carta-servicos: ler resposta: %w", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("carta-servicos: %s status %d", path, resp.StatusCode)
+		}
+		if err := json.Unmarshal(body, dest); err != nil {
+			return fmt.Errorf("carta-servicos: decodificar %s: %w", path, err)
+		}
+		return nil
 	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("carta-servicos: %s status %d", path, resp.StatusCode)
-	}
-	if err := json.Unmarshal(body, dest); err != nil {
-		return fmt.Errorf("carta-servicos: decodificar %s: %w", path, err)
-	}
-	return nil
+	return lastErr
 }
 
 func clampPerPage(perPage int) int {

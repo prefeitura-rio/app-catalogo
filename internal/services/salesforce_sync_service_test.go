@@ -667,10 +667,62 @@ func TestFullSync_HierarchyUpsertError(t *testing.T) {
 	hier := &stubHierarchyRepo{upsertThemeErr: errors.New("theme db down")}
 	svc := newTestSyncWithHierarchy(client, repo, hier)
 
-	err := svc.FullSync(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "theme db down") {
-		t.Fatalf("err=%v", err)
+	if err := svc.FullSync(context.Background()); err != nil {
+		t.Fatalf("expected nil (degradação parcial), got %v", err)
 	}
+}
+
+func TestFullSync_SubthemeListErrorDegradesParcialmente(t *testing.T) {
+	client := &stubCartaClient{
+		themes: []clients.CartaTheme{
+			{Slug: "tributos", Name: "Tributos"},
+			{Slug: "saude", Name: "Saúde"},
+		},
+		subthemes: map[string][]clients.CartaSubtheme{
+			"tributos": {{Slug: "iptu", Name: "IPTU"}},
+			"saude":    {{Slug: "vacinas", Name: "Vacinas"}},
+		},
+		services: map[string][]clients.CartaServiceListItem{
+			"iptu":    {sampleListItem("svc-iptu", "2026-08-20T00:00:00.000Z")},
+			"vacinas": {sampleListItem("svc-vacinas", "2026-08-20T00:00:00.000Z")},
+		},
+		details: map[string]*clients.CartaServiceDetail{
+			"svc-iptu":    sampleDetail("svc-iptu", "IPTU Cobrança"),
+			"svc-vacinas": sampleDetail("svc-vacinas", "Vacinas"),
+		},
+	}
+	perThemeErr := &stubCartaClientPerThemeErr{
+		stubCartaClient: client,
+		failTheme:       "saude",
+	}
+	repo := &stubSyncRepo{}
+	svc := newSalesForceSyncService(perThemeErr, repo, nil, "https://prefeitura.rio", 4)
+
+	if err := svc.FullSync(context.Background()); err != nil {
+		t.Fatalf("sync deve completar com degradação parcial, got %v", err)
+	}
+	slugs := make(map[string]bool, len(repo.upserted))
+	for _, item := range repo.upserted {
+		slugs[item.ExternalID] = true
+	}
+	if !slugs["svc-iptu"] {
+		t.Fatalf("svc-iptu deve ter sido indexado; upserted=%v", slugs)
+	}
+	if slugs["svc-vacinas"] {
+		t.Fatalf("svc-vacinas não deve ter sido indexado pois o tema falhou; upserted=%v", slugs)
+	}
+}
+
+type stubCartaClientPerThemeErr struct {
+	*stubCartaClient
+	failTheme string
+}
+
+func (s *stubCartaClientPerThemeErr) ListAllSubthemes(ctx context.Context, themeSlug string) ([]clients.CartaSubtheme, error) {
+	if themeSlug == s.failTheme {
+		return nil, fmt.Errorf("lista subtemas de %q: context deadline exceeded", themeSlug)
+	}
+	return s.stubCartaClient.ListAllSubthemes(ctx, themeSlug)
 }
 
 func TestDeltaSync_SkipsHierarchySoftDelete(t *testing.T) {
