@@ -667,12 +667,19 @@ func TestFullSync_HierarchyUpsertError(t *testing.T) {
 	hier := &stubHierarchyRepo{upsertThemeErr: errors.New("theme db down")}
 	svc := newTestSyncWithHierarchy(client, repo, hier)
 
-	if err := svc.FullSync(context.Background()); err != nil {
-		t.Fatalf("expected nil (degradação parcial), got %v", err)
+	err := svc.FullSync(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "theme db down") {
+		t.Fatalf("err=%v", err)
+	}
+	if repo.cursor != nil {
+		t.Fatal("cursor não deve avançar quando a listagem falha")
+	}
+	if len(repo.orphanKept) != 0 {
+		t.Fatal("SoftDeleteActiveNotIn não deve ser chamado quando a listagem falha")
 	}
 }
 
-func TestFullSync_SubthemeListErrorDegradesParcialmente(t *testing.T) {
+func TestFullSync_SubthemeListErrorAbortaSync(t *testing.T) {
 	client := &stubCartaClient{
 		themes: []clients.CartaTheme{
 			{Slug: "tributos", Name: "Tributos"},
@@ -698,18 +705,18 @@ func TestFullSync_SubthemeListErrorDegradesParcialmente(t *testing.T) {
 	repo := &stubSyncRepo{}
 	svc := newSalesForceSyncService(perThemeErr, repo, nil, "https://prefeitura.rio", 4)
 
-	if err := svc.FullSync(context.Background()); err != nil {
-		t.Fatalf("sync deve completar com degradação parcial, got %v", err)
+	err := svc.FullSync(context.Background())
+	if err == nil {
+		t.Fatal("sync deve falhar quando qualquer tema falha na listagem")
 	}
-	slugs := make(map[string]bool, len(repo.upserted))
-	for _, item := range repo.upserted {
-		slugs[item.ExternalID] = true
+	if repo.cursor != nil {
+		t.Fatal("cursor não deve avançar quando a listagem falha")
 	}
-	if !slugs["svc-iptu"] {
-		t.Fatalf("svc-iptu deve ter sido indexado; upserted=%v", slugs)
+	if len(repo.orphanKept) != 0 {
+		t.Fatal("SoftDeleteActiveNotIn não deve ser chamado quando a listagem falha")
 	}
-	if slugs["svc-vacinas"] {
-		t.Fatalf("svc-vacinas não deve ter sido indexado pois o tema falhou; upserted=%v", slugs)
+	if len(repo.upserted) != 0 {
+		t.Fatalf("nenhum item deve ser indexado quando a listagem é parcial; upserted=%v", repo.upserted)
 	}
 }
 

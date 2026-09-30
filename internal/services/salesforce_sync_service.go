@@ -313,15 +313,13 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 					SubthemesCount:    theme.SubthemesCount,
 					PublishedServices: theme.PublishedServices,
 				}); err != nil {
-					log.Warn().Err(err).Str("theme", theme.Slug).Msg("salesforce: falha ao upsert tema; tema ignorado neste sync")
-					return nil
+					return fmt.Errorf("upsert tema %q: %w", theme.Slug, err)
 				}
 			}
 
 			subthemes, err := s.client.ListAllSubthemes(ctx, theme.Slug)
 			if err != nil {
-				log.Warn().Err(err).Str("theme", theme.Slug).Msg("salesforce: falha ao listar subtemas; tema ignorado neste sync")
-				return nil
+				return fmt.Errorf("listar subtemas de %q: %w", theme.Slug, err)
 			}
 
 			localSubs := make([]string, 0, len(subthemes))
@@ -336,8 +334,7 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 						Name:              st.Name,
 						PublishedServices: st.PublishedServices,
 					}); err != nil {
-						log.Warn().Err(err).Str("subtheme", st.Slug).Msg("salesforce: falha ao upsert subtema; subtema ignorado neste sync")
-						continue
+						return fmt.Errorf("upsert subtema %q: %w", st.Slug, err)
 					}
 				}
 				localSubs = append(localSubs, st.Slug)
@@ -359,9 +356,9 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 			return nil
 		})
 	}
-	_ = themeGroup.Wait()
+	hierarchyErr := themeGroup.Wait()
 
-	if isFull && s.hierarchy != nil {
+	if isFull && s.hierarchy != nil && hierarchyErr == nil {
 		if _, err := s.hierarchy.SoftDeleteThemesNotIn(ctx, themeKeep); err != nil {
 			log.Warn().Err(err).Msg("salesforce: SoftDelete de temas órfãos falhou")
 		}
@@ -370,10 +367,15 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 		}
 	}
 
+	if hierarchyErr != nil {
+		return nil, hierarchyErr
+	}
+
 	var (
-		svcMu sync.Mutex
-		seen  = make(map[string]struct{})
-		all   []clients.CartaServiceListItem
+		svcMu   sync.Mutex
+		seen    = make(map[string]struct{})
+		all     []clients.CartaServiceListItem
+		listErr error
 	)
 	var subGroup errgroup.Group
 	subGroup.SetLimit(defaultListConcurrency)
@@ -383,8 +385,7 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 		subGroup.Go(func() error {
 			services, err := s.client.ListAllServicesBySubtheme(ctx, subSlug)
 			if err != nil {
-				log.Warn().Err(err).Str("subtheme", subSlug).Msg("salesforce: falha ao listar serviços do subtema; subtema ignorado neste sync")
-				return nil
+				return fmt.Errorf("listar serviços de %q: %w", subSlug, err)
 			}
 			svcMu.Lock()
 			for _, svc := range services {
@@ -401,9 +402,9 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 			return nil
 		})
 	}
-	_ = subGroup.Wait()
+	listErr = subGroup.Wait()
 
-	return all, nil
+	return all, listErr
 }
 
 func filterServicesNeedingDetail(listed []clients.CartaServiceListItem, since time.Time) []clients.CartaServiceListItem {
