@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -298,10 +299,10 @@ func TestCartaServicosClient_MalformedJSON(t *testing.T) {
 }
 
 func TestCartaServicosClient_RetriesOnNetworkError(t *testing.T) {
-	attempts := 0
+	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
-		if attempts < 2 {
+		n := attempts.Add(1)
+		if n < 2 {
 			hj, ok := w.(http.Hijacker)
 			if !ok {
 				http.Error(w, "hijack not supported", http.StatusInternalServerError)
@@ -326,15 +327,15 @@ func TestCartaServicosClient_RetriesOnNetworkError(t *testing.T) {
 	if len(themes) != 1 || themes[0].Slug != "tributos" {
 		t.Fatalf("unexpected themes: %+v", themes)
 	}
-	if attempts != 2 {
-		t.Fatalf("expected 2 attempts, got %d", attempts)
+	if got := int(attempts.Load()); got != 2 {
+		t.Fatalf("expected 2 attempts, got %d", got)
 	}
 }
 
 func TestCartaServicosClient_ExhaustsRetries(t *testing.T) {
-	attempts := 0
+	var attempts atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
+		attempts.Add(1)
 		hj, ok := w.(http.Hijacker)
 		if !ok {
 			http.Error(w, "hijack not supported", http.StatusInternalServerError)
@@ -350,7 +351,7 @@ func TestCartaServicosClient_ExhaustsRetries(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error after exhausting retries")
 	}
-	if attempts != cartaServicosRetryAttempts {
-		t.Fatalf("expected %d attempts, got %d", cartaServicosRetryAttempts, attempts)
+	if got := int(attempts.Load()); got != cartaServicosRetryAttempts {
+		t.Fatalf("expected %d attempts, got %d", cartaServicosRetryAttempts, got)
 	}
 }
