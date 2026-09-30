@@ -297,7 +297,7 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 		subthemeSeen = make(map[string]struct{})
 	)
 
-	themeGroup, themeCtx := errgroup.WithContext(ctx)
+	var themeGroup errgroup.Group
 	themeGroup.SetLimit(defaultListConcurrency)
 
 	for _, theme := range themes {
@@ -307,7 +307,7 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 		}
 		themeGroup.Go(func() error {
 			if s.hierarchy != nil {
-				if err := s.hierarchy.UpsertTheme(themeCtx, &models.CartaTheme{
+				if err := s.hierarchy.UpsertTheme(ctx, &models.CartaTheme{
 					Slug:              theme.Slug,
 					Name:              theme.Name,
 					SubthemesCount:    theme.SubthemesCount,
@@ -317,7 +317,7 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 				}
 			}
 
-			subthemes, err := s.client.ListAllSubthemes(themeCtx, theme.Slug)
+			subthemes, err := s.client.ListAllSubthemes(ctx, theme.Slug)
 			if err != nil {
 				return fmt.Errorf("listar subtemas de %q: %w", theme.Slug, err)
 			}
@@ -328,7 +328,7 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 					continue
 				}
 				if s.hierarchy != nil {
-					if err := s.hierarchy.UpsertSubtheme(themeCtx, &models.CartaSubtheme{
+					if err := s.hierarchy.UpsertSubtheme(ctx, &models.CartaSubtheme{
 						Slug:              st.Slug,
 						ThemeSlug:         theme.Slug,
 						Name:              st.Name,
@@ -356,11 +356,9 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 			return nil
 		})
 	}
-	if err := themeGroup.Wait(); err != nil {
-		return nil, err
-	}
+	hierarchyErr := themeGroup.Wait()
 
-	if isFull && s.hierarchy != nil {
+	if isFull && s.hierarchy != nil && hierarchyErr == nil {
 		if _, err := s.hierarchy.SoftDeleteThemesNotIn(ctx, themeKeep); err != nil {
 			log.Warn().Err(err).Msg("salesforce: SoftDelete de temas órfãos falhou")
 		}
@@ -369,18 +367,23 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 		}
 	}
 
+	if hierarchyErr != nil {
+		return nil, hierarchyErr
+	}
+
 	var (
-		svcMu sync.Mutex
-		seen  = make(map[string]struct{})
-		all   []clients.CartaServiceListItem
+		svcMu   sync.Mutex
+		seen    = make(map[string]struct{})
+		all     []clients.CartaServiceListItem
+		listErr error
 	)
-	subGroup, subCtx := errgroup.WithContext(ctx)
+	var subGroup errgroup.Group
 	subGroup.SetLimit(defaultListConcurrency)
 
 	for _, subSlug := range subSlugs {
 		subSlug := subSlug
 		subGroup.Go(func() error {
-			services, err := s.client.ListAllServicesBySubtheme(subCtx, subSlug)
+			services, err := s.client.ListAllServicesBySubtheme(ctx, subSlug)
 			if err != nil {
 				return fmt.Errorf("listar serviços de %q: %w", subSlug, err)
 			}
@@ -399,11 +402,9 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 			return nil
 		})
 	}
-	if err := subGroup.Wait(); err != nil {
-		return nil, err
-	}
+	listErr = subGroup.Wait()
 
-	return all, nil
+	return all, listErr
 }
 
 func filterServicesNeedingDetail(listed []clients.CartaServiceListItem, since time.Time) []clients.CartaServiceListItem {

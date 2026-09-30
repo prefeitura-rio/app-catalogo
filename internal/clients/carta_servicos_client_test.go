@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -294,5 +295,63 @@ func TestCartaServicosClient_MalformedJSON(t *testing.T) {
 	_, _, err := c.ListThemes(context.Background(), 1, 10, false)
 	if err == nil {
 		t.Fatal("expected decode error")
+	}
+}
+
+func TestCartaServicosClient_RetriesOnNetworkError(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := attempts.Add(1)
+		if n < 2 {
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				http.Error(w, "hijack not supported", http.StatusInternalServerError)
+				return
+			}
+			conn, _, _ := hj.Hijack()
+			conn.Close()
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"meta": map[string]int{"page": 1, "per_page": 100, "total": 1, "total_pages": 1},
+			"data": []map[string]any{{"slug": "tributos", "name": "Tributos"}},
+		})
+	}))
+	defer srv.Close()
+
+	c := mustCartaClient(t, srv.URL)
+	themes, err := c.ListAllThemes(context.Background(), false)
+	if err != nil {
+		t.Fatalf("expected success after retry, got %v", err)
+	}
+	if len(themes) != 1 || themes[0].Slug != "tributos" {
+		t.Fatalf("unexpected themes: %+v", themes)
+	}
+	if got := int(attempts.Load()); got != 2 {
+		t.Fatalf("expected 2 attempts, got %d", got)
+	}
+}
+
+func TestCartaServicosClient_ExhaustsRetries(t *testing.T) {
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "hijack not supported", http.StatusInternalServerError)
+			return
+		}
+		conn, _, _ := hj.Hijack()
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	c := mustCartaClient(t, srv.URL)
+	_, err := c.ListAllThemes(context.Background(), false)
+	if err == nil {
+		t.Fatal("expected error after exhausting retries")
+	}
+	if got := int(attempts.Load()); got != cartaServicosRetryAttempts {
+		t.Fatalf("expected %d attempts, got %d", cartaServicosRetryAttempts, got)
 	}
 }
