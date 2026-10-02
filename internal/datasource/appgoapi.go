@@ -3,25 +3,38 @@ package datasource
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/rs/zerolog/log"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/clients"
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
-	"github.com/prefeitura-rio/app-catalogo/internal/repository"
 )
+
+// appGoAPIFetcher é o contrato HTTP usado pelo sync (mockável em testes).
+type appGoAPIFetcher interface {
+	GetCourses(ctx context.Context, page int, updatedSince time.Time) ([]clients.Course, int, error)
+	GetJobs(ctx context.Context, page int, updatedSince time.Time) ([]clients.Job, int, error)
+	GetMEIOpportunities(ctx context.Context, page int, updatedSince time.Time) ([]clients.MEIOpportunity, int, error)
+}
+
+// appGoAPIItemRepo é o contrato de persistência usado pelo sync (mockável em testes).
+type appGoAPIItemRepo interface {
+	UpsertBatch(ctx context.Context, items []*models.CatalogItem) (int, error)
+	SoftDeleteActiveNotIn(ctx context.Context, source models.ItemSource, keepExternalIDs []string) (int64, error)
+}
 
 // AppGoAPIDataSource sincroniza cursos, vagas e MEI do app-go-api.
 type AppGoAPIDataSource struct {
-	client       *clients.AppGoAPIClient
-	repo         *repository.CatalogItemRepository
+	client       appGoAPIFetcher
+	repo         appGoAPIItemRepo
 	syncInterval time.Duration
 }
 
 func NewAppGoAPIDataSource(
-	client *clients.AppGoAPIClient,
-	repo *repository.CatalogItemRepository,
+	client appGoAPIFetcher,
+	repo appGoAPIItemRepo,
 	syncInterval time.Duration,
 ) *AppGoAPIDataSource {
 	return &AppGoAPIDataSource{
@@ -31,113 +44,206 @@ func NewAppGoAPIDataSource(
 	}
 }
 
-func (s *AppGoAPIDataSource) Name() string                { return "app-go-api" }
-func (s *AppGoAPIDataSource) Source() models.ItemSource   { return models.SourceAppGoAPI }
-func (s *AppGoAPIDataSource) SyncInterval() time.Duration { return s.syncInterval }
+
+func (s *AppGoAPIDataSource) Name() string              { return "app-go-api" }
+func (s *AppGoAPIDataSource) Source() models.ItemSource { return models.SourceAppGoAPI }
+func (s *AppGoAPIDataSource) SyncInterval() time.Duration {
+	return s.syncInterval
+}
 
 // Sync sincroniza cursos, vagas e MEI. Sempre busca desde o início (sem cursor por ora).
 func (s *AppGoAPIDataSource) Sync(ctx context.Context) error {
 	startedAt := time.Now()
 
+	var errs []error
 	if err := s.syncCourses(ctx); err != nil {
 		log.Error().Err(err).Msg("appgoapi datasource: erro ao sincronizar cursos")
+		errs = append(errs, fmt.Errorf("cursos: %w", err))
 	}
 	if err := s.syncJobs(ctx); err != nil {
 		log.Error().Err(err).Msg("appgoapi datasource: erro ao sincronizar vagas")
+		errs = append(errs, fmt.Errorf("vagas: %w", err))
 	}
 	if err := s.syncMEI(ctx); err != nil {
 		log.Error().Err(err).Msg("appgoapi datasource: erro ao sincronizar MEI")
+		errs = append(errs, fmt.Errorf("mei: %w", err))
 	}
 
 	log.Info().Dur("duration", time.Since(startedAt)).Msg("appgoapi datasource: sync concluído")
-	return nil
+	return joinSyncErrors(errs)
+}
+
+func joinSyncErrors(errs []error) error {
+	if len(errs) == 0 {
+		return nil
+	}
+	if len(errs) == 1 {
+		return errs[0]
+	}
+	msg := errs[0].Error()
+	for _, e := range errs[1:] {
+		msg += "; " + e.Error()
+	}
+	return fmt.Errorf("appgoapi sync: %s", msg)
 }
 
 func (s *AppGoAPIDataSource) syncCourses(ctx context.Context) error {
-	var allCourses []clients.Course
-	page := 1
-	for {
-		courses, total, err := s.client.GetCourses(ctx, page, time.Time{})
-		if err != nil {
-			return err
-		}
-		allCourses = append(allCourses, courses...)
-		if len(allCourses) >= total || len(courses) == 0 {
-			break
-		}
-		page++
+	allCourses, err := s.fetchAllCourses(ctx)
+	if err != nil {
+		return err
 	}
 
 	items := make([]*models.CatalogItem, 0, len(allCourses))
-	deactivated := 0
+	keepIDs := make([]string, 0, len(allCourses))
+	skipped := 0
 	for _, c := range allCourses {
 		if !courseIsIndexable(c) {
-			if softErr := s.repo.SoftDelete(ctx, models.SourceCourses, string(c.ID)); softErr != nil {
-				log.Warn().Err(softErr).Str("id", string(c.ID)).Msg("appgoapi: falha ao SoftDelete curso não indexável")
-			} else {
-				deactivated++
-			}
+			skipped++
 			continue
 		}
+		keepIDs = append(keepIDs, string(c.ID))
 		items = append(items, mapCourse(c))
 	}
 
 	processed, err := s.repo.UpsertBatch(ctx, items)
+	if err != nil {
+		return err
+	}
+
+	orphans, err := s.repo.SoftDeleteActiveNotIn(ctx, models.SourceCourses, keepIDs)
+	if err != nil {
+		return err
+	}
+
 	log.Info().
 		Int("processed", processed).
-		Int("deactivated_non_indexable", deactivated).
+		Int("skipped_non_indexable", skipped).
+		Int64("deactivated_orphans", orphans).
 		Msg("appgoapi: cursos sincronizados")
-	return err
+	return nil
 }
 
 func (s *AppGoAPIDataSource) syncJobs(ctx context.Context) error {
-	var allJobs []clients.Job
-	page := 1
-	for {
-		jobs, total, err := s.client.GetJobs(ctx, page, time.Time{})
-		if err != nil {
-			return err
-		}
-		allJobs = append(allJobs, jobs...)
-		if len(allJobs) >= total || len(jobs) == 0 {
-			break
-		}
-		page++
+	allJobs, err := s.fetchAllJobs(ctx)
+	if err != nil {
+		return err
 	}
 
 	items := make([]*models.CatalogItem, 0, len(allJobs))
+	keepIDs := make([]string, 0, len(allJobs))
+	skipped := 0
 	for _, j := range allJobs {
+		if !jobIsIndexable(j) {
+			skipped++
+			continue
+		}
+		keepIDs = append(keepIDs, j.ID)
 		items = append(items, mapJob(j))
 	}
 
 	processed, err := s.repo.UpsertBatch(ctx, items)
-	log.Info().Int("processed", processed).Msg("appgoapi: vagas sincronizadas")
-	return err
+	if err != nil {
+		return err
+	}
+
+	orphans, err := s.repo.SoftDeleteActiveNotIn(ctx, models.SourceJobs, keepIDs)
+	if err != nil {
+		return err
+	}
+
+	log.Info().
+		Int("processed", processed).
+		Int("skipped_non_indexable", skipped).
+		Int64("deactivated_orphans", orphans).
+		Msg("appgoapi: vagas sincronizadas")
+	return nil
 }
 
 func (s *AppGoAPIDataSource) syncMEI(ctx context.Context) error {
-	var allMEI []clients.MEIOpportunity
-	page := 1
-	for {
-		oportunidades, total, err := s.client.GetMEIOpportunities(ctx, page, time.Time{})
-		if err != nil {
-			return err
-		}
-		allMEI = append(allMEI, oportunidades...)
-		if len(allMEI) >= total || len(oportunidades) == 0 {
-			break
-		}
-		page++
+	allMEI, err := s.fetchAllMEI(ctx)
+	if err != nil {
+		return err
 	}
 
 	items := make([]*models.CatalogItem, 0, len(allMEI))
+	keepIDs := make([]string, 0, len(allMEI))
+	skipped := 0
 	for _, m := range allMEI {
+		if !meiIsIndexable(m) {
+			skipped++
+			continue
+		}
+		keepIDs = append(keepIDs, string(m.ID))
 		items = append(items, mapMEI(m))
 	}
 
 	processed, err := s.repo.UpsertBatch(ctx, items)
-	log.Info().Int("processed", processed).Msg("appgoapi: MEI sincronizado")
-	return err
+	if err != nil {
+		return err
+	}
+
+	orphans, err := s.repo.SoftDeleteActiveNotIn(ctx, models.SourceMEI, keepIDs)
+	if err != nil {
+		return err
+	}
+
+	log.Info().
+		Int("processed", processed).
+		Int("skipped_non_indexable", skipped).
+		Int64("deactivated_orphans", orphans).
+		Msg("appgoapi: MEI sincronizado")
+	return nil
+}
+
+func (s *AppGoAPIDataSource) fetchAllCourses(ctx context.Context) ([]clients.Course, error) {
+	var all []clients.Course
+	page := 1
+	for {
+		courses, total, err := s.client.GetCourses(ctx, page, time.Time{})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, courses...)
+		if len(all) >= total || len(courses) == 0 {
+			break
+		}
+		page++
+	}
+	return all, nil
+}
+
+func (s *AppGoAPIDataSource) fetchAllJobs(ctx context.Context) ([]clients.Job, error) {
+	var all []clients.Job
+	page := 1
+	for {
+		jobs, total, err := s.client.GetJobs(ctx, page, time.Time{})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, jobs...)
+		if len(all) >= total || len(jobs) == 0 {
+			break
+		}
+		page++
+	}
+	return all, nil
+}
+
+func (s *AppGoAPIDataSource) fetchAllMEI(ctx context.Context) ([]clients.MEIOpportunity, error) {
+	var all []clients.MEIOpportunity
+	page := 1
+	for {
+		oportunidades, total, err := s.client.GetMEIOpportunities(ctx, page, time.Time{})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, oportunidades...)
+		if len(all) >= total || len(oportunidades) == 0 {
+			break
+		}
+		page++
+	}
+	return all, nil
 }
 
 // courseIsIndexable retorna true para cursos visíveis e publicáveis.
@@ -157,11 +263,30 @@ func courseIsIndexable(c clients.Course) bool {
 	}
 }
 
+// jobIsIndexable mantém apenas vagas publicadas e ativas no catálogo.
+func jobIsIndexable(j clients.Job) bool {
+	switch j.Status {
+	case "publicado_ativo", "":
+		return true
+	default:
+		return false
+	}
+}
+
+// meiIsIndexable mantém apenas oportunidades MEI ativas.
+func meiIsIndexable(m clients.MEIOpportunity) bool {
+	switch m.Status {
+	case "active", "":
+		return true
+	default:
+		return false
+	}
+}
+
 func mapCourse(c clients.Course) *models.CatalogItem {
 	sourceData, _ := json.Marshal(c)
 	now := c.UpdatedAt
 
-	// Tags: tema + categorias + carga horária + certificado
 	var tags []string
 	if c.Theme != "" {
 		tags = append(tags, c.Theme)
@@ -178,7 +303,6 @@ func mapCourse(c clients.Course) *models.CatalogItem {
 		tags = append(tags, "Com certificado")
 	}
 
-	// ShortDesc: público-alvo ou início da descrição
 	shortDesc := c.TargetAudience
 	if shortDesc == "" && len(c.Description) > 0 {
 		shortDesc = c.Description
@@ -216,7 +340,6 @@ func mapJob(j clients.Job) *models.CatalogItem {
 		bairros = append(bairros, j.Bairro)
 	}
 
-	// Tags: regime, PCD
 	var tags []string
 	if j.RegimeContratacao.Descricao != "" {
 		tags = append(tags, j.RegimeContratacao.Descricao)
@@ -225,18 +348,15 @@ func mapJob(j clients.Job) *models.CatalogItem {
 		tags = append(tags, j.AcessibilidadePCD)
 	}
 
-	// TargetAudience: inclui informações de PCD
 	targetAudience, _ := json.Marshal(map[string]interface{}{
 		"pcd": j.AcessibilidadePCD,
 	})
 
-	// Organização: nome fantasia do contratante
 	org := j.Contratante.NomeFantasia
 	if org == "" && j.OrgaoParceiro != nil {
 		org = j.OrgaoParceiro.Name
 	}
 
-	// ShortDesc: primeiros 300 chars da descrição
 	shortDesc := j.Description
 	if len(shortDesc) > 300 {
 		shortDesc = shortDesc[:300]
@@ -265,20 +385,17 @@ func mapMEI(m clients.MEIOpportunity) *models.CatalogItem {
 	sourceData, _ := json.Marshal(m)
 	now := m.UpdatedAt
 
-	// Tags: CNAEs + forma de pagamento
 	var tags []string
 	tags = append(tags, m.CNAEIDs...)
 	if m.FormaPagamento != "" {
 		tags = append(tags, m.FormaPagamento)
 	}
 
-	// Bairros
 	var bairros []string
 	if m.Bairro != "" {
 		bairros = append(bairros, m.Bairro)
 	}
 
-	// ShortDesc: primeiros 300 chars da descrição
 	shortDesc := m.Description
 	if len(shortDesc) > 300 {
 		shortDesc = shortDesc[:300]
@@ -291,7 +408,7 @@ func mapMEI(m clients.MEIOpportunity) *models.CatalogItem {
 		Title:           m.Title,
 		Description:     m.Description,
 		ShortDesc:       shortDesc,
-		Organization:    m.OrgaoID, // ID do órgão (sem resolução de nome por ora)
+		Organization:    m.OrgaoID,
 		ImageURL:        m.ImageURL,
 		Bairros:         bairros,
 		Status:          models.StatusActive,

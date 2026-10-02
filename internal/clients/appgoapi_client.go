@@ -94,6 +94,7 @@ type Job struct {
 	ValorVaga         float64 `json:"valor_vaga"`
 	Bairro            string  `json:"bairro"`
 	AcessibilidadePCD string  `json:"acessibilidade_pcd"`
+	Status            string  `json:"status"` // publicado_ativo, vaga_congelada, vaga_descontinuada, …
 	Contratante       struct {
 		NomeFantasia string `json:"nome_fantasia"`
 		URLLogo      string `json:"url_logo"`
@@ -201,7 +202,8 @@ func (c *AppGoAPIClient) GetCourses(ctx context.Context, page int, updatedSince 
 // GetJobs retorna vagas de emprego paginadas.
 func (c *AppGoAPIClient) GetJobs(ctx context.Context, page int, updatedSince time.Time) ([]Job, int, error) {
 	// app-go-api PublicList usa "pageSize" (não per_page); default remoto é 10.
-	path := fmt.Sprintf("/api/public/empregabilidade/vagas?page=%d&pageSize=100", page)
+	// Filtra apenas publicadas ativas — congeladas/descontinuadas saem via SoftDeleteActiveNotIn.
+	path := fmt.Sprintf("/api/public/empregabilidade/vagas?page=%d&pageSize=100&status=publicado_ativo", page)
 	if !updatedSince.IsZero() {
 		path += "&updated_since=" + updatedSince.UTC().Format(time.RFC3339)
 	}
@@ -216,7 +218,7 @@ func (c *AppGoAPIClient) GetJobs(ctx context.Context, page int, updatedSince tim
 // GetMEIOpportunities retorna oportunidades MEI paginadas.
 func (c *AppGoAPIClient) GetMEIOpportunities(ctx context.Context, page int, updatedSince time.Time) ([]MEIOpportunity, int, error) {
 	// app-go-api List usa "pageSize" (não per_page); default remoto é 10.
-	path := fmt.Sprintf("/api/public/oportunidades-mei?page=%d&pageSize=100", page)
+	path := fmt.Sprintf("/api/public/oportunidades-mei?page=%d&pageSize=100&status=active", page)
 	if !updatedSince.IsZero() {
 		path += "&updated_since=" + updatedSince.UTC().Format(time.RFC3339)
 	}
