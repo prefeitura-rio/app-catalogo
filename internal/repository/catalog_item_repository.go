@@ -71,6 +71,7 @@ func (r *CatalogItemRepository) Upsert(ctx context.Context, item *models.Catalog
 			valid_from       = EXCLUDED.valid_from,
 			valid_until      = EXCLUDED.valid_until,
 			source_updated_at = EXCLUDED.source_updated_at,
+			deleted_at       = NULL,
 			updated_at       = NOW()
 	`,
 		item.ExternalID,
@@ -160,6 +161,7 @@ func (r *CatalogItemRepository) UpsertBatch(ctx context.Context, items []*models
 				valid_from       = EXCLUDED.valid_from,
 				valid_until      = EXCLUDED.valid_until,
 				source_updated_at = EXCLUDED.source_updated_at,
+				deleted_at       = NULL,
 				updated_at       = NOW()
 		`,
 			item.ExternalID,
