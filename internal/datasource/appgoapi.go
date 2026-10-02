@@ -140,16 +140,20 @@ func (s *AppGoAPIDataSource) syncMEI(ctx context.Context) error {
 	return err
 }
 
-// courseIsIndexable retorna true apenas para cursos publicados e visíveis.
+// courseIsIndexable retorna true para cursos visíveis e publicáveis.
+// O app-go-api deriva status a partir de "published" (scheduled, accepting_enrollments,
+// in_progress). Esses derivados ainda são ofertas públicas e devem permanecer no catálogo.
+// Terminais / não públicos (finished, closed, canceled, draft, …) são excluídos.
 func courseIsIndexable(c clients.Course) bool {
 	if !c.IsVisible {
 		return false
 	}
 	switch c.Status {
-	case "published", "approved", "opened", "":
+	case "published", "approved", "opened", "",
+		"scheduled", "accepting_enrollments", "in_progress":
 		return true
 	default:
-		return false // "canceled", "draft", etc.
+		return false
 	}
 }
 

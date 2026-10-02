@@ -185,7 +185,8 @@ func (c *AppGoAPIClient) doGet(ctx context.Context, path string, dest interface{
 
 // GetCourses retorna cursos paginados.
 func (c *AppGoAPIClient) GetCourses(ctx context.Context, page int, updatedSince time.Time) ([]Course, int, error) {
-	path := fmt.Sprintf("/api/public/courses?page=%d&per_page=100", page)
+	// app-go-api ListPublic usa "limit" (não per_page); default remoto é 10.
+	path := fmt.Sprintf("/api/public/courses?page=%d&limit=100", page)
 	if !updatedSince.IsZero() {
 		path += "&updated_since=" + updatedSince.UTC().Format(time.RFC3339)
 	}
@@ -199,7 +200,8 @@ func (c *AppGoAPIClient) GetCourses(ctx context.Context, page int, updatedSince 
 
 // GetJobs retorna vagas de emprego paginadas.
 func (c *AppGoAPIClient) GetJobs(ctx context.Context, page int, updatedSince time.Time) ([]Job, int, error) {
-	path := fmt.Sprintf("/api/public/empregabilidade/vagas?page=%d&per_page=100", page)
+	// app-go-api PublicList usa "pageSize" (não per_page); default remoto é 10.
+	path := fmt.Sprintf("/api/public/empregabilidade/vagas?page=%d&pageSize=100", page)
 	if !updatedSince.IsZero() {
 		path += "&updated_since=" + updatedSince.UTC().Format(time.RFC3339)
 	}
@@ -213,7 +215,8 @@ func (c *AppGoAPIClient) GetJobs(ctx context.Context, page int, updatedSince tim
 
 // GetMEIOpportunities retorna oportunidades MEI paginadas.
 func (c *AppGoAPIClient) GetMEIOpportunities(ctx context.Context, page int, updatedSince time.Time) ([]MEIOpportunity, int, error) {
-	path := fmt.Sprintf("/api/public/oportunidades-mei?page=%d&per_page=100", page)
+	// app-go-api List usa "pageSize" (não per_page); default remoto é 10.
+	path := fmt.Sprintf("/api/public/oportunidades-mei?page=%d&pageSize=100", page)
 	if !updatedSince.IsZero() {
 		path += "&updated_since=" + updatedSince.UTC().Format(time.RFC3339)
 	}
