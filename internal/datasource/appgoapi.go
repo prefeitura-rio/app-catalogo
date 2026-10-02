@@ -44,7 +44,6 @@ func NewAppGoAPIDataSource(
 	}
 }
 
-
 func (s *AppGoAPIDataSource) Name() string              { return "app-go-api" }
 func (s *AppGoAPIDataSource) Source() models.ItemSource { return models.SourceAppGoAPI }
 func (s *AppGoAPIDataSource) SyncInterval() time.Duration {
