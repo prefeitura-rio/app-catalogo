@@ -211,22 +211,23 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 		return upsertErr
 	}
 
+	// A listagem de hierarquia já cobre todos os serviços publicados (full e delta).
+	// Soft-delete de órfãos a cada ciclo evita que exclusões no painel fiquem
+	// visíveis na busca até o próximo full sync.
 	var softErr error
-	if isFull {
-		seen := make([]string, 0, len(listed))
-		for _, item := range listed {
-			if item.Slug != "" {
-				seen = append(seen, item.Slug)
-			}
+	seen := make([]string, 0, len(listed))
+	for _, item := range listed {
+		if item.Slug != "" {
+			seen = append(seen, item.Slug)
 		}
-		if len(seen) == 0 {
-			log.Warn().Msg("salesforce: full sync listou 0 serviços; SoftDelete de órfãos ignorado")
-		} else if deactivated, err := s.repo.SoftDeleteActiveNotIn(ctx, models.SourceSalesForce, seen); err != nil {
-			softErr = err
-			log.Error().Err(err).Msg("salesforce: SoftDelete de órfãos falhou")
-		} else if deactivated > 0 {
-			log.Info().Int64("deactivated", deactivated).Msg("salesforce: órfãos SoftDeleted")
-		}
+	}
+	if len(seen) == 0 {
+		log.Warn().Msg("salesforce: listagem retornou 0 serviços; SoftDelete de órfãos ignorado")
+	} else if deactivated, err := s.repo.SoftDeleteActiveNotIn(ctx, models.SourceSalesForce, seen); err != nil {
+		softErr = err
+		log.Error().Err(err).Msg("salesforce: SoftDelete de órfãos falhou")
+	} else if deactivated > 0 {
+		log.Info().Int64("deactivated", deactivated).Msg("salesforce: órfãos SoftDeleted")
 	}
 
 	finalStatus := models.SyncStatusCompleted
