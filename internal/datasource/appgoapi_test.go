@@ -281,6 +281,74 @@ func TestSyncMEI_FiltersAndOrphanDelete(t *testing.T) {
 	}
 }
 
+func TestSyncCourses_SkipsOrphanDeleteOnEmptyListing(t *testing.T) {
+	t.Parallel()
+
+	repo := &stubAppGoAPIRepo{}
+	ds := NewAppGoAPIDataSource(&stubAppGoAPIFetcher{}, repo, time.Hour)
+
+	if err := ds.syncCourses(context.Background()); err != nil {
+		t.Fatalf("syncCourses: %v", err)
+	}
+	if repo.orphanCalls != 0 {
+		t.Fatalf("SoftDeleteActiveNotIn must not run on empty listing, calls=%d", repo.orphanCalls)
+	}
+	if len(repo.upserted) != 0 {
+		t.Fatalf("upserted=%d want 0", len(repo.upserted))
+	}
+}
+
+func TestSyncJobs_SkipsOrphanDeleteOnEmptyListing(t *testing.T) {
+	t.Parallel()
+
+	repo := &stubAppGoAPIRepo{}
+	ds := NewAppGoAPIDataSource(&stubAppGoAPIFetcher{}, repo, time.Hour)
+
+	if err := ds.syncJobs(context.Background()); err != nil {
+		t.Fatalf("syncJobs: %v", err)
+	}
+	if repo.orphanCalls != 0 {
+		t.Fatalf("SoftDeleteActiveNotIn must not run on empty listing, calls=%d", repo.orphanCalls)
+	}
+}
+
+func TestSyncMEI_SkipsOrphanDeleteOnEmptyListing(t *testing.T) {
+	t.Parallel()
+
+	repo := &stubAppGoAPIRepo{}
+	ds := NewAppGoAPIDataSource(&stubAppGoAPIFetcher{}, repo, time.Hour)
+
+	if err := ds.syncMEI(context.Background()); err != nil {
+		t.Fatalf("syncMEI: %v", err)
+	}
+	if repo.orphanCalls != 0 {
+		t.Fatalf("SoftDeleteActiveNotIn must not run on empty listing, calls=%d", repo.orphanCalls)
+	}
+}
+
+func TestSyncCourses_SkipsOrphanDeleteWhenNoIndexableIDs(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &stubAppGoAPIFetcher{
+		courses: []clients.Course{
+			{ID: "1", Title: "Finished", Status: "finished", IsVisible: true},
+			{ID: "2", Title: "Invisible", Status: "published", IsVisible: false},
+		},
+	}
+	repo := &stubAppGoAPIRepo{}
+	ds := NewAppGoAPIDataSource(fetcher, repo, time.Hour)
+
+	if err := ds.syncCourses(context.Background()); err != nil {
+		t.Fatalf("syncCourses: %v", err)
+	}
+	if len(repo.upserted) != 0 {
+		t.Fatalf("upserted=%d want 0", len(repo.upserted))
+	}
+	if repo.orphanCalls != 0 {
+		t.Fatalf("SoftDeleteActiveNotIn must not run when keepIDs empty, calls=%d", repo.orphanCalls)
+	}
+}
+
 func TestSyncCourses_SkipsOrphanDeleteOnUpsertError(t *testing.T) {
 	t.Parallel()
 

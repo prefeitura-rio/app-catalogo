@@ -109,9 +109,17 @@ func (s *AppGoAPIDataSource) syncCourses(ctx context.Context) error {
 		return err
 	}
 
-	orphans, err := s.repo.SoftDeleteActiveNotIn(ctx, models.SourceCourses, keepIDs)
-	if err != nil {
-		return err
+	var orphans int64
+	if len(allCourses) == 0 || len(keepIDs) == 0 {
+		log.Warn().
+			Int("listed", len(allCourses)).
+			Int("indexable", len(keepIDs)).
+			Msg("appgoapi: SoftDelete de órfãos de cursos ignorado (listagem/indexáveis vazios)")
+	} else {
+		orphans, err = s.repo.SoftDeleteActiveNotIn(ctx, models.SourceCourses, keepIDs)
+		if err != nil {
+			return err
+		}
 	}
 
 	log.Info().
@@ -145,9 +153,17 @@ func (s *AppGoAPIDataSource) syncJobs(ctx context.Context) error {
 		return err
 	}
 
-	orphans, err := s.repo.SoftDeleteActiveNotIn(ctx, models.SourceJobs, keepIDs)
-	if err != nil {
-		return err
+	var orphans int64
+	if len(allJobs) == 0 || len(keepIDs) == 0 {
+		log.Warn().
+			Int("listed", len(allJobs)).
+			Int("indexable", len(keepIDs)).
+			Msg("appgoapi: SoftDelete de órfãos de vagas ignorado (listagem/indexáveis vazios)")
+	} else {
+		orphans, err = s.repo.SoftDeleteActiveNotIn(ctx, models.SourceJobs, keepIDs)
+		if err != nil {
+			return err
+		}
 	}
 
 	log.Info().
@@ -181,9 +197,17 @@ func (s *AppGoAPIDataSource) syncMEI(ctx context.Context) error {
 		return err
 	}
 
-	orphans, err := s.repo.SoftDeleteActiveNotIn(ctx, models.SourceMEI, keepIDs)
-	if err != nil {
-		return err
+	var orphans int64
+	if len(allMEI) == 0 || len(keepIDs) == 0 {
+		log.Warn().
+			Int("listed", len(allMEI)).
+			Int("indexable", len(keepIDs)).
+			Msg("appgoapi: SoftDelete de órfãos de MEI ignorado (listagem/indexáveis vazios)")
+	} else {
+		orphans, err = s.repo.SoftDeleteActiveNotIn(ctx, models.SourceMEI, keepIDs)
+		if err != nil {
+			return err
+		}
 	}
 
 	log.Info().
