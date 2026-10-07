@@ -450,9 +450,46 @@ func TestDeltaSync_FetchesOnlyChanged(t *testing.T) {
 	if len(repo.upserted) != 1 || repo.upserted[0].ExternalID != "new-svc" {
 		t.Fatalf("upserted=%v", len(repo.upserted))
 	}
-	// Delta não soft-delete órfãos
-	if len(repo.orphanKept) != 0 {
-		t.Fatalf("delta should not SoftDeleteActiveNotIn, got %v", repo.orphanKept)
+	// Delta soft-deleta órfãos com base na listagem completa (não só nos detalhes buscados).
+	if len(repo.orphanKept) != 2 {
+		t.Fatalf("delta SoftDeleteActiveNotIn keep=%v", repo.orphanKept)
+	}
+	kept := map[string]bool{}
+	for _, id := range repo.orphanKept {
+		kept[id] = true
+	}
+	if !kept["old-svc"] || !kept["new-svc"] {
+		t.Fatalf("expected keep old-svc+new-svc, got %v", repo.orphanKept)
+	}
+}
+
+func TestDeltaSync_SoftDeletesServiceRemovedFromListing(t *testing.T) {
+	since := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	// Serviço "excluído no painel" já não aparece na listagem; só o keeper permanece.
+	client := &stubCartaClient{
+		themes:    []clients.CartaTheme{{Slug: "tributos", Name: "T"}},
+		subthemes: map[string][]clients.CartaSubtheme{"tributos": {{Slug: "iptu", Name: "I"}}},
+		services: map[string][]clients.CartaServiceListItem{
+			"iptu": {sampleListItem("keeper-svc", "2026-01-01T00:00:00.000Z")},
+		},
+		details: map[string]*clients.CartaServiceDetail{
+			"keeper-svc": sampleDetail("keeper-svc", "Keeper"),
+		},
+	}
+	repo := &stubSyncRepo{
+		cursor:      &models.SalesForceSyncCursor{LastSyncAt: &since},
+		orphanCount: 1,
+	}
+	svc := newTestSync(client, repo)
+
+	if err := svc.DeltaSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.getCalls) != 0 {
+		t.Fatalf("delta sem mudanças de detalhe não deveria buscar GetService, got %v", client.getCalls)
+	}
+	if len(repo.orphanKept) != 1 || repo.orphanKept[0] != "keeper-svc" {
+		t.Fatalf("SoftDeleteActiveNotIn should keep only listed services, got %v", repo.orphanKept)
 	}
 }
 
