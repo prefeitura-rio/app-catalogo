@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -58,6 +58,9 @@ jobs:
 
       - name: Pin image digest in prod manifest
         run: |
+          git fetch origin main
+          git checkout -B main origin/main
+
           DIGEST=$(docker buildx imagetools inspect $IMAGE_NAME:stable \
             --format '{{.Manifest.Digest}}' | grep -oE 'sha256:[a-f0-9]+' | head -n1)
           echo "DIGEST=$DIGEST" >> $GITHUB_ENV
@@ -70,7 +73,13 @@ jobs:
           git config --global user.email 'github-actions@github.com'
           git add k8s/prod/resources.yaml
           git commit -m "chore: atualiza imagem prod para $VERSION ($DIGEST)" || echo "Sem alterações"
-          git push
+          for attempt in 1 2 3; do
+            git push origin main && exit 0
+            echo "Push falhou (tentativa $attempt/3), fazendo rebase em origin/main"
+            git pull --rebase origin main
+          done
+          echo "Falha ao enviar commit para main após 3 tentativas" >&2
+          exit 1
 
       - name: Create deployment summary
         if: always()
