@@ -151,10 +151,13 @@ jobs:
         if: steps.check-k8s-only.outputs.k8s_only != 'true'
         run: |
           echo "Updating ArgoCD Application image override..."
-          echo "Image: $IMAGE_NAME:$COMMIT_HASH@$DIGEST"
+          echo "Image: $IMAGE_NAME:latest@$DIGEST"
 
+          # Usa a tag latest: é a que o argocd-image-updater acompanha (estratégia digest).
+          # Com :COMMIT_HASH@DIGEST o updater reescrevia para :latest@DIGEST logo depois,
+          # gerando um novo ReplicaSet com a mesma imagem e deixando o rollout em BlueGreenPause.
           kubectl patch application catalogo -n argocd --type=merge \
-            -p="{\"spec\":{\"source\":{\"kustomize\":{\"images\":[\"$IMAGE_NAME:$COMMIT_HASH@$DIGEST\"]}}}}"
+            -p="{\"spec\":{\"source\":{\"kustomize\":{\"images\":[\"$IMAGE_NAME:latest@$DIGEST\"]}}}}"
 
           # Força sync imediato (sem isso, ArgoCD pode ficar em Synced sem re-aplicar)
           kubectl annotate application catalogo -n argocd \
@@ -167,7 +170,7 @@ jobs:
         timeout-minutes: 10
         run: |
           echo "Waiting for ArgoCD to sync and create blue-green preview..."
-          echo "Expected image: $IMAGE_NAME:$COMMIT_HASH@$DIGEST"
+          echo "Expected image: $IMAGE_NAME:latest@$DIGEST"
 
           for i in {1..60}; do
             CURRENT_IMAGE=$(kubectl get rollout catalogo -n catalogo \
@@ -177,13 +180,9 @@ jobs:
 
             echo "Attempt $i/60: Image=$CURRENT_IMAGE, ArgoCD Sync=$SYNC_STATUS"
 
-            # Aceita a imagem em dois formatos:
-            # 1. IMAGE_NAME:COMMIT_HASH@DIGEST  (patch do CI)
-            # 2. IMAGE_NAME:*@DIGEST            (Image Updater com mesmo digest)
-            # Quando Docker cache produz o mesmo digest, o Image Updater reverte
-            # para :latest@DIGEST antes do CI patch ser aplicado.
-            if [[ "$CURRENT_IMAGE" == "$IMAGE_NAME:$COMMIT_HASH@$DIGEST" ]] || \
-               [[ "$CURRENT_IMAGE" == *"@$DIGEST" ]]; then
+            # Compara só o digest: o patch do CI e o Image Updater usam :latest@DIGEST,
+            # mas qualquer tag com o mesmo digest é a mesma imagem.
+            if [[ "$CURRENT_IMAGE" == *"@$DIGEST" ]]; then
               echo "✅ Rollout spec já está na imagem correta (digest: $DIGEST)"
               break
             fi
@@ -284,7 +283,7 @@ jobs:
         run: |
           echo "## 🚀 Staging Deployment — app-catalogo" >> $GITHUB_STEP_SUMMARY
           echo "**Commit**: \`$SHORT_HASH\` — $COMMIT_MSG" >> $GITHUB_STEP_SUMMARY
-          echo "**Image**: \`$IMAGE_NAME:$COMMIT_HASH@${DIGEST:0:19}...\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Image**: \`$IMAGE_NAME:latest@${DIGEST:0:19}...\` (commit \`$COMMIT_HASH\`)" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ job.status }}" = "success" ]; then
             echo "### ✅ Deploy bem-sucedido" >> $GITHUB_STEP_SUMMARY
