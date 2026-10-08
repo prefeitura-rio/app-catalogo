@@ -62,7 +62,7 @@ spec:
       successCondition: result[0] >= 0.95
       provider:
         prometheus:
-          address: http://prometheus.istio-system.svc.cluster.local:9090
+          address: http://prometheus-server.istio-system.svc.cluster.local:9090
           query: |
             (sum(rate(istio_requests_total{
               destination_service_name=~"{{args.service-name}}",
@@ -78,7 +78,7 @@ spec:
       successCondition: result[0] <= 0.05
       provider:
         prometheus:
-          address: http://prometheus.istio-system.svc.cluster.local:9090
+          address: http://prometheus-server.istio-system.svc.cluster.local:9090
           query: |
             (sum(rate(istio_requests_total{
               destination_service_name=~"{{args.service-name}}",
@@ -363,7 +363,7 @@ spec:
   triggers:
     - type: prometheus
       metadata:
-        serverAddress: http://prometheus.istio-system.svc.cluster.local:9090
+        serverAddress: http://prometheus-server.istio-system.svc.cluster.local:9090
         metricName: http_requests_total
         threshold: "200"
         query: sum(rate(istio_requests_total{destination_workload="catalogo"}[30s]))

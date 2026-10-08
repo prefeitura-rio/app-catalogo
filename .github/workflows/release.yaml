@@ -56,21 +56,144 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Pin image digest in prod manifest
+      - name: Get image digest
         run: |
-          DIGEST=$(docker buildx imagetools inspect $IMAGE_NAME:stable \
+          DIGEST=$(docker buildx imagetools inspect $IMAGE_NAME:$VERSION \
             --format '{{.Manifest.Digest}}' | grep -oE 'sha256:[a-f0-9]+' | head -n1)
+          if [ -z "$DIGEST" ]; then
+            echo "❌ Não foi possível obter o digest de $IMAGE_NAME:$VERSION"
+            exit 1
+          fi
           echo "DIGEST=$DIGEST" >> $GITHUB_ENV
+          echo "Image digest: $DIGEST"
 
-          PINNED_IMAGE="$IMAGE_NAME:stable@$DIGEST"
-          sed -i "s|image: ghcr.io/prefeitura-rio/app-catalogo:.*  # Updated by release workflow|image: $PINNED_IMAGE  # Updated by release workflow|g" \
-            k8s/prod/resources.yaml
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
 
-          git config --global user.name 'GitHub Actions'
-          git config --global user.email 'github-actions@github.com'
-          git add k8s/prod/resources.yaml
-          git commit -m "chore: atualiza imagem prod para $VERSION ($DIGEST)" || echo "Sem alterações"
-          git push
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Install gke-gcloud-auth-plugin
+        run: gcloud components install gke-gcloud-auth-plugin
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: latest
+
+      - name: Configure kubectl for GKE (Production)
+        run: gcloud container clusters get-credentials --dns-endpoint application --zone=us-central1 --project="${{ vars.GCP_PROJECT_ID }}"
+
+      - name: Update ArgoCD Application image override
+        run: |
+          echo "Updating production ArgoCD Application image override..."
+          echo "Image: $IMAGE_NAME:stable@$DIGEST"
+
+          # Guarda o startedAt da operação anterior: um operationState antigo (ex.: Failed)
+          # não deve ser confundido com o sync que este patch vai disparar.
+          PREV_OP_STARTED=$(kubectl get application catalogo -n argocd \
+            -o jsonpath='{.status.operationState.startedAt}' 2>/dev/null || echo "")
+          echo "PREV_OP_STARTED=$PREV_OP_STARTED" >> $GITHUB_ENV
+
+          # Usa a tag stable: é a que o argocd-image-updater acompanha (estratégia digest),
+          # evitando que ele reverta o override no próximo ciclo.
+          kubectl patch application catalogo -n argocd --type=merge \
+            -p="{\"spec\":{\"source\":{\"kustomize\":{\"images\":[\"$IMAGE_NAME:stable@$DIGEST\"]}}}}"
+
+          # Força sync imediato (sem isso, ArgoCD pode ficar em Synced sem re-aplicar)
+          kubectl annotate application catalogo -n argocd \
+            argocd.argoproj.io/refresh=hard --overwrite
+
+          echo "✅ ArgoCD Application updated and refresh triggered"
+
+      - name: Wait for ArgoCD sync and rollout to start
+        timeout-minutes: 15
+        run: |
+          echo "Waiting for ArgoCD to sync (PreSync Job catalogo-migrate runs first)..."
+          echo "Expected digest: $DIGEST"
+
+          while true; do
+            CURRENT_IMAGE=$(kubectl get rollout catalogo -n catalogo \
+              -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "")
+            SYNC_STATUS=$(kubectl get application catalogo -n argocd \
+              -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "")
+            OP_PHASE=$(kubectl get application catalogo -n argocd \
+              -o jsonpath='{.status.operationState.phase}' 2>/dev/null || echo "")
+
+            OP_STARTED=$(kubectl get application catalogo -n argocd \
+              -o jsonpath='{.status.operationState.startedAt}' 2>/dev/null || echo "")
+
+            echo "Image=$CURRENT_IMAGE, ArgoCD Sync=$SYNC_STATUS, Operation=$OP_PHASE, OpStarted=$OP_STARTED"
+
+            if [[ "$CURRENT_IMAGE" == *"$DIGEST"* ]]; then
+              echo "✅ Rollout spec updated with correct image digest!"
+              break
+            fi
+
+            # Só é falha se for uma operação nova (startedAt diferente do capturado antes do patch)
+            if [ -n "$OP_STARTED" ] && [ "$OP_STARTED" != "$PREV_OP_STARTED" ] && \
+               { [ "$OP_PHASE" = "Failed" ] || [ "$OP_PHASE" = "Error" ]; }; then
+              echo "❌ ArgoCD operation $OP_PHASE"
+              kubectl get application catalogo -n argocd \
+                -o jsonpath='{.status.operationState.message}'
+              echo
+              echo "Logs do job catalogo-migrate:"
+              kubectl logs job/catalogo-migrate -n catalogo --tail=200 || true
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+      - name: Monitor Rollout
+        timeout-minutes: 45
+        run: |
+          echo "Monitoring rollout progress for version $VERSION..."
+          echo "Expected image: $IMAGE_NAME:stable@$DIGEST"
+
+          while true; do
+            PHASE=$(kubectl get rollout catalogo -n catalogo -o jsonpath='{.status.phase}')
+            MESSAGE=$(kubectl get rollout catalogo -n catalogo -o jsonpath='{.status.message}')
+            CURRENT_IMAGE=$(kubectl get rollout catalogo -n catalogo -o jsonpath='{.spec.template.spec.containers[0].image}')
+
+            echo "Rollout phase: $PHASE"
+            echo "Message: $MESSAGE"
+            echo "Current image: $CURRENT_IMAGE"
+
+            if [[ "$CURRENT_IMAGE" != *"$DIGEST"* ]]; then
+              echo "⚠️ WARNING: Rollout image changed unexpectedly!"
+              echo "Expected digest: $DIGEST"
+              echo "Got: $CURRENT_IMAGE"
+            fi
+
+            if [ "$PHASE" = "Healthy" ]; then
+              WORKER_IMAGE=$(kubectl get deploy catalogo-worker -n catalogo \
+                -o jsonpath='{.spec.template.spec.containers[0].image}')
+              if [[ "$WORKER_IMAGE" != *"$DIGEST"* ]]; then
+                echo "❌ Worker não está na imagem esperada: $WORKER_IMAGE"
+                exit 1
+              fi
+              kubectl rollout status deploy/catalogo-worker -n catalogo --timeout=5m
+              echo "✅ Rollout completed successfully!"
+              exit 0
+            fi
+
+            if [ "$PHASE" = "Degraded" ] || [ "$PHASE" = "Aborted" ]; then
+              echo "❌ Rollout failed - status is $PHASE"
+              echo "Message: $MESSAGE"
+              kubectl get analysisrun -n catalogo --sort-by=.metadata.creationTimestamp | tail -5 || true
+              exit 1
+            fi
+
+            kubectl get rollout catalogo -n catalogo
+
+            echo "Waiting 30s before next check..."
+            sleep 30
+          done
 
       - name: Create deployment summary
         if: always()
@@ -79,6 +202,9 @@ jobs:
           echo "**Version**: $VERSION" >> $GITHUB_STEP_SUMMARY
           echo "**Commit**: \`$SHORT_HASH\`" >> $GITHUB_STEP_SUMMARY
           echo "**Tags**: \`:stable\`, \`:$VERSION\`, \`:$VERSION_NO_V\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Digest**: \`${DIGEST:-n/a}\`" >> $GITHUB_STEP_SUMMARY
+          PHASE=$(kubectl get rollout catalogo -n catalogo -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
+          echo "**Rollout**: $PHASE" >> $GITHUB_STEP_SUMMARY
 
       - name: Send Discord notification
         if: always()
