@@ -222,6 +222,7 @@ type stubHierarchyRepo struct {
 	mu             sync.Mutex
 	themes         []*models.CartaTheme
 	subthemes      []*models.CartaSubtheme
+	aliases        map[string]string
 	themeKeep      []string
 	subthemeKeep   []string
 	refreshCalls   int
@@ -281,6 +282,31 @@ func (h *stubHierarchyRepo) RefreshHierarchyCounts(ctx context.Context) error {
 	return h.refreshErr
 }
 
+func (h *stubHierarchyRepo) UpsertSlugAlias(ctx context.Context, oldSlug, canonicalSlug string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.aliases == nil {
+		h.aliases = map[string]string{}
+	}
+	h.aliases[oldSlug] = canonicalSlug
+	return nil
+}
+
+func (h *stubHierarchyRepo) UpsertSlugAliases(ctx context.Context, canonicalSlug string, oldSlugs []string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.aliases == nil {
+		h.aliases = map[string]string{}
+	}
+	for _, old := range oldSlugs {
+		if old == "" || old == canonicalSlug {
+			continue
+		}
+		h.aliases[old] = canonicalSlug
+	}
+	return nil
+}
+
 func newTestSync(client *stubCartaClient, repo *stubSyncRepo) *SalesForceSyncService {
 	return newSalesForceSyncService(client, repo, nil, "https://prefeitura.rio", 4)
 }
@@ -326,6 +352,30 @@ func TestMapCartaServiceDetail_Happy(t *testing.T) {
 	}
 	if item.ThemeSlug != "tributos" || item.SubthemeSlug != "iptu" {
 		t.Fatalf("hierarchy slugs: theme=%q subtheme=%q", item.ThemeSlug, item.SubthemeSlug)
+	}
+}
+
+func TestMapCartaServiceDetail_PreservesActiveCategoryFlags(t *testing.T) {
+	d := sampleDetail("iptu-2026", "IPTU 2026")
+	d.Flags = clients.CartaServiceFlags{
+		AllowsAnonymity:        true,
+		AllowTicketSubmission:  true,
+		ActiveCategoryConfigID: "a0Xconfig123",
+		ActiveCategoryName:     "Solicitação IPTU",
+	}
+	item := MapCartaServiceDetail(d, "https://prefeitura.rio")
+	if item == nil {
+		t.Fatal("nil item")
+	}
+	var stored clients.CartaServiceDetail
+	if err := json.Unmarshal(item.SourceData, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Flags.ActiveCategoryConfigID != "a0Xconfig123" {
+		t.Fatalf("activeCategoryConfigId=%q", stored.Flags.ActiveCategoryConfigID)
+	}
+	if stored.Flags.ActiveCategoryName != "Solicitação IPTU" {
+		t.Fatalf("activeCategoryName=%q", stored.Flags.ActiveCategoryName)
 	}
 }
 
@@ -612,12 +662,15 @@ func TestFullSync_DeduplicatesSlugAcrossSubthemes(t *testing.T) {
 }
 
 func TestSyncRecord_HappyAndRedirect(t *testing.T) {
+	detail := sampleDetail("new", "Novo")
+	detail.SlugHistory = []string{"legacy-slug"}
 	client := &stubCartaClient{
 		redirects: map[string]string{"old": "new"},
-		details:   map[string]*clients.CartaServiceDetail{"new": sampleDetail("new", "Novo")},
+		details:   map[string]*clients.CartaServiceDetail{"new": detail},
 	}
 	repo := &stubSyncRepo{}
-	svc := newTestSync(client, repo)
+	hier := &stubHierarchyRepo{}
+	svc := newSalesForceSyncService(client, repo, hier, "https://prefeitura.rio", 2)
 
 	if err := svc.SyncRecord(context.Background(), "old"); err != nil {
 		t.Fatal(err)
@@ -627,6 +680,12 @@ func TestSyncRecord_HappyAndRedirect(t *testing.T) {
 	}
 	if len(repo.softDeleted) != 1 || repo.softDeleted[0] != "old" {
 		t.Fatalf("softDeleted=%v", repo.softDeleted)
+	}
+	if hier.aliases["old"] != "new" {
+		t.Fatalf("alias from 301: %v", hier.aliases)
+	}
+	if hier.aliases["legacy-slug"] != "new" {
+		t.Fatalf("alias from slugHistory: %v", hier.aliases)
 	}
 }
 

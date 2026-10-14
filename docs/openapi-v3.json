@@ -310,7 +310,7 @@
     },
     "/api/public/services/{slug}": {
       "get": {
-        "description": "Retorna o payload completo do serviço a partir de catalog_items.source_data.",
+        "description": "Retorna o payload completo do serviço publicado a partir de catalog_items.source_data. Slugs antigos respondem 301 com {\"redirect\":\"<slug-canonico>\"} (sem header Location).",
         "tags": [
           "carta"
         ],
@@ -333,6 +333,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/v1.cartaDetailJSON"
+                }
+              }
+            }
+          },
+          "301": {
+            "description": "Moved Permanently",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.cartaServiceRedirectJSON"
                 }
               }
             }
@@ -434,7 +444,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/v1.cartaPagedJSON"
+                  "$ref": "#/components/schemas/v1.cartaServicesPagedJSON"
                 }
               }
             }
@@ -522,7 +532,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/v1.cartaPagedJSON"
+                  "$ref": "#/components/schemas/v1.cartaThemesPagedJSON"
                 }
               }
             }
@@ -598,7 +608,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/v1.cartaPagedJSON"
+                  "$ref": "#/components/schemas/v1.cartaSubthemesPagedJSON"
                 }
               }
             }
@@ -1269,6 +1279,230 @@
       }
     },
     "schemas": {
+      "clients.CartaButton": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "order": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "clients.CartaChannel": {
+        "type": "object",
+        "properties": {
+          "channelType": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "endereco": {
+            "type": "string"
+          },
+          "mapUrl": {
+            "type": "string"
+          },
+          "order": {
+            "type": "integer"
+          },
+          "titulo": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "whatsappLink": {
+            "type": "string"
+          }
+        }
+      },
+      "clients.CartaHowToRequest": {
+        "type": "object",
+        "properties": {
+          "exclusions": {
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "requiredDocs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "serviceResult": {
+            "type": "string"
+          }
+        }
+      },
+      "clients.CartaLegislation": {
+        "type": "object",
+        "properties": {
+          "order": {
+            "type": "integer"
+          },
+          "titulo": {
+            "type": "string"
+          }
+        }
+      },
+      "clients.CartaServiceDetail": {
+        "type": "object",
+        "properties": {
+          "articleId": {
+            "type": "string"
+          },
+          "articleStatus": {
+            "type": "string"
+          },
+          "articleVersion": {
+            "type": "integer"
+          },
+          "buttons": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/clients.CartaButton"
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/clients.CartaChannel"
+            }
+          },
+          "createdDate": {
+            "type": "string"
+          },
+          "flags": {
+            "$ref": "#/components/schemas/clients.CartaServiceFlags"
+          },
+          "howToRequest": {
+            "$ref": "#/components/schemas/clients.CartaHowToRequest"
+          },
+          "info": {
+            "$ref": "#/components/schemas/clients.CartaServiceInfo"
+          },
+          "lastModifiedDate": {
+            "type": "string"
+          },
+          "lastPublishedDate": {
+            "type": "string"
+          },
+          "legislation": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/clients.CartaLegislation"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "responsibleOrgUnit": {
+            "type": "string"
+          },
+          "responsibleOrgUnitShortName": {
+            "type": "string"
+          },
+          "serviceCatalogId": {
+            "type": "string"
+          },
+          "servicePoints": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "slug": {
+            "type": "string"
+          },
+          "slugHistory": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subthemeName": {
+            "type": "string"
+          },
+          "subthemeSlug": {
+            "type": "string"
+          },
+          "themeName": {
+            "type": "string"
+          },
+          "themeSlug": {
+            "type": "string"
+          }
+        }
+      },
+      "clients.CartaServiceFlags": {
+        "type": "object",
+        "properties": {
+          "activeCategoryConfigId": {
+            "type": "string"
+          },
+          "activeCategoryName": {
+            "type": "string"
+          },
+          "allowTicketSubmission": {
+            "type": "boolean"
+          },
+          "allowsAnonymity": {
+            "type": "boolean"
+          }
+        }
+      },
+      "clients.CartaServiceInfo": {
+        "type": "object",
+        "properties": {
+          "cost": {
+            "type": "string"
+          },
+          "costNotes": {
+            "type": "string"
+          },
+          "costValue": {
+            "type": "number"
+          },
+          "fullDescription": {
+            "type": "string"
+          },
+          "isFree": {
+            "type": "boolean"
+          },
+          "serviceDeadline": {
+            "type": "string"
+          },
+          "serviceDeadlineNotes": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "targetAudience": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "models.CartaMeta": {
         "type": "object",
         "properties": {
@@ -1282,6 +1516,87 @@
             "type": "integer"
           },
           "total_pages": {
+            "type": "integer"
+          }
+        }
+      },
+      "models.CartaServiceSummary": {
+        "type": "object",
+        "properties": {
+          "articleId": {
+            "type": "string"
+          },
+          "articleStatus": {
+            "type": "string"
+          },
+          "createdDate": {
+            "type": "string"
+          },
+          "isFree": {
+            "type": "boolean"
+          },
+          "lastModifiedDate": {
+            "type": "string"
+          },
+          "lastPublishedDate": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "responsibleOrgUnit": {
+            "type": "string"
+          },
+          "responsibleOrgUnitShortName": {
+            "type": "string"
+          },
+          "serviceCatalogId": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "subthemeSlug": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "themeSlug": {
+            "type": "string"
+          }
+        }
+      },
+      "models.CartaSubtheme": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "publishedServices": {
+            "type": "integer"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "themeSlug": {
+            "type": "string"
+          }
+        }
+      },
+      "models.CartaTheme": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "publishedServices": {
+            "type": "integer"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "subthemesCount": {
             "type": "integer"
           }
         }
@@ -1709,14 +2024,56 @@
         "type": "object",
         "properties": {
           "data": {
-            "type": "object"
+            "$ref": "#/components/schemas/clients.CartaServiceDetail"
           }
         }
       },
-      "v1.cartaPagedJSON": {
+      "v1.cartaServiceRedirectJSON": {
         "type": "object",
         "properties": {
-          "data": {},
+          "redirect": {
+            "type": "string",
+            "example": "iptu-2026"
+          }
+        }
+      },
+      "v1.cartaServicesPagedJSON": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/models.CartaServiceSummary"
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/models.CartaMeta"
+          }
+        }
+      },
+      "v1.cartaSubthemesPagedJSON": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/models.CartaSubtheme"
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/models.CartaMeta"
+          }
+        }
+      },
+      "v1.cartaThemesPagedJSON": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/models.CartaTheme"
+            }
+          },
           "meta": {
             "$ref": "#/components/schemas/models.CartaMeta"
           }
