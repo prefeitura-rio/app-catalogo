@@ -289,6 +289,7 @@ func (h *stubHierarchyRepo) UpsertSlugAlias(ctx context.Context, oldSlug, canoni
 		h.aliases = map[string]string{}
 	}
 	h.aliases[oldSlug] = canonicalSlug
+	delete(h.aliases, canonicalSlug)
 	return nil
 }
 
@@ -303,6 +304,16 @@ func (h *stubHierarchyRepo) UpsertSlugAliases(ctx context.Context, canonicalSlug
 			continue
 		}
 		h.aliases[old] = canonicalSlug
+	}
+	delete(h.aliases, canonicalSlug)
+	return nil
+}
+
+func (h *stubHierarchyRepo) DeleteSlugAlias(ctx context.Context, oldSlug string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.aliases != nil {
+		delete(h.aliases, oldSlug)
 	}
 	return nil
 }
@@ -467,6 +478,48 @@ func TestFullSync_HappyPath(t *testing.T) {
 	}
 	if len(repo.eventUpdates) == 0 || repo.eventUpdates[len(repo.eventUpdates)-1] != models.SyncStatusCompleted {
 		t.Fatalf("eventUpdates=%v", repo.eventUpdates)
+	}
+}
+
+func TestFullSync_RedirectKeepsCanonicalInSeen(t *testing.T) {
+	client := &stubCartaClient{
+		themes:    []clients.CartaTheme{{Slug: "tributos", Name: "Tributos"}},
+		subthemes: map[string][]clients.CartaSubtheme{"tributos": {{Slug: "iptu", Name: "IPTU"}}},
+		services: map[string][]clients.CartaServiceListItem{
+			"iptu": {sampleListItem("old-slug", "2026-08-20T00:00:00.000Z")},
+		},
+		redirects: map[string]string{"old-slug": "new-slug"},
+		details: map[string]*clients.CartaServiceDetail{
+			"new-slug": sampleDetail("new-slug", "Serviço novo"),
+		},
+	}
+	repo := &stubSyncRepo{}
+	hier := &stubHierarchyRepo{}
+	svc := newTestSyncWithHierarchy(client, repo, hier)
+
+	if err := svc.FullSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.upserted) != 1 || repo.upserted[0].ExternalID != "new-slug" {
+		t.Fatalf("upserted=%v", repo.upserted)
+	}
+	if len(repo.orphanKept) != 1 || repo.orphanKept[0] != "new-slug" {
+		t.Fatalf("orphanKept must keep canonical, got %v", repo.orphanKept)
+	}
+	if hier.aliases["old-slug"] != "new-slug" {
+		t.Fatalf("aliases=%v", hier.aliases)
+	}
+}
+
+func TestResolveSeenSlugs(t *testing.T) {
+	listed := []clients.CartaServiceListItem{
+		{Slug: "a"},
+		{Slug: "old"},
+		{Slug: ""},
+	}
+	got := resolveSeenSlugs(listed, map[string]string{"old": "canonical"})
+	if len(got) != 2 || got[0] != "a" || got[1] != "canonical" {
+		t.Fatalf("got=%v", got)
 	}
 }
 

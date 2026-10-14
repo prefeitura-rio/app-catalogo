@@ -308,6 +308,7 @@ func enrichCartaServiceSummary(sum *models.CartaServiceSummary, sourceData []byt
 }
 
 // UpsertSlugAlias grava/atualiza o mapeamento slug antigo → canônico.
+// Também remove qualquer alias em que o canônico figure como old_slug (evita ciclo).
 func (r *CartaRepository) UpsertSlugAlias(ctx context.Context, oldSlug, canonicalSlug string) error {
 	oldSlug = strings.TrimSpace(oldSlug)
 	canonicalSlug = strings.TrimSpace(canonicalSlug)
@@ -321,7 +322,10 @@ func (r *CartaRepository) UpsertSlugAlias(ctx context.Context, oldSlug, canonica
 			canonical_slug = EXCLUDED.canonical_slug,
 			updated_at = NOW()
 	`, oldSlug, canonicalSlug)
-	return err
+	if err != nil {
+		return err
+	}
+	return r.DeleteSlugAlias(ctx, canonicalSlug)
 }
 
 // UpsertSlugAliases grava vários aliases apontando para o mesmo slug canônico.
@@ -335,7 +339,21 @@ func (r *CartaRepository) UpsertSlugAliases(ctx context.Context, canonicalSlug s
 			return err
 		}
 	}
-	return nil
+	// Garante limpeza mesmo quando slugHistory está vazio (só promove o canônico).
+	return r.DeleteSlugAlias(ctx, canonicalSlug)
+}
+
+// DeleteSlugAlias remove um mapeamento cujo old_slug deixou de ser alias
+// (ex.: o slug passou a ser o canônico do serviço).
+func (r *CartaRepository) DeleteSlugAlias(ctx context.Context, oldSlug string) error {
+	oldSlug = strings.TrimSpace(oldSlug)
+	if oldSlug == "" {
+		return nil
+	}
+	_, err := r.db.Exec(ctx, `
+		DELETE FROM carta_service_slug_aliases WHERE old_slug = $1
+	`, oldSlug)
+	return err
 }
 
 // ResolveSlugAlias retorna o slug canônico para um slug antigo, se existir.

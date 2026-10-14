@@ -56,6 +56,7 @@ type cartaHierarchyRepository interface {
 	RefreshHierarchyCounts(ctx context.Context) error
 	UpsertSlugAlias(ctx context.Context, oldSlug, canonicalSlug string) error
 	UpsertSlugAliases(ctx context.Context, canonicalSlug string, oldSlugs []string) error
+	DeleteSlugAlias(ctx context.Context, oldSlug string) error
 }
 
 // SalesForceSyncService sincroniza a Carta de Serviços (API CloudHub) para catalog_items.
@@ -187,7 +188,7 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 		Int("to_fetch", len(toFetch)).
 		Msg("salesforce: listagem concluída")
 
-	details, fetchFailed, fetchErr := s.fetchDetails(ctx, toFetch)
+	details, redirects, fetchFailed, fetchErr := s.fetchDetails(ctx, toFetch)
 	if fetchErr != nil && len(details) == 0 {
 		s.finishEvent(ctx, eventID, startedAt, models.SyncStatusFailed, 0, fetchFailed, fetchErr.Error())
 		return fetchErr
@@ -224,12 +225,9 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 	}
 
 	var softErr error
-	seen := make([]string, 0, len(listed))
-	for _, item := range listed {
-		if item.Slug != "" {
-			seen = append(seen, item.Slug)
-		}
-	}
+	// Substitui slugs da listagem pelos canônicos descobertos via 301, para não
+	// soft-deletar o serviço recém-gravado e manter o slug antigo ativo.
+	seen := resolveSeenSlugs(listed, redirects)
 	if len(seen) == 0 {
 		log.Warn().Msg("salesforce: listagem retornou 0 serviços; SoftDelete de órfãos ignorado")
 	} else if deactivated, err := s.repo.SoftDeleteActiveNotIn(ctx, models.SourceSalesForce, seen); err != nil {
@@ -434,21 +432,19 @@ func filterServicesNeedingDetail(listed []clients.CartaServiceListItem, since ti
 // fetchDetails busca detalhes em paralelo.
 // Falha em um item não cancela o lote (degradação parcial): o errgroup só
 // limita concorrência; as goroutines retornam nil de propósito.
+// redirects mapeia slug da listagem → slug canônico quando houve 301.
 func (s *SalesForceSyncService) fetchDetails(
 	ctx context.Context,
 	items []clients.CartaServiceListItem,
-) ([]*clients.CartaServiceDetail, int, error) {
+) ([]*clients.CartaServiceDetail, map[string]string, int, error) {
 	if len(items) == 0 {
-		return nil, 0, nil
+		return nil, nil, 0, nil
 	}
 
-	type fetchRedirect struct {
-		from, to string
-	}
 	var (
 		mu        sync.Mutex
 		details   []*clients.CartaServiceDetail
-		redirects []fetchRedirect
+		redirects = make(map[string]string)
 		failed    int
 		firstErr  error
 	)
@@ -472,8 +468,8 @@ func (s *SalesForceSyncService) fetchDetails(
 				return nil
 			}
 			details = append(details, detail)
-			if item.Slug != canonical {
-				redirects = append(redirects, fetchRedirect{from: item.Slug, to: canonical})
+			if item.Slug != canonical && canonical != "" {
+				redirects[item.Slug] = canonical
 			}
 			return nil
 		})
@@ -482,14 +478,31 @@ func (s *SalesForceSyncService) fetchDetails(
 	_ = g.Wait()
 
 	if s.hierarchy != nil {
-		for _, redir := range redirects {
-			if aliasErr := s.hierarchy.UpsertSlugAlias(ctx, redir.from, redir.to); aliasErr != nil {
-				log.Warn().Err(aliasErr).Str("old_slug", redir.from).Str("canonical", redir.to).
+		for from, to := range redirects {
+			if aliasErr := s.hierarchy.UpsertSlugAlias(ctx, from, to); aliasErr != nil {
+				log.Warn().Err(aliasErr).Str("old_slug", from).Str("canonical", to).
 					Msg("salesforce: falha ao gravar alias de redirect na listagem")
 			}
 		}
 	}
-	return details, failed, firstErr
+	return details, redirects, failed, firstErr
+}
+
+// resolveSeenSlugs monta a lista de external_ids a preservar no SoftDelete,
+// trocando slugs da listagem pelos canônicos quando houve redirect 301.
+func resolveSeenSlugs(listed []clients.CartaServiceListItem, redirects map[string]string) []string {
+	seen := make([]string, 0, len(listed))
+	for _, item := range listed {
+		if item.Slug == "" {
+			continue
+		}
+		slug := item.Slug
+		if to := strings.TrimSpace(redirects[slug]); to != "" {
+			slug = to
+		}
+		seen = append(seen, slug)
+	}
+	return seen
 }
 
 // persistSlugAliases grava o mapeamento descoberto no sync (301 + slugHistory).
@@ -507,6 +520,11 @@ func (s *SalesForceSyncService) persistSlugAliases(
 	}
 	if canonical == "" {
 		return
+	}
+	// Canônico não pode permanecer como old_slug (ciclo de redirect).
+	if err := s.hierarchy.DeleteSlugAlias(ctx, canonical); err != nil {
+		log.Warn().Err(err).Str("canonical", canonical).
+			Msg("salesforce: falha ao limpar alias obsoleto do slug canônico")
 	}
 	if requested := strings.TrimSpace(requestedSlug); requested != "" && requested != canonical {
 		if err := s.hierarchy.UpsertSlugAlias(ctx, requested, canonical); err != nil {
