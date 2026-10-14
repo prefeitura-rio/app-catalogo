@@ -48,6 +48,8 @@ func TestEnrichCartaServiceSummary(t *testing.T) {
 		ArticleStatus: "active",
 	}
 	enrichCartaServiceSummary(&sum, []byte(`{
+		"serviceCatalogId": "a0Xabc",
+		"articleId": "ka0xyz",
 		"articleStatus": "Online",
 		"createdDate": "2024-01-01T00:00:00.000Z",
 		"lastModifiedDate": "2024-02-01T00:00:00.000Z",
@@ -57,6 +59,9 @@ func TestEnrichCartaServiceSummary(t *testing.T) {
 	}`))
 	if sum.ArticleStatus != "Online" {
 		t.Fatalf("articleStatus=%s", sum.ArticleStatus)
+	}
+	if sum.ServiceCatalogID != "a0Xabc" || sum.ArticleID != "ka0xyz" {
+		t.Fatalf("ids: catalog=%q article=%q", sum.ServiceCatalogID, sum.ArticleID)
 	}
 	if sum.Summary != "<p>Resumo</p>" || !sum.IsFree {
 		t.Fatalf("info: summary=%q free=%v", sum.Summary, sum.IsFree)

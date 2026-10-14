@@ -152,8 +152,10 @@ type CartaServiceDetail struct {
 }
 
 type CartaServiceFlags struct {
-	AllowsAnonymity       bool `json:"allowsAnonymity"`
-	AllowTicketSubmission bool `json:"allowTicketSubmission"`
+	AllowsAnonymity        bool   `json:"allowsAnonymity"`
+	AllowTicketSubmission  bool   `json:"allowTicketSubmission"`
+	ActiveCategoryConfigID string `json:"activeCategoryConfigId,omitempty"`
+	ActiveCategoryName     string `json:"activeCategoryName,omitempty"`
 }
 
 type CartaServiceInfo struct {

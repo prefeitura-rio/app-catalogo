@@ -19,6 +19,7 @@ type stubCartaStore struct {
 	subthemes      map[string][]models.CartaSubtheme
 	services       map[string][]models.CartaServiceSummary
 	details        map[string]json.RawMessage
+	redirects      map[string]string
 	err            error
 	lastPage       int
 	lastPerPage    int
@@ -59,11 +60,14 @@ func (s *stubCartaStore) ListServicesBySubtheme(ctx context.Context, subthemeSlu
 	return items, models.CartaMeta{Page: page, PerPage: perPage, Total: len(items), TotalPages: 1}, nil
 }
 
-func (s *stubCartaStore) GetServiceDetail(ctx context.Context, slug string) (json.RawMessage, error) {
+func (s *stubCartaStore) GetServiceDetail(ctx context.Context, slug string) (json.RawMessage, string, error) {
 	if s.err != nil {
-		return nil, s.err
+		return nil, "", s.err
 	}
-	return s.details[slug], nil
+	if to, ok := s.redirects[slug]; ok {
+		return nil, to, nil
+	}
+	return s.details[slug], "", nil
 }
 
 func setupCartaRouter(h *CartaHandler) *gin.Engine {
@@ -102,12 +106,11 @@ func TestCartaHandler_ListThemesLocal(t *testing.T) {
 	if store.lastPage != 2 || store.lastPerPage != 10 || !store.lastIncludeEmp {
 		t.Fatalf("pagination/include_empty: page=%d per=%d empty=%v", store.lastPage, store.lastPerPage, store.lastIncludeEmp)
 	}
-	var body cartaPagedJSON
+	var body cartaThemesPagedJSON
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatalf("json: %v", err)
 	}
-	data, ok := body.Data.([]any)
-	if !ok || len(data) != 1 {
+	if len(body.Data) != 1 {
 		t.Fatalf("data=%v", body.Data)
 	}
 }
@@ -169,14 +172,36 @@ func TestCartaHandler_GetServiceLocal(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if string(body.Data) != `{"slug":"iptu","name":"IPTU"}` {
-		t.Fatalf("data=%s", body.Data)
+	if body.Data.Slug != "iptu" || body.Data.Name != "IPTU" {
+		t.Fatalf("data=%+v", body.Data)
 	}
 
 	w2 := httptest.NewRecorder()
 	r.ServeHTTP(w2, httptest.NewRequest(http.MethodGet, "/api/public/services/missing", nil))
 	if w2.Code != http.StatusNotFound {
 		t.Fatalf("status=%d", w2.Code)
+	}
+}
+
+func TestCartaHandler_GetServiceRedirect(t *testing.T) {
+	h := newCartaHandler(&stubCartaStore{
+		redirects: map[string]string{"iptu-antigo": "iptu-2026"},
+	})
+	r := setupCartaRouter(h)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/public/services/iptu-antigo", nil))
+	if w.Code != http.StatusMovedPermanently {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if loc := w.Header().Get("Location"); loc != "" {
+		t.Fatalf("Location header must be empty, got %q", loc)
+	}
+	var body cartaServiceRedirectJSON
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Redirect != "iptu-2026" {
+		t.Fatalf("redirect=%q", body.Redirect)
 	}
 }
 

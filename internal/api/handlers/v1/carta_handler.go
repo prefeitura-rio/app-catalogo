@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
 
+	"github.com/prefeitura-rio/app-catalogo/internal/clients"
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
 	"github.com/prefeitura-rio/app-catalogo/internal/repository"
 )
@@ -19,7 +20,7 @@ type cartaLocalStore interface {
 	ListThemes(ctx context.Context, page, perPage int, includeEmpty bool) ([]models.CartaTheme, models.CartaMeta, error)
 	ListSubthemes(ctx context.Context, themeSlug string, page, perPage int) ([]models.CartaSubtheme, models.CartaMeta, error)
 	ListServicesBySubtheme(ctx context.Context, subthemeSlug string, page, perPage int) ([]models.CartaServiceSummary, models.CartaMeta, error)
-	GetServiceDetail(ctx context.Context, slug string) (json.RawMessage, error)
+	GetServiceDetail(ctx context.Context, slug string) (data json.RawMessage, redirectTo string, err error)
 }
 
 // CartaHandler expõe a hierarquia themes → subthemes → services a partir do banco local.
@@ -39,13 +40,32 @@ func newCartaHandler(store cartaLocalStore) *CartaHandler {
 	return &CartaHandler{store: store}
 }
 
-type cartaPagedJSON struct {
-	Meta models.CartaMeta `json:"meta"`
-	Data any              `json:"data"`
+// cartaThemesPagedJSON tipa GET /api/public/themes para o OpenAPI.
+type cartaThemesPagedJSON struct {
+	Meta models.CartaMeta    `json:"meta"`
+	Data []models.CartaTheme `json:"data"`
 }
 
+// cartaSubthemesPagedJSON tipa GET /api/public/themes/{slug}/subthemes para o OpenAPI.
+type cartaSubthemesPagedJSON struct {
+	Meta models.CartaMeta       `json:"meta"`
+	Data []models.CartaSubtheme `json:"data"`
+}
+
+// cartaServicesPagedJSON tipa GET /api/public/subthemes/{slug}/services para o OpenAPI.
+type cartaServicesPagedJSON struct {
+	Meta models.CartaMeta             `json:"meta"`
+	Data []models.CartaServiceSummary `json:"data"`
+}
+
+// cartaDetailJSON tipa GET /api/public/services/{slug} para o OpenAPI (shape CloudHub).
 type cartaDetailJSON struct {
-	Data json.RawMessage `json:"data" swaggertype:"object"`
+	Data clients.CartaServiceDetail `json:"data"`
+}
+
+// cartaServiceRedirectJSON é o corpo de 301 quando o slug é um alias antigo.
+type cartaServiceRedirectJSON struct {
+	Redirect string `json:"redirect" example:"iptu-2026"`
 }
 
 // ListThemes godoc
@@ -56,7 +76,7 @@ type cartaDetailJSON struct {
 // @Param        page           query  int   false  "Página (1-based)" default(1)
 // @Param        per_page       query  int   false  "Itens por página (máx. 100)" default(100)
 // @Param        include_empty  query  bool  false  "Inclui temas sem serviços publicados"
-// @Success      200  {object}  cartaPagedJSON
+// @Success      200  {object}  cartaThemesPagedJSON
 // @Failure      500  {object}  map[string]string
 // @Failure      503  {object}  map[string]string
 // @Router       /api/public/themes [get]
@@ -75,7 +95,7 @@ func (h *CartaHandler) ListThemes(c *gin.Context) {
 	if data == nil {
 		data = []models.CartaTheme{}
 	}
-	c.JSON(http.StatusOK, cartaPagedJSON{Meta: meta, Data: data})
+	c.JSON(http.StatusOK, cartaThemesPagedJSON{Meta: meta, Data: data})
 }
 
 // ListSubthemes godoc
@@ -86,7 +106,7 @@ func (h *CartaHandler) ListThemes(c *gin.Context) {
 // @Param        slug      path   string  true   "Slug do tema"
 // @Param        page      query  int     false  "Página (1-based)" default(1)
 // @Param        per_page  query  int     false  "Itens por página (máx. 100)" default(100)
-// @Success      200  {object}  cartaPagedJSON
+// @Success      200  {object}  cartaSubthemesPagedJSON
 // @Failure      400  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
 // @Failure      503  {object}  map[string]string
@@ -110,7 +130,7 @@ func (h *CartaHandler) ListSubthemes(c *gin.Context) {
 	if data == nil {
 		data = []models.CartaSubtheme{}
 	}
-	c.JSON(http.StatusOK, cartaPagedJSON{Meta: meta, Data: data})
+	c.JSON(http.StatusOK, cartaSubthemesPagedJSON{Meta: meta, Data: data})
 }
 
 // ListServicesBySubtheme godoc
@@ -121,7 +141,7 @@ func (h *CartaHandler) ListSubthemes(c *gin.Context) {
 // @Param        slug      path   string  true   "Slug do subtema"
 // @Param        page      query  int     false  "Página (1-based)" default(1)
 // @Param        per_page  query  int     false  "Itens por página (máx. 100)" default(100)
-// @Success      200  {object}  cartaPagedJSON
+// @Success      200  {object}  cartaServicesPagedJSON
 // @Failure      400  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
 // @Failure      503  {object}  map[string]string
@@ -145,16 +165,17 @@ func (h *CartaHandler) ListServicesBySubtheme(c *gin.Context) {
 	if data == nil {
 		data = []models.CartaServiceSummary{}
 	}
-	c.JSON(http.StatusOK, cartaPagedJSON{Meta: meta, Data: data})
+	c.JSON(http.StatusOK, cartaServicesPagedJSON{Meta: meta, Data: data})
 }
 
 // GetService godoc
 // @Summary      Detalhe de um serviço da Carta
-// @Description  Retorna o payload completo do serviço a partir de catalog_items.source_data.
+// @Description  Retorna o payload completo do serviço publicado a partir de catalog_items.source_data. Slugs antigos respondem 301 com {"redirect":"<slug-canonico>"} (sem header Location).
 // @Tags         carta
 // @Produce      json
 // @Param        slug  path  string  true  "Slug do serviço"
 // @Success      200  {object}  cartaDetailJSON
+// @Success      301  {object}  cartaServiceRedirectJSON
 // @Failure      400  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
@@ -170,16 +191,27 @@ func (h *CartaHandler) GetService(c *gin.Context) {
 		return
 	}
 
-	raw, err := h.store.GetServiceDetail(c.Request.Context(), slug)
+	raw, redirectTo, err := h.store.GetServiceDetail(c.Request.Context(), slug)
 	if err != nil {
 		h.storeError(c, err)
+		return
+	}
+	if redirectTo != "" {
+		// 301 com corpo JSON; sem Location para o client não consumir o redirect HTTP.
+		c.JSON(http.StatusMovedPermanently, cartaServiceRedirectJSON{Redirect: redirectTo})
 		return
 	}
 	if len(raw) == 0 {
 		c.JSON(http.StatusNotFound, gin.H{"error": "serviço não encontrado"})
 		return
 	}
-	c.JSON(http.StatusOK, cartaDetailJSON{Data: raw})
+	var detail clients.CartaServiceDetail
+	if err := json.Unmarshal(raw, &detail); err != nil {
+		log.Error().Err(err).Str("slug", slug).Msg("carta: source_data inválido")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao consultar carta de serviços"})
+		return
+	}
+	c.JSON(http.StatusOK, cartaDetailJSON{Data: detail})
 }
 
 func (h *CartaHandler) unavailable(c *gin.Context) bool {

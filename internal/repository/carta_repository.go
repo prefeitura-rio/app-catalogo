@@ -274,6 +274,12 @@ func enrichCartaServiceSummary(sum *models.CartaServiceSummary, sourceData []byt
 	if err := json.Unmarshal(sourceData, &detail); err != nil || detail == nil {
 		return
 	}
+	if v, ok := detail["serviceCatalogId"].(string); ok {
+		sum.ServiceCatalogID = v
+	}
+	if v, ok := detail["articleId"].(string); ok {
+		sum.ArticleID = v
+	}
 	if v, ok := detail["articleStatus"].(string); ok && v != "" {
 		sum.ArticleStatus = v
 	}
@@ -301,25 +307,105 @@ func enrichCartaServiceSummary(sum *models.CartaServiceSummary, sourceData []byt
 	}
 }
 
-// GetServiceDetail retorna o source_data completo do serviço pelo slug (external_id).
-func (r *CartaRepository) GetServiceDetail(ctx context.Context, slug string) (json.RawMessage, error) {
+// UpsertSlugAlias grava/atualiza o mapeamento slug antigo → canônico.
+// Também remove qualquer alias em que o canônico figure como old_slug (evita ciclo).
+func (r *CartaRepository) UpsertSlugAlias(ctx context.Context, oldSlug, canonicalSlug string) error {
+	oldSlug = strings.TrimSpace(oldSlug)
+	canonicalSlug = strings.TrimSpace(canonicalSlug)
+	if oldSlug == "" || canonicalSlug == "" || oldSlug == canonicalSlug {
+		return nil
+	}
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO carta_service_slug_aliases (old_slug, canonical_slug)
+		VALUES ($1, $2)
+		ON CONFLICT (old_slug) DO UPDATE SET
+			canonical_slug = EXCLUDED.canonical_slug,
+			updated_at = NOW()
+	`, oldSlug, canonicalSlug)
+	if err != nil {
+		return err
+	}
+	return r.DeleteSlugAlias(ctx, canonicalSlug)
+}
+
+// UpsertSlugAliases grava vários aliases apontando para o mesmo slug canônico.
+func (r *CartaRepository) UpsertSlugAliases(ctx context.Context, canonicalSlug string, oldSlugs []string) error {
+	canonicalSlug = strings.TrimSpace(canonicalSlug)
+	if canonicalSlug == "" {
+		return nil
+	}
+	for _, old := range oldSlugs {
+		if err := r.UpsertSlugAlias(ctx, old, canonicalSlug); err != nil {
+			return err
+		}
+	}
+	// Garante limpeza mesmo quando slugHistory está vazio (só promove o canônico).
+	return r.DeleteSlugAlias(ctx, canonicalSlug)
+}
+
+// DeleteSlugAlias remove um mapeamento cujo old_slug deixou de ser alias
+// (ex.: o slug passou a ser o canônico do serviço).
+func (r *CartaRepository) DeleteSlugAlias(ctx context.Context, oldSlug string) error {
+	oldSlug = strings.TrimSpace(oldSlug)
+	if oldSlug == "" {
+		return nil
+	}
+	_, err := r.db.Exec(ctx, `
+		DELETE FROM carta_service_slug_aliases WHERE old_slug = $1
+	`, oldSlug)
+	return err
+}
+
+// ResolveSlugAlias retorna o slug canônico para um slug antigo, se existir.
+func (r *CartaRepository) ResolveSlugAlias(ctx context.Context, oldSlug string) (string, error) {
+	oldSlug = strings.TrimSpace(oldSlug)
+	if oldSlug == "" {
+		return "", nil
+	}
+	var canonical string
+	err := r.db.QueryRow(ctx, `
+		SELECT canonical_slug
+		FROM carta_service_slug_aliases
+		WHERE old_slug = $1
+		LIMIT 1`, oldSlug).Scan(&canonical)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return canonical, nil
+}
+
+// GetServiceDetail retorna o source_data do serviço publicado pelo slug (external_id).
+// Se o slug for um alias antigo, retorna redirectTo com o slug canônico (data vazio).
+func (r *CartaRepository) GetServiceDetail(ctx context.Context, slug string) (data json.RawMessage, redirectTo string, err error) {
 	slug = strings.TrimSpace(slug)
 	if slug == "" {
-		return nil, fmt.Errorf("slug vazio")
+		return nil, "", fmt.Errorf("slug vazio")
 	}
 	var raw []byte
-	err := r.db.QueryRow(ctx, `
+	err = r.db.QueryRow(ctx, `
 		SELECT source_data
 		FROM catalog_items
 		WHERE source = 'salesforce'
 		  AND external_id = $1
 		  AND deleted_at IS NULL
+		  AND status = 'active'
 		LIMIT 1`, slug).Scan(&raw)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+	if err == nil {
+		return json.RawMessage(raw), "", nil
 	}
-	if err != nil {
-		return nil, err
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, "", err
 	}
-	return json.RawMessage(raw), nil
+
+	canonical, aliasErr := r.ResolveSlugAlias(ctx, slug)
+	if aliasErr != nil {
+		return nil, "", aliasErr
+	}
+	if canonical != "" && canonical != slug {
+		return nil, canonical, nil
+	}
+	return nil, "", nil
 }

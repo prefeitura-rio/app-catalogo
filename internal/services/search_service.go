@@ -236,7 +236,10 @@ func sanitizedSearchMetadata(itemType models.ItemType, sourceData json.RawMessag
 
 	allowedFields := []string{"id", "slug"}
 	if itemType == models.TypeService {
-		allowedFields = append(allowedFields, "tema_geral", "tema_especifico", "Tema__c")
+		allowedFields = append(allowedFields,
+			"tema_geral", "tema_especifico", "Tema__c",
+			"themeSlug", "themeName",
+		)
 	}
 	sanitizedFields := make(map[string]json.RawMessage, len(allowedFields))
 	for _, allowedField := range allowedFields {

@@ -408,8 +408,9 @@ paths:
       tags: [Carta]
       summary: Detalhe completo de um serviço
       description: |
-        Retorna o detalhe completo do serviço a partir de `catalog_items.source_data`
-        (sincronizado do CloudHub). Redirects de slug são resolvidos no sync, não nesta API.
+        Retorna o detalhe completo do serviço publicado a partir de `catalog_items.source_data`
+        (sincronizado do CloudHub). Slugs antigos respondem 301 com `{"redirect":"<slug-canonico>"}`
+        sem header Location (o client deve ler o corpo JSON).
       security: []
       parameters:
         - name: slug
@@ -427,6 +428,12 @@ paths:
                 properties:
                   data:
                     $ref: "#/components/schemas/CartaServiceDetail"
+        "301":
+          description: Slug antigo — redirecionar para o canônico (corpo JSON, sem Location)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CartaServiceRedirect"
         "400":
           $ref: "#/components/responses/BadRequest"
         "404":
@@ -1506,24 +1513,73 @@ components:
       properties:
         slug: { type: string }
         name: { type: string }
+        serviceCatalogId: { type: string }
+        articleId: { type: string }
         articleStatus: { type: string }
+        createdDate: { type: string }
         lastModifiedDate: { type: string }
         lastPublishedDate: { type: string }
         summary: { type: string }
         responsibleOrgUnit: { type: string }
+        responsibleOrgUnitShortName: { type: string }
+        isFree: { type: boolean }
+        themeSlug: { type: string }
+        subthemeSlug: { type: string }
+
+    CartaServiceFlags:
+      type: object
+      properties:
+        allowsAnonymity: { type: boolean }
+        allowTicketSubmission: { type: boolean }
+        activeCategoryConfigId: { type: string }
+        activeCategoryName: { type: string }
 
     CartaServiceDetail:
       type: object
-      description: Payload completo do serviço conforme CloudHub (campos adicionais possíveis).
-      additionalProperties: true
+      description: Payload completo do serviço conforme CloudHub (source_data).
       properties:
         slug: { type: string }
         name: { type: string }
+        serviceCatalogId: { type: string }
+        articleId: { type: string }
+        articleVersion: { type: integer }
+        articleStatus: { type: string }
+        createdDate: { type: string }
+        lastModifiedDate: { type: string }
+        lastPublishedDate: { type: string }
+        slugHistory:
+          type: array
+          items: { type: string }
         themeSlug: { type: string }
         themeName: { type: string }
         subthemeSlug: { type: string }
         subthemeName: { type: string }
-        articleStatus: { type: string }
+        responsibleOrgUnit: { type: string }
+        responsibleOrgUnitShortName: { type: string }
+        flags: { $ref: "#/components/schemas/CartaServiceFlags" }
+        info: { type: object }
+        howToRequest: { type: object }
+        channels:
+          type: array
+          items: { type: object }
+        buttons:
+          type: array
+          items: { type: object }
+        legislation:
+          type: array
+          items: { type: object }
+        servicePoints:
+          type: array
+          items: { type: object }
+
+    CartaServiceRedirect:
+      type: object
+      required: [redirect]
+      properties:
+        redirect:
+          type: string
+          description: Slug canônico do serviço
+          example: iptu-2026
 
     CartaPagedThemes:
       type: object

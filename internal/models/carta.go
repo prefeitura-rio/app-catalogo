@@ -36,6 +36,8 @@ type CartaMeta struct {
 type CartaServiceSummary struct {
 	Slug                        string `json:"slug"`
 	Name                        string `json:"name"`
+	ServiceCatalogID            string `json:"serviceCatalogId,omitempty"`
+	ArticleID                   string `json:"articleId,omitempty"`
 	ArticleStatus               string `json:"articleStatus,omitempty"`
 	CreatedDate                 string `json:"createdDate,omitempty"`
 	LastModifiedDate            string `json:"lastModifiedDate,omitempty"`
@@ -46,4 +48,9 @@ type CartaServiceSummary struct {
 	IsFree                      bool   `json:"isFree,omitempty"`
 	ThemeSlug                   string `json:"themeSlug,omitempty"`
 	SubthemeSlug                string `json:"subthemeSlug,omitempty"`
+}
+
+// CartaServiceRedirect é o corpo JSON de 301 quando o slug pedido é um alias antigo.
+type CartaServiceRedirect struct {
+	Redirect string `json:"redirect"`
 }
