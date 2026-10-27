@@ -51,7 +51,7 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 	r.GET("/ready", healthHandler.Ready)
 	r.GET("/metrics", observability.MetricsHandler())
 
-	// Webhook (auth própria — fora do Istio JWT)
+	// Webhook (auth própria por HMAC — fora da verificação do JWT)
 	webhookHandler := v1.NewWebhookHandler(deps.SFSyncSvc, deps.WebhookSecret)
 	r.POST("/api/webhooks/salesforce", webhookHandler.SalesForce)
 
