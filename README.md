@@ -48,6 +48,7 @@ O Adminer (UI do banco) em `http://localhost:8083`.
 | `APPGOAPI_BASE_URL` / `APPGOAPI_SYNC_ENABLED` | URL base e flag de sync do app-go-api |
 | `APP_RMI_URL` | URL base do app-rmi (perfil do cidadão) |
 | `KEYCLOAK_URL` / `KEYCLOAK_REALM` / `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` | Auth para chamadas ao app-rmi e app-go-api |
+| `AUTH_JWT_ISSUER` / `AUTH_JWKS_URL` | Emissor e JWKS para verificar o JWT de `X-Auth-Request-Token` (padrão derivado de `KEYCLOAK_URL`/`KEYCLOAK_REALM`; ver [Autenticação](#autenticação)) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Endpoint SigNoz/OTel (opcional) |
 
 ## Comandos
@@ -110,7 +111,18 @@ GET  /metrics                    métricas Prometheus
 
 ## Autenticação
 
-O Istio valida o JWT e injeta o header `X-Auth-Request-Token`. O serviço decodifica o token sem revalidar. `preferred_username` contém o CPF do cidadão.
+O JWT do cidadão chega no header `X-Auth-Request-Token`. O header pode vir direto do cliente, então o serviço não confia na borda: verifica o token antes de criar qualquer identidade ou papel (`internal/api/middleware`).
+
+- Assinatura conferida com as chaves públicas do JWKS do Keycloak (cache em memória), só com algoritmos assimétricos (RS*, PS*, ES*); `none` e HS* são recusados.
+- Claims obrigatórias: `iss` igual a `AUTH_JWT_ISSUER`, `exp` presente e válido e `iat` coerente (tolerância de 30s).
+- Token ausente, inválido ou sem CPF válido em `preferred_username` não autentica: as rotas `/api/v1/*` respondem 401. Sem emissor/JWKS configurados, nenhum token é aceito (falha fechada).
+- `preferred_username` contém o CPF do cidadão. O papel `ADMIN` vem das roles `admin` ou `go:admin` em `resource_access.superapp.roles`.
+- `aud`/`azp` ainda não são conferidos: qualquer token válido assinado pelo realm é aceito.
+
+| Variável | Padrão |
+|----------|--------|
+| `AUTH_JWT_ISSUER` | `KEYCLOAK_URL` + `/realms/` + `KEYCLOAK_REALM` |
+| `AUTH_JWKS_URL` | `<AUTH_JWT_ISSUER>/protocol/openid-connect/certs` |
 
 CPF **nunca** é persistido — apenas `cpf_hash` (`SHA-256(CPF + CPF_HASH_SALT)`). O CPF em texto vai apenas para a chamada ao app-rmi, em memória.
 

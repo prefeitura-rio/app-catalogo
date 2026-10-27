@@ -7,7 +7,7 @@
 // @securityDefinitions.apikey BearerAuth
 // @in              header
 // @name            Authorization
-// @description     JWT injetado pelo Istio via header X-Auth-Request-Token
+// @description     JWT do Keycloak no header X-Auth-Request-Token, verificado pelo serviço (assinatura via JWKS, emissor e expiração)
 
 package main
 
