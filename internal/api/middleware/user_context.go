@@ -45,7 +45,7 @@ func normalizeCPF(raw string) (string, bool) {
 }
 
 // ExtractUserContext lê o JWT de X-Auth-Request-Token e só cria identidade e
-// papel quando o verifier confere assinatura, emissor e validade. O header pode
+// papel quando o verifier confere assinatura, emissor, exp e iat. O header pode
 // chegar direto do cliente, então nada nele é confiável sem essa verificação.
 // Com verifier nil nenhuma requisição é autenticada (falha fechada).
 func ExtractUserContext(verifier TokenVerifier) gin.HandlerFunc {

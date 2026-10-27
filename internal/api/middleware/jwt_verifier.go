@@ -28,7 +28,7 @@ const (
 	defaultJWTLeeway               = 30 * time.Second
 )
 
-// allowedJWTMethods lista os algoritmos assimétricos aceitos. `none` e HMAC
+// allowedJWTMethods lista os métodos de assinatura assimétricos aceitos. `none` e HMAC
 // (HS*) ficam de fora: o serviço não tem segredo compartilhado com o emissor.
 var allowedJWTMethods = []string{
 	"RS256", "RS384", "RS512",
@@ -84,7 +84,7 @@ func NewJWKSVerifier(issuer, jwksURL string) (*JWKSVerifier, error) {
 	}, nil
 }
 
-// Verify confere algoritmo, assinatura, emissor e validade temporal do token.
+// Verify confere método, assinatura, emissor, exp e iat do token.
 func (v *JWKSVerifier) Verify(ctx context.Context, rawToken string) (*jwtClaims, error) {
 	rawToken = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(rawToken), "Bearer "))
 	if rawToken == "" {
