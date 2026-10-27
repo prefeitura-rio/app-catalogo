@@ -17,7 +17,7 @@ func newCORSRouter(h gin.HandlerFunc) *gin.Engine {
 	return r
 }
 
-func do(r *gin.Engine, method, origin string) *httptest.ResponseRecorder {
+func doCORS(r *gin.Engine, method, origin string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, "/test", nil)
 	if origin != "" {
 		req.Header.Set("Origin", origin)
@@ -32,7 +32,7 @@ func do(r *gin.Engine, method, origin string) *httptest.ResponseRecorder {
 
 func TestCORS_AllowedOrigin(t *testing.T) {
 	r := newCORSRouter(CORSWithOrigins([]string{"https://example.com"}))
-	w := do(r, http.MethodGet, "https://example.com")
+	w := doCORS(r, http.MethodGet, "https://example.com")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
@@ -44,7 +44,7 @@ func TestCORS_AllowedOrigin(t *testing.T) {
 
 func TestCORS_DeniedOrigin(t *testing.T) {
 	r := newCORSRouter(CORSWithOrigins([]string{"https://example.com"}))
-	w := do(r, http.MethodGet, "https://evil.com")
+	w := doCORS(r, http.MethodGet, "https://evil.com")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
@@ -59,7 +59,7 @@ func TestCORS_DeniedOrigin(t *testing.T) {
 
 func TestCORS_NoOriginHeader(t *testing.T) {
 	r := newCORSRouter(CORSWithOrigins([]string{"https://example.com"}))
-	w := do(r, http.MethodGet, "")
+	w := doCORS(r, http.MethodGet, "")
 
 	if w.Code != http.StatusOK || w.Body.String() != "ok" {
 		t.Fatalf("got %d %q, want 200 ok", w.Code, w.Body.String())
@@ -71,7 +71,7 @@ func TestCORS_NoOriginHeader(t *testing.T) {
 
 func TestCORS_PreflightAllowedOrigin(t *testing.T) {
 	r := newCORSRouter(CORSWithOrigins([]string{"https://example.com"}))
-	w := do(r, http.MethodOptions, "https://example.com")
+	w := doCORS(r, http.MethodOptions, "https://example.com")
 
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", w.Code)
@@ -86,7 +86,7 @@ func TestCORS_PreflightAllowedOrigin(t *testing.T) {
 
 func TestCORS_PreflightDeniedOrigin(t *testing.T) {
 	r := newCORSRouter(CORSWithOrigins([]string{"https://example.com"}))
-	w := do(r, http.MethodOptions, "https://evil.com")
+	w := doCORS(r, http.MethodOptions, "https://evil.com")
 
 	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("Allow-Origin = %q, want empty", got)
@@ -95,7 +95,7 @@ func TestCORS_PreflightDeniedOrigin(t *testing.T) {
 
 func TestCORS_DefaultEmptyAllowlist(t *testing.T) {
 	t.Setenv(CORSAllowedOriginsEnv, "")
-	w := do(newCORSRouter(CORS()), http.MethodGet, "https://example.com")
+	w := doCORS(newCORSRouter(CORS()), http.MethodGet, "https://example.com")
 
 	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("Allow-Origin = %q, want empty by default", got)
@@ -107,7 +107,7 @@ func TestCORS_EnvAllowlist(t *testing.T) {
 	if got := ParseAllowedOrigins(" https://a.com/ , https://b.com,*"); !reflect.DeepEqual(got, []string{"https://a.com", "https://b.com"}) {
 		t.Fatalf("ParseAllowedOrigins = %v", got)
 	}
-	w := do(newCORSRouter(CORS()), http.MethodGet, "https://b.com")
+	w := doCORS(newCORSRouter(CORS()), http.MethodGet, "https://b.com")
 	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "https://b.com" {
 		t.Errorf("Allow-Origin = %q, want https://b.com", got)
 	}
