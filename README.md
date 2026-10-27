@@ -115,7 +115,9 @@ O JWT do cidadão chega no header `X-Auth-Request-Token`. O header pode vir dire
 
 - Assinatura conferida com as chaves públicas do JWKS do Keycloak (cache em memória), só com algoritmos assimétricos (RS*, PS*, ES*); `none` e HS* são recusados.
 - Claims obrigatórias: `iss` igual a `AUTH_JWT_ISSUER`, `exp` presente e válido e `iat` coerente (tolerância de 30s).
-- Token ausente, inválido ou sem CPF válido em `preferred_username` não autentica: as rotas `/api/v1/*` respondem 401. Sem emissor/JWKS configurados, nenhum token é aceito (falha fechada).
+- `GET /api/v1/search`, `/api/v1/recommendations` e `/api/v1/catalog/:id` exigem token válido com CPF válido em `preferred_username`; caso contrário, 401.
+- `/api/v1/admin/*` exige token válido (sem ele, 401) com papel `ADMIN` (sem ele, 403); o CPF não é exigido nessas rotas.
+- Sem emissor/JWKS configurados, nenhum token é aceito (falha fechada).
 - `preferred_username` contém o CPF do cidadão. O papel `ADMIN` vem das roles `admin` ou `go:admin` em `resource_access.superapp.roles`.
 - `aud`/`azp` ainda não são conferidos: qualquer token válido assinado pelo realm é aceito.
 
