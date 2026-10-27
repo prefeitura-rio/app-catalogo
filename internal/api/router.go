@@ -26,6 +26,7 @@ type RouterDeps struct {
 	ItemRepo      *repository.CatalogItemRepository
 	CartaRepo     *repository.CartaRepository
 	WebhookSecret string
+	TokenVerifier middleware.TokenVerifier
 }
 
 func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.Engine {
@@ -41,7 +42,7 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 	r.Use(observability.RequestLogger())
 	r.Use(middleware.RequestID())
 	r.Use(middleware.CORS())
-	r.Use(middleware.ExtractUserContext())
+	r.Use(middleware.ExtractUserContext(deps.TokenVerifier))
 	r.Use(middleware.Timeout(time.Duration(cfg.Server.RequestTimeout) * time.Second))
 	r.Use(observability.RateLimitMiddleware(300)) // 300 req/min por IP
 
@@ -50,7 +51,7 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 	r.GET("/ready", healthHandler.Ready)
 	r.GET("/metrics", observability.MetricsHandler())
 
-	// Webhook (auth própria — fora do Istio JWT)
+	// Webhook (auth própria por HMAC — fora da verificação do JWT)
 	webhookHandler := v1.NewWebhookHandler(deps.SFSyncSvc, deps.WebhookSecret)
 	r.POST("/api/webhooks/salesforce", webhookHandler.SalesForce)
 

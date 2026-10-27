@@ -32,6 +32,9 @@ func buildFilterClauses(req *models.SearchRequest, startIdx int) (string, []inte
 	var args []interface{}
 	idx := startIdx
 
+	// Typesense é fonte temporária da Carta; a busca pública usa SalesForce/CloudHub.
+	clauses = append(clauses, fmt.Sprintf("ci.source <> '%s'", models.SourceTypesense))
+
 	if len(req.Types) > 0 {
 		typeStrs := make([]string, len(req.Types))
 		for i, t := range req.Types {

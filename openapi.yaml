@@ -9,7 +9,9 @@ info:
 
     ## Autenticação
 
-    O Istio valida o JWT e injeta o header `X-Auth-Request-Token` (Bearer JWT).
+    O JWT do Keycloak é enviado no header `X-Auth-Request-Token` (Bearer JWT).
+    O serviço verifica o token: assinatura pelas chaves do JWKS do realm, `iss`, `exp`
+    e `iat`. Token ausente ou inválido não autentica (401 nas rotas protegidas).
     O claim `preferred_username` no JWT contém o CPF do cidadão (apenas dígitos).
 
     Rotas marcadas com `bearerAuth` requerem esse header.
@@ -735,7 +737,8 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: |
-        JWT injetado pelo Istio via header `X-Auth-Request-Token`.
+        JWT do Keycloak no header `X-Auth-Request-Token`, verificado pelo serviço
+        (assinatura via JWKS, `iss`, `exp`, `iat`).
         O claim `preferred_username` deve conter o CPF do cidadão (apenas dígitos).
     adminAuth:
       type: http

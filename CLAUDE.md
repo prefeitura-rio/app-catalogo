@@ -45,7 +45,7 @@ k8s/
 
 ## Autenticação
 
-Mesmo padrão do workspace: `Istio valida JWT → injeta X-Auth-Request-Token → serviço decodifica sem re-validar`. `preferred_username` = CPF do cidadão.
+O JWT chega em `X-Auth-Request-Token`, que pode vir direto do cliente: **o serviço verifica o token** (assinatura via JWKS do Keycloak, `iss`, `exp`, `iat`) antes de criar identidade ou papel, e falha fechada (401) quando o token é inválido ou o verificador não está configurado. Emissor e JWKS em `AUTH_JWT_ISSUER`/`AUTH_JWKS_URL` (padrão derivado de `KEYCLOAK_URL`/`KEYCLOAK_REALM`). Nunca volte a confiar no header sem verificar. `preferred_username` = CPF do cidadão.
 
 CPF **nunca** persiste em texto — apenas `cpf_hash` (SHA-256 + salt via `CPF_HASH_SALT`).
 

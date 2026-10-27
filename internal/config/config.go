@@ -20,6 +20,7 @@ type AppConfig struct {
 	Tracing     TracingSettings
 	Migrations  MigrationSettings
 	Keycloak    KeycloakSettings
+	Auth        AuthSettings
 	RMI         RMISettings
 	AppGoAPI    AppGoAPISettings
 	SalesForce  SalesForceSettings
@@ -121,6 +122,29 @@ type KeycloakSettings struct {
 	Realm        string
 	ClientID     string
 	ClientSecret string
+}
+
+// AuthSettings define como o JWT de X-Auth-Request-Token é verificado.
+type AuthSettings struct {
+	JWTIssuer string
+	JWKSURL   string
+}
+
+// keycloakIssuer monta o emissor do realm (KEYCLOAK_URL/realms/KEYCLOAK_REALM).
+func keycloakIssuer(keycloakURL, realm string) string {
+	keycloakURL = strings.TrimRight(strings.TrimSpace(keycloakURL), "/")
+	realm = strings.TrimSpace(realm)
+	if keycloakURL == "" || realm == "" {
+		return ""
+	}
+	return keycloakURL + "/realms/" + realm
+}
+
+func defaultJWKSURL(issuer string) string {
+	if issuer == "" {
+		return ""
+	}
+	return strings.TrimRight(issuer, "/") + "/protocol/openid-connect/certs"
 }
 
 type RMISettings struct {
@@ -323,6 +347,9 @@ func Load() (*AppConfig, error) {
 			BackfillInterval: getDuration(v, "EMBEDDING_BACKFILL_INTERVAL", 5*time.Minute),
 		},
 	}
+
+	cfg.Auth.JWTIssuer = getEnv(v, "AUTH_JWT_ISSUER", keycloakIssuer(cfg.Keycloak.URL, cfg.Keycloak.Realm))
+	cfg.Auth.JWKSURL = getEnv(v, "AUTH_JWKS_URL", defaultJWKSURL(cfg.Auth.JWTIssuer))
 
 	if err := cfg.Database.Validate(); err != nil {
 		return nil, fmt.Errorf("configuração de banco inválida: %w", err)

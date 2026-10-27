@@ -7,7 +7,7 @@
 // @securityDefinitions.apikey BearerAuth
 // @in              header
 // @name            Authorization
-// @description     JWT injetado pelo Istio via header X-Auth-Request-Token
+// @description     JWT do Keycloak no header X-Auth-Request-Token, verificado pelo serviço (assinatura via JWKS, emissor e expiração)
 
 package main
 
@@ -24,6 +24,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/api"
+	"github.com/prefeitura-rio/app-catalogo/internal/api/middleware"
 	"github.com/prefeitura-rio/app-catalogo/internal/cache"
 	"github.com/prefeitura-rio/app-catalogo/internal/clients"
 	"github.com/prefeitura-rio/app-catalogo/internal/config"
@@ -171,6 +172,15 @@ func main() {
 		dsManager.Register(appGoAPIDs)
 	}
 
+	var tokenVerifier middleware.TokenVerifier
+	jwksVerifier, err := middleware.NewJWKSVerifier(cfg.Auth.JWTIssuer, cfg.Auth.JWKSURL)
+	if err != nil {
+		log.Error().Err(err).Msg("AUTH_JWT_ISSUER/AUTH_JWKS_URL (ou KEYCLOAK_URL/KEYCLOAK_REALM) ausentes — endpoints autenticados responderão 401")
+	} else {
+		tokenVerifier = jwksVerifier
+		log.Info().Str("issuer", cfg.Auth.JWTIssuer).Msg("verificação de JWT via JWKS ativada")
+	}
+
 	router := api.SetupRouter(cfg, db.Pool, api.RouterDeps{
 		SFSyncSvc:     sfSyncSvc,
 		DSManager:     dsManager,
@@ -180,6 +190,7 @@ func main() {
 		ItemRepo:      itemRepo,
 		CartaRepo:     cartaRepo,
 		WebhookSecret: cfg.SalesForce.WebhookSecret,
+		TokenVerifier: tokenVerifier,
 	})
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)

@@ -1,12 +1,12 @@
 package middleware
 
 import (
-	"encoding/base64"
-	"encoding/json"
 	"strings"
 	"unicode"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -16,43 +16,18 @@ const (
 	UserIDKey    = "user_id"
 	UserNameKey  = "user_name"
 	UserEmailKey = "user_email"
+
+	UserVerifiedKey = "user_verified"
 )
 
 type jwtClaims struct {
+	jwt.RegisteredClaims
 	PreferredUsername string `json:"preferred_username"`
-	Sub               string `json:"sub"`
 	Name              string `json:"name"`
 	Email             string `json:"email"`
 	ResourceAccess    map[string]struct {
 		Roles []string `json:"roles"`
 	} `json:"resource_access"`
-}
-
-func decodeJWT(token string) *jwtClaims {
-	token = strings.TrimPrefix(token, "Bearer ")
-	token = strings.TrimSpace(token)
-
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		return nil
-	}
-
-	payload := parts[1]
-	if l := len(payload) % 4; l > 0 {
-		payload += strings.Repeat("=", 4-l)
-	}
-
-	decoded, err := base64.URLEncoding.DecodeString(payload)
-	if err != nil {
-		return nil
-	}
-
-	var claims jwtClaims
-	if err := json.Unmarshal(decoded, &claims); err != nil {
-		return nil
-	}
-
-	return &claims
 }
 
 // normalizeCPF strips . and - and accepts only an 11-digit CPF.
@@ -69,29 +44,35 @@ func normalizeCPF(raw string) (string, bool) {
 	return canonical, true
 }
 
-// ExtractUserContext decodifica o JWT injetado pelo Istio (X-Auth-Request-Token).
-// A assinatura já foi validada pelo Istio — não re-validamos aqui.
-func ExtractUserContext() gin.HandlerFunc {
+// ExtractUserContext lê o JWT de X-Auth-Request-Token e só cria identidade e
+// papel quando o verifier confere assinatura, emissor, exp e iat. O header pode
+// chegar direto do cliente, então nada nele é confiável sem essa verificação.
+// Com verifier nil nenhuma requisição é autenticada (falha fechada).
+func ExtractUserContext(verifier TokenVerifier) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("X-Auth-Request-Token")
-		if authHeader == "" {
+		if authHeader == "" || verifier == nil {
 			c.Next()
 			return
 		}
 
-		claims := decodeJWT(authHeader)
-		if claims == nil {
+		claims, err := verifier.Verify(c.Request.Context(), authHeader)
+		if err != nil || claims == nil {
+			if err != nil {
+				log.Debug().Err(err).Msg("JWT de X-Auth-Request-Token rejeitado")
+			}
 			c.Next()
 			return
 		}
 
+		c.Set(UserVerifiedKey, true)
 		if claims.PreferredUsername != "" {
 			if cpf, ok := normalizeCPF(claims.PreferredUsername); ok {
 				c.Set(UserCPFKey, cpf)
 			}
 		}
-		if claims.Sub != "" {
-			c.Set(UserIDKey, claims.Sub)
+		if claims.Subject != "" {
+			c.Set(UserIDKey, claims.Subject)
 		}
 		if claims.Name != "" {
 			c.Set(UserNameKey, claims.Name)
@@ -126,10 +107,22 @@ func GetUserCPF(c *gin.Context) string {
 }
 
 func IsAuthenticated(c *gin.Context) bool {
-	return GetUserCPF(c) != ""
+	return hasVerifiedToken(c) && GetUserCPF(c) != ""
+}
+
+func hasVerifiedToken(c *gin.Context) bool {
+	v, exists := c.Get(UserVerifiedKey)
+	if !exists {
+		return false
+	}
+	ok, _ := v.(bool)
+	return ok
 }
 
 func IsAdmin(c *gin.Context) bool {
+	if !hasVerifiedToken(c) {
+		return false
+	}
 	if v, exists := c.Get(UserRoleKey); exists {
 		if s, ok := v.(string); ok {
 			return s == "ADMIN"
@@ -151,6 +144,11 @@ func RequireAuth() gin.HandlerFunc {
 
 func RequireAdmin() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if !hasVerifiedToken(c) {
+			c.JSON(401, gin.H{"error": "autenticação necessária"})
+			c.Abort()
+			return
+		}
 		if !IsAdmin(c) {
 			c.JSON(403, gin.H{"error": "acesso negado"})
 			c.Abort()
