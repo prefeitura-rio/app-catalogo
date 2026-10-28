@@ -2,10 +2,13 @@ package v1
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog/log"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/datasource"
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
@@ -15,13 +18,24 @@ import (
 // swag import para que models.SyncStatus e models.CatalogItem sejam reconhecidos
 var _ = models.SyncStatus{}
 
+// catalogItemReader cobre a leitura de um item do catálogo pelo ID.
+type catalogItemReader interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*models.CatalogItem, error)
+	GetPublicByID(ctx context.Context, id uuid.UUID) (*models.CatalogItem, error)
+}
+
 type AdminHandler struct {
 	repo    *repository.CatalogItemRepository
+	items   catalogItemReader
 	manager *datasource.Manager
 }
 
 func NewAdminHandler(repo *repository.CatalogItemRepository, manager *datasource.Manager) *AdminHandler {
-	return &AdminHandler{repo: repo, manager: manager}
+	h := &AdminHandler{repo: repo, manager: manager}
+	if repo != nil {
+		h.items = repo
+	}
+	return h
 }
 
 // SyncStatus godoc
@@ -80,6 +94,7 @@ func (h *AdminHandler) TriggerSync(c *gin.Context) {
 // @Failure      400  {object}  map[string]string
 // @Failure      401  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
 // @Router       /api/v1/catalog/{id} [get]
 func (h *AdminHandler) GetCatalogItem(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
@@ -88,9 +103,9 @@ func (h *AdminHandler) GetCatalogItem(c *gin.Context) {
 		return
 	}
 
-	item, err := h.repo.GetByID(c.Request.Context(), id)
+	item, err := h.items.GetByID(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "item não encontrado"})
+		catalogItemError(c, err)
 		return
 	}
 
@@ -106,6 +121,7 @@ func (h *AdminHandler) GetCatalogItem(c *gin.Context) {
 // @Success      200  {object}  models.PublicCatalogItem
 // @Failure      400  {object}  map[string]string
 // @Failure      404  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
 // @Router       /api/public/catalog/{id} [get]
 func (h *AdminHandler) GetPublicCatalogItem(c *gin.Context) {
 	id, err := uuid.Parse(c.Param("id"))
@@ -114,11 +130,22 @@ func (h *AdminHandler) GetPublicCatalogItem(c *gin.Context) {
 		return
 	}
 
-	item, err := h.repo.GetPublicByID(c.Request.Context(), id)
+	item, err := h.items.GetPublicByID(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "item não encontrado"})
+		catalogItemError(c, err)
 		return
 	}
 
 	c.JSON(http.StatusOK, models.ToPublicCatalogItem(item))
+}
+
+// catalogItemError responde 404 só para item ausente; qualquer outra falha do
+// repositório (banco fora, timeout) é 500, com o erro apenas no log.
+func catalogItemError(c *gin.Context, err error) {
+	if errors.Is(err, pgx.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "item não encontrado"})
+		return
+	}
+	log.Error().Err(err).Str("path", c.FullPath()).Msg("catalog: falha ao buscar item")
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao buscar item"})
 }
