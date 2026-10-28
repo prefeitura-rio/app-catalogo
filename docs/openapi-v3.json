@@ -1114,7 +1114,7 @@
     },
     "/api/webhooks/salesforce": {
       "post": {
-        "description": "Recebe notificações de criação/atualização. Valida HMAC-SHA256 via X-Salesforce-Signature. Usa sobject.Slug (ou Id como fallback) como identificador do serviço na API CloudHub. Sem SALESFORCE_WEBHOOK_SECRET retorna 401. Payload > 64KiB retorna 413.",
+        "description": "Recebe notificações de criação/atualização. Valida HMAC-SHA256 via X-Salesforce-Signature. Usa sobject.Slug (ou Id como fallback) como identificador do serviço na API CloudHub. O evento é gravado antes da resposta (queued) e reprocessado com backoff até a sincronização dar certo; reentrega do mesmo body responde duplicate. Sem SALESFORCE_WEBHOOK_SECRET retorna 401. Payload > 64KiB retorna 413. Falha ao gravar o evento retorna 503 (reenviar).",
         "tags": [
           "webhooks"
         ],
@@ -1183,6 +1183,19 @@
           },
           "413": {
             "description": "Request Entity Too Large",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
             "content": {
               "application/json": {
                 "schema": {

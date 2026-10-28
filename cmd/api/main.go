@@ -36,6 +36,10 @@ import (
 	"github.com/prefeitura-rio/app-catalogo/internal/services"
 )
 
+// webhookReprocessInterval é o intervalo entre as passadas do reprocessador de
+// eventos pendentes do webhook SalesForce.
+const webhookReprocessInterval = 30 * time.Second
+
 func main() {
 	cfg, err := config.Get()
 	if err != nil {
@@ -146,6 +150,11 @@ func main() {
 		cfg.SalesForce.BaseServiceURL,
 		cfg.SalesForce.DetailConcurrency,
 	)
+	webhookSvc := services.NewSalesForceWebhookService(
+		repository.NewSalesForceWebhookRepository(db.Pool),
+		sfSyncSvc,
+		services.DefaultWebhookConfig,
+	)
 	searchSvc := services.NewSearchService(searchRepo, redisCache, cfg.Cache.SearchTTL, geminiClient, rerankerClient)
 	citizenSvc := services.NewCitizenProfileService(
 		rmiClient,
@@ -183,6 +192,7 @@ func main() {
 
 	router := api.SetupRouter(cfg, db.Pool, api.RouterDeps{
 		SFSyncSvc:     sfSyncSvc,
+		WebhookSvc:    webhookSvc,
 		DSManager:     dsManager,
 		SearchSvc:     searchSvc,
 		RecomSvc:      recomSvc,
@@ -192,6 +202,14 @@ func main() {
 		WebhookSecret: cfg.SalesForce.WebhookSecret,
 		TokenVerifier: tokenVerifier,
 	})
+
+	// Reprocessador dos eventos do webhook SalesForce que falharam ou ficaram
+	// sem dono (pod reiniciado). Seguro com várias réplicas (FOR UPDATE SKIP LOCKED).
+	webhookCtx, stopWebhook := context.WithCancel(ctx)
+	defer stopWebhook()
+	if cfg.SalesForce.WebhookSecret != "" {
+		go webhookSvc.Run(webhookCtx, webhookReprocessInterval)
+	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	srv := &http.Server{
@@ -211,6 +229,7 @@ func main() {
 	<-quit
 
 	log.Info().Msg("encerrando servidor...")
+	stopWebhook()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
