@@ -152,7 +152,7 @@ func (s *SalesForceWebhookService) Process(ctx context.Context, ev *models.Sales
 	completed, err := s.store.Complete(writeCtx, ev)
 	if err != nil {
 		log.Error().Err(err).Int64("event_id", ev.ID).
-			Msg("webhook: registro sincronizado, mas falhou marcar o evento; ele será reprocessado sem efeito colateral")
+			Msg("webhook: registro sincronizado, mas falhou marcar o evento; reprocessá-lo é seguro (SyncRecord é idempotente)")
 		return err
 	}
 	observability.SalesForceWebhookEventsTotal.WithLabelValues(webhookResultProcessed).Inc()

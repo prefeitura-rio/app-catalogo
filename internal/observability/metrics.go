@@ -55,7 +55,7 @@ var (
 	SyncLastSuccessTimestamp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "catalogo",
 		Name:      "sync_last_success_timestamp_seconds",
-		Help:      "Momento (Unix, segundos) da última sincronização bem-sucedida por fonte",
+		Help:      "Horário (Unix, segundos) da última sincronização bem-sucedida por fonte",
 	}, []string{"source"})
 
 	SalesForceWebhookEventsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{

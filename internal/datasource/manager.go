@@ -189,7 +189,7 @@ func (m *Manager) runSource(ctx context.Context, s DataSource) {
 	}
 }
 
-// syncWithRetry executa s.Sync com novas tentativas em backoff exponencial e
+// syncWithRetry executa s.Sync com novas tentativas (espera que dobra a cada falha) e
 // registra as métricas da execução. Para quando o context é cancelado.
 func (m *Manager) syncWithRetry(ctx context.Context, s DataSource, trigger string) error {
 	policy := m.retry
