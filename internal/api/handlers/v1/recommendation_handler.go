@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/prefeitura-rio/app-catalogo/internal/api/middleware"
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
+	"github.com/prefeitura-rio/app-catalogo/internal/observability"
 	"github.com/prefeitura-rio/app-catalogo/internal/services"
 )
 
@@ -54,6 +56,11 @@ func (h *RecommendationHandler) Authenticated(c *gin.Context) {
 		return
 	}
 
+	started := time.Now()
+	// personalized só vira true quando há perfil e a recomendação personalizada roda.
+	personalized := false
+	defer func() { observeRecommendation(started, personalized) }()
+
 	req := h.parseRequest(c)
 
 	profileCtx, cancelProfile := profileLookupContext(c.Request.Context())
@@ -71,6 +78,7 @@ func (h *RecommendationHandler) Authenticated(c *gin.Context) {
 		return
 	}
 
+	personalized = true
 	resp, err := h.recomSvc.Recommend(c.Request.Context(), profile, req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "falha nas recomendações"})
@@ -93,6 +101,9 @@ func (h *RecommendationHandler) Authenticated(c *gin.Context) {
 // @Failure      500  {object}  map[string]string
 // @Router       /api/public/recommendations [get]
 func (h *RecommendationHandler) Anonymous(c *gin.Context) {
+	started := time.Now()
+	defer func() { observeRecommendation(started, false) }()
+
 	req := h.parseRequest(c)
 	req.ClusterHint = c.Query("cluster_hint")
 
@@ -103,6 +114,14 @@ func (h *RecommendationHandler) Anonymous(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// observeRecommendation registra a duração da requisição de recomendação,
+// inclusive quando ela falha.
+func observeRecommendation(started time.Time, personalized bool) {
+	observability.RecommendationsDuration.
+		WithLabelValues(strconv.FormatBool(personalized)).
+		Observe(time.Since(started).Seconds())
 }
 
 // profileLookupContext limita a busca do perfil (que pode depender do RMI) à

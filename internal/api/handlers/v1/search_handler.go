@@ -1,18 +1,26 @@
 package v1
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
+	"github.com/prefeitura-rio/app-catalogo/internal/observability"
 	"github.com/prefeitura-rio/app-catalogo/internal/services"
 )
 
+// searcher é o que o handler usa de services.SearchService.
+type searcher interface {
+	Search(ctx context.Context, req *models.SearchRequest) (*models.SearchResponse, error)
+}
+
 type SearchHandler struct {
-	searchSvc  *services.SearchService
+	searchSvc  searcher
 	citizenSvc *services.CitizenProfileService
 }
 
@@ -46,7 +54,15 @@ func NewSearchHandler(searchSvc *services.SearchService, citizenSvc *services.Ci
 // @Router       /api/v1/search [get]
 // @Router       /api/public/search [get]
 func (h *SearchHandler) Search(c *gin.Context) {
+	started := time.Now()
 	req := parseSearchQuery(c)
+	// Rótulos com valores fixos (true|false): nunca o texto nem os tipos
+	// enviados pelo cliente, para não explodir a cardinalidade da métrica.
+	hasQuery := strconv.FormatBool(strings.TrimSpace(req.Q) != "")
+	typeFilter := strconv.FormatBool(len(req.Types) > 0)
+	defer func() {
+		observability.SearchDuration.WithLabelValues(hasQuery, typeFilter).Observe(time.Since(started).Seconds())
+	}()
 
 	resp, err := h.searchSvc.Search(c.Request.Context(), &req)
 	if err != nil {
