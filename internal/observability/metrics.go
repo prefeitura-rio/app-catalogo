@@ -45,6 +45,18 @@ var (
 		Name:      "items_total",
 		Help:      "Total de itens ativos no catálogo por tipo",
 	}, []string{"type", "source"})
+
+	HTTPClientCircuitState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "catalogo",
+		Name:      "http_client_circuit_state",
+		Help:      "Estado do circuit breaker por cliente HTTP (0=fechado, 1=meio-aberto, 2=aberto)",
+	}, []string{"client"})
+
+	HTTPClientRetriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "catalogo",
+		Name:      "http_client_retries_total",
+		Help:      "Total de novas tentativas (retries) por cliente HTTP",
+	}, []string{"client"})
 )
 
 func init() {
@@ -54,6 +66,8 @@ func init() {
 		SyncItemsTotal,
 		SyncDuration,
 		CatalogItemsGauge,
+		HTTPClientCircuitState,
+		HTTPClientRetriesTotal,
 	)
 }
 

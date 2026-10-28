@@ -3,6 +3,7 @@ package clients
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -16,6 +17,7 @@ type RMIClient struct {
 	baseURL      string
 	tokenManager *KeycloakTokenManager
 	httpClient   *http.Client
+	resilience   *resilientCaller
 }
 
 func NewRMIClient(baseURL string, tokenManager *KeycloakTokenManager) *RMIClient {
@@ -23,7 +25,13 @@ func NewRMIClient(baseURL string, tokenManager *KeycloakTokenManager) *RMIClient
 		baseURL:      baseURL,
 		tokenManager: tokenManager,
 		httpClient:   &http.Client{Timeout: 10 * time.Second},
+		resilience:   newResilientCaller("rmi", defaultRMIResilience),
 	}
+}
+
+// CircuitState retorna o estado atual do circuit breaker do cliente.
+func (c *RMIClient) CircuitState() CircuitState {
+	return c.resilience.breaker.State()
 }
 
 // CitizenData representa os dados do cidadão retornados pelo app-rmi.
@@ -73,6 +81,24 @@ func (c *RMIClient) GetCitizen(ctx context.Context, cpf string) (*CitizenData, e
 		return nil, fmt.Errorf("rmi: URL base inválida: %w", joinErr)
 	}
 
+	var citizen *CitizenData
+	err = c.resilience.do(ctx, func(attemptCtx context.Context) error {
+		result, fetchErr := c.fetchCitizen(attemptCtx, requestURL, authHeader)
+		if fetchErr != nil {
+			return fetchErr
+		}
+		citizen = result
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return citizen, nil
+}
+
+// fetchCitizen faz uma tentativa de GET no RMI. Falhas que valem repetir
+// (transporte, timeout, 5xx, 429) voltam marcadas como transitórias.
+func (c *RMIClient) fetchCitizen(ctx context.Context, requestURL, authHeader string) (*CitizenData, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("rmi: falha ao criar request: %w", err)
@@ -82,7 +108,12 @@ func (c *RMIClient) GetCitizen(ctx context.Context, cpf string) (*CitizenData, e
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("rmi: falha na requisição: %w", err)
+		// *url.Error traz a URL, que contém o CPF: propaga só a causa.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return nil, markTransient(fmt.Errorf("rmi: falha na requisição: %w", err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -92,10 +123,18 @@ func (c *RMIClient) GetCitizen(ctx context.Context, cpf string) (*CitizenData, e
 
 	body, err := readBoundedHTTPBody(resp.Body, maximumRMIResponseBytes)
 	if err != nil {
-		return nil, fmt.Errorf("rmi: falha ao ler resposta: %w", err)
+		readErr := fmt.Errorf("rmi: falha ao ler resposta: %w", err)
+		if errors.Is(err, errHTTPBodyTooLarge) {
+			return nil, readErr
+		}
+		return nil, markTransient(readErr)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("rmi: retornou status %d", resp.StatusCode)
+		statusErr := fmt.Errorf("rmi: retornou status %d", resp.StatusCode)
+		if isTransientStatus(resp.StatusCode) {
+			return nil, markTransient(statusErr)
+		}
+		return nil, statusErr
 	}
 
 	var citizen CitizenData

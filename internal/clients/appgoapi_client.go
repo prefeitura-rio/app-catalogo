@@ -3,6 +3,7 @@ package clients
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -15,6 +16,7 @@ type AppGoAPIClient struct {
 	baseURL      string
 	tokenManager *KeycloakTokenManager
 	httpClient   *http.Client
+	resilience   *resilientCaller
 }
 
 func NewAppGoAPIClient(baseURL string, tokenManager *KeycloakTokenManager) *AppGoAPIClient {
@@ -22,7 +24,13 @@ func NewAppGoAPIClient(baseURL string, tokenManager *KeycloakTokenManager) *AppG
 		baseURL:      baseURL,
 		tokenManager: tokenManager,
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
+		resilience:   newResilientCaller("appgoapi", defaultAppGoAPIResilience),
 	}
+}
+
+// CircuitState retorna o estado atual do circuit breaker do cliente.
+func (c *AppGoAPIClient) CircuitState() CircuitState {
+	return c.resilience.breaker.State()
 }
 
 // flexString aceita string ou número JSON.
@@ -157,6 +165,14 @@ func (c *AppGoAPIClient) doGet(ctx context.Context, path string, dest interface{
 		return fmt.Errorf("appgoapi: falha ao obter token: %w", err)
 	}
 
+	return c.resilience.do(ctx, func(attemptCtx context.Context) error {
+		return c.getOnce(attemptCtx, path, authHeader, dest)
+	})
+}
+
+// getOnce faz uma tentativa de GET no app-go-api. Falhas que valem repetir
+// (transporte, timeout, 5xx, 429) voltam marcadas como transitórias.
+func (c *AppGoAPIClient) getOnce(ctx context.Context, path, authHeader string, dest interface{}) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return fmt.Errorf("appgoapi: falha ao criar request: %w", err)
@@ -166,16 +182,24 @@ func (c *AppGoAPIClient) doGet(ctx context.Context, path string, dest interface{
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("appgoapi: falha na requisição: %w", err)
+		return markTransient(fmt.Errorf("appgoapi: falha na requisição: %w", err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := readBoundedHTTPBody(resp.Body, maximumAppGoAPIResponseBytes)
 	if err != nil {
-		return fmt.Errorf("appgoapi: falha ao ler resposta: %w", err)
+		readErr := fmt.Errorf("appgoapi: falha ao ler resposta: %w", err)
+		if errors.Is(err, errHTTPBodyTooLarge) {
+			return readErr
+		}
+		return markTransient(readErr)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("appgoapi: retornou status %d", resp.StatusCode)
+		statusErr := fmt.Errorf("appgoapi: retornou status %d", resp.StatusCode)
+		if isTransientStatus(resp.StatusCode) {
+			return markTransient(statusErr)
+		}
+		return statusErr
 	}
 
 	if err := json.Unmarshal(body, dest); err != nil {

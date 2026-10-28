@@ -1,9 +1,11 @@
 package v1
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -12,9 +14,20 @@ import (
 	"github.com/prefeitura-rio/app-catalogo/internal/services"
 )
 
+// recommender é o que o handler usa de services.RecommendationService.
+type recommender interface {
+	Recommend(ctx context.Context, profile *models.CitizenProfile, req *models.RecommendationRequest) (*models.RecommendationResponse, error)
+	RecommendAnonymous(ctx context.Context, req *models.RecommendationRequest) (*models.RecommendationResponse, error)
+}
+
+// citizenProfileProvider é o que o handler usa de services.CitizenProfileService.
+type citizenProfileProvider interface {
+	GetOrSync(ctx context.Context, cpf string) (*models.CitizenProfile, error)
+}
+
 type RecommendationHandler struct {
-	recomSvc   *services.RecommendationService
-	citizenSvc *services.CitizenProfileService
+	recomSvc   recommender
+	citizenSvc citizenProfileProvider
 }
 
 func NewRecommendationHandler(recomSvc *services.RecommendationService, citizenSvc *services.CitizenProfileService) *RecommendationHandler {
@@ -43,9 +56,12 @@ func (h *RecommendationHandler) Authenticated(c *gin.Context) {
 
 	req := h.parseRequest(c)
 
-	profile, err := h.citizenSvc.GetOrSync(c.Request.Context(), cpf)
+	profileCtx, cancelProfile := profileLookupContext(c.Request.Context())
+	profile, err := h.citizenSvc.GetOrSync(profileCtx, cpf)
+	cancelProfile()
 	if err != nil || profile == nil {
-		// Sem perfil: retornar recomendação anônima
+		// Sem perfil (cidadão sem cadastro, RMI fora do ar ou com o circuit
+		// breaker aberto): retornar recomendação genérica, nunca 500.
 		resp, err := h.recomSvc.RecommendAnonymous(c.Request.Context(), req)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "falha nas recomendações"})
@@ -87,6 +103,17 @@ func (h *RecommendationHandler) Anonymous(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// profileLookupContext limita a busca do perfil (que pode depender do RMI) à
+// metade do prazo restante da requisição, para sobrar tempo de servir a
+// recomendação genérica quando o RMI está lento.
+func profileLookupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, time.Until(deadline)/2)
 }
 
 func (h *RecommendationHandler) parseRequest(c *gin.Context) *models.RecommendationRequest {
