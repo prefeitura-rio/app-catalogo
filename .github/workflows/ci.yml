@@ -102,3 +102,13 @@ jobs:
         with:
           name: coverage
           path: coverage.out
+
+      # Falha se algum pacote de internal/ ficar sem teste ou se a cobertura
+      # total cair abaixo do baseline da branch base (.github/coverage-baseline).
+      - name: Coverage gate
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          COVERAGE_BASELINE_REF: origin/${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          ./scripts/coverage-gate.sh coverage.out
