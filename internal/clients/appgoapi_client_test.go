@@ -185,6 +185,7 @@ func TestAppGoAPIClient_RepeteEm5xxE429(t *testing.T) {
 				}
 				writeEmptyCourses(w)
 			}, fastResilience(5))
+			retriesBefore := retriesMetric(client.resilience.client)
 
 			if _, _, err := client.GetCourses(context.Background(), 1, time.Time{}); err != nil {
 				t.Fatalf("GetCourses: %v", err)
@@ -192,8 +193,8 @@ func TestAppGoAPIClient_RepeteEm5xxE429(t *testing.T) {
 			if calls.Load() != 2 {
 				t.Fatalf("esperava 2 chamadas, got %d", calls.Load())
 			}
-			if got := retriesMetric(client.resilience.client); got != 1 {
-				t.Fatalf("retries=%v, want 1", got)
+			if got := retriesMetric(client.resilience.client) - retriesBefore; got != 1 {
+				t.Fatalf("retries aumentou %v, want 1", got)
 			}
 		})
 	}
@@ -225,7 +226,7 @@ func TestAppGoAPIClient_CircuitoAbreERecusaSemChamarAAPI(t *testing.T) {
 	}, fastResilience(3))
 
 	if _, _, err := client.GetMEIOpportunities(context.Background(), 1, time.Time{}); err == nil {
-		t.Fatal("esperava erro com a API respondendo 500")
+		t.Fatal("esperava erro com status 500 da API")
 	}
 	if client.CircuitState() != CircuitOpen {
 		t.Fatalf("esperava circuito aberto, got %s", client.CircuitState())

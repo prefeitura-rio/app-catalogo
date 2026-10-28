@@ -39,7 +39,7 @@ func (s CircuitState) String() string {
 	}
 }
 
-// ResilienceConfig define o retry com backoff exponencial e jitter e o
+// ResilienceConfig define o retry (espera que dobra a cada tentativa, com jitter) e o
 // circuit breaker de um cliente HTTP.
 type ResilienceConfig struct {
 	// MaxAttempts é o total de tentativas por chamada (1 = sem retry).
@@ -209,7 +209,7 @@ func (b *circuitBreaker) setStateLocked(state CircuitState) {
 	observability.HTTPClientCircuitState.WithLabelValues(b.client).Set(float64(state))
 }
 
-// resilientCaller aplica retry com backoff exponencial e jitter e o circuit
+// resilientCaller aplica retry com backoff que dobra, jitter e o circuit
 // breaker a uma operação HTTP de um cliente.
 type resilientCaller struct {
 	client  string

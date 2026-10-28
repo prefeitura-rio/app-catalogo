@@ -44,6 +44,7 @@ func TestRMIClient_RepeteEm503EDevolveCidadao(t *testing.T) {
 		}
 		writeCitizen(w)
 	}, fastResilience(5))
+	retriesBefore := retriesMetric(client.resilience.client)
 
 	citizen, err := client.GetCitizen(context.Background(), syntheticCPF)
 	if err != nil {
@@ -55,8 +56,8 @@ func TestRMIClient_RepeteEm503EDevolveCidadao(t *testing.T) {
 	if calls.Load() != 3 {
 		t.Fatalf("esperava 3 chamadas ao RMI, got %d", calls.Load())
 	}
-	if got := retriesMetric(client.resilience.client); got != 2 {
-		t.Fatalf("retries=%v, want 2", got)
+	if got := retriesMetric(client.resilience.client) - retriesBefore; got != 2 {
+		t.Fatalf("retries aumentou %v, want 2", got)
 	}
 }
 
@@ -104,7 +105,7 @@ func TestRMIClient_CircuitoAbreERecusaSemChamarORMI(t *testing.T) {
 
 	// 3 tentativas com 502 → 3 falhas consecutivas → circuito aberto.
 	if _, err := client.GetCitizen(context.Background(), syntheticCPF); err == nil {
-		t.Fatal("esperava erro com o RMI respondendo 502")
+		t.Fatal("esperava erro com status 502 do RMI")
 	}
 	if client.CircuitState() != CircuitOpen {
 		t.Fatalf("esperava circuito aberto, got %s", client.CircuitState())

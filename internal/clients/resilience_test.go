@@ -92,6 +92,7 @@ func TestResilientCaller_RepeteFalhaTransitoriaAteSucesso(t *testing.T) {
 
 	name := uniqueClientName(t)
 	caller := newResilientCaller(name, fastResilience(5))
+	retriesBefore := retriesMetric(name)
 
 	var calls int
 	err := caller.do(context.Background(), func(context.Context) error {
@@ -107,8 +108,8 @@ func TestResilientCaller_RepeteFalhaTransitoriaAteSucesso(t *testing.T) {
 	if calls != 3 {
 		t.Fatalf("esperava 3 tentativas, got %d", calls)
 	}
-	if got := retriesMetric(name); got != 2 {
-		t.Fatalf("catalogo_http_client_retries_total=%v, want 2", got)
+	if got := retriesMetric(name) - retriesBefore; got != 2 {
+		t.Fatalf("catalogo_http_client_retries_total aumentou %v, want 2", got)
 	}
 	if caller.breaker.State() != CircuitClosed {
 		t.Fatalf("circuito deveria seguir fechado, got %s", caller.breaker.State())
@@ -120,6 +121,7 @@ func TestResilientCaller_DesisteDepoisDeMaxAttempts(t *testing.T) {
 
 	name := uniqueClientName(t)
 	caller := newResilientCaller(name, fastResilience(10))
+	retriesBefore := retriesMetric(name)
 
 	var calls int
 	err := caller.do(context.Background(), func(context.Context) error {
@@ -132,8 +134,8 @@ func TestResilientCaller_DesisteDepoisDeMaxAttempts(t *testing.T) {
 	if calls != 3 {
 		t.Fatalf("esperava 3 tentativas, got %d", calls)
 	}
-	if got := retriesMetric(name); got != 2 {
-		t.Fatalf("retries=%v, want 2", got)
+	if got := retriesMetric(name) - retriesBefore; got != 2 {
+		t.Fatalf("retries aumentou %v, want 2", got)
 	}
 }
 
@@ -142,6 +144,7 @@ func TestResilientCaller_ErroNaoTransitorioNaoRepeteNemAbreCircuito(t *testing.T
 
 	name := uniqueClientName(t)
 	caller := newResilientCaller(name, fastResilience(1))
+	retriesBefore := retriesMetric(name)
 	permanent := errors.New("status 400")
 
 	for i := 0; i < 5; i++ {
@@ -160,8 +163,8 @@ func TestResilientCaller_ErroNaoTransitorioNaoRepeteNemAbreCircuito(t *testing.T
 	if caller.breaker.State() != CircuitClosed {
 		t.Fatalf("4xx não deve abrir o circuito, got %s", caller.breaker.State())
 	}
-	if got := retriesMetric(name); got != 0 {
-		t.Fatalf("retries=%v, want 0", got)
+	if got := retriesMetric(name) - retriesBefore; got != 0 {
+		t.Fatalf("retries aumentou %v, want 0", got)
 	}
 }
 
