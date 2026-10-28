@@ -1,12 +1,14 @@
 package middleware
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +22,7 @@ import (
 
 const (
 	testIssuer  = "https://auth.example.test/realms/teste"
+	testClient  = "superapp"
 	testCPF     = "22222222222"
 	testRSAKid  = "rsa-1"
 	testECKid   = "ec-1"
@@ -91,7 +94,7 @@ func newJWKSServer(t *testing.T, k testKeys) *jwksServer {
 
 func newVerifier(t *testing.T, jwksURL string) *JWKSVerifier {
 	t.Helper()
-	v, err := NewJWKSVerifier(testIssuer, jwksURL)
+	v, err := NewJWKSVerifier(testIssuer, jwksURL, []string{testClient})
 	if err != nil {
 		t.Fatalf("verifier: %v", err)
 	}
@@ -102,6 +105,7 @@ func claimsFor(role string) jwt.MapClaims {
 	now := time.Now()
 	return jwt.MapClaims{
 		"iss":                testIssuer,
+		"azp":                testClient,
 		"sub":                "00000000-0000-0000-0000-000000000001",
 		"preferred_username": testCPF,
 		"iat":                now.Unix(),
@@ -177,6 +181,18 @@ func TestExtractUserContext_RejectsForgedTokens(t *testing.T) {
 	noExp := claimsFor(adminRole)
 	delete(noExp, "exp")
 
+	otherClient := claimsFor(adminRole)
+	otherClient["azp"] = "outro-client"
+
+	noAzp := claimsFor(adminRole)
+	delete(noAzp, "azp")
+
+	emptyAzp := claimsFor(adminRole)
+	emptyAzp["azp"] = ""
+
+	azpCase := claimsFor(adminRole)
+	azpCase["azp"] = "SuperApp"
+
 	cases := map[string]string{
 		"alg none (relato)":           forgeNone(t, claimsFor(adminRole)),
 		"alg none Bearer":             "Bearer " + forgeNone(t, claimsFor(adminRole)),
@@ -188,6 +204,10 @@ func TestExtractUserContext_RejectsForgedTokens(t *testing.T) {
 		"expirado":                    sign(t, jwt.SigningMethodRS256, testRSAKid, keys.rsa, expired),
 		"emissor errado":              sign(t, jwt.SigningMethodRS256, testRSAKid, keys.rsa, wrongIssuer),
 		"sem exp":                     sign(t, jwt.SigningMethodRS256, testRSAKid, keys.rsa, noExp),
+		"azp de outro client":         sign(t, jwt.SigningMethodRS256, testRSAKid, keys.rsa, otherClient),
+		"sem azp":                     sign(t, jwt.SigningMethodRS256, testRSAKid, keys.rsa, noAzp),
+		"azp vazio":                   sign(t, jwt.SigningMethodRS256, testRSAKid, keys.rsa, emptyAzp),
+		"azp com outra caixa":         sign(t, jwt.SigningMethodRS256, testRSAKid, keys.rsa, azpCase),
 		"lixo":                        "a.b.c",
 	}
 
@@ -292,10 +312,48 @@ func TestExtractUserContext_FailsClosed(t *testing.T) {
 	})
 
 	t.Run("configuração vazia", func(t *testing.T) {
-		if _, err := NewJWKSVerifier("", ""); err == nil {
+		if _, err := NewJWKSVerifier("", "", []string{testClient}); err == nil {
 			t.Fatal("esperado erro sem emissor/JWKS")
 		}
 	})
+
+	t.Run("sem clients autorizados", func(t *testing.T) {
+		for _, parties := range [][]string{nil, {}, {"", "  "}} {
+			if _, err := NewJWKSVerifier(testIssuer, "https://auth.example.test/certs", parties); err == nil {
+				t.Fatalf("esperado erro sem clients autorizados (%q)", parties)
+			}
+		}
+	})
+}
+
+// Cenário da DEV-8: token válido do mesmo realm, emitido para outro client.
+func TestJWKSVerifier_AuthorizedParties(t *testing.T) {
+	keys := newTestKeys(t)
+	srv := newJWKSServer(t, keys)
+
+	v, err := NewJWKSVerifier(testIssuer, srv.URL, []string{" superapp ", "", "portal"})
+	if err != nil {
+		t.Fatalf("verifier: %v", err)
+	}
+	r := newTestRouter(v)
+
+	for _, client := range []string{"superapp", "portal"} {
+		c := claimsFor(adminRole)
+		c["azp"] = client
+		if w := do(r, "/admin", sign(t, jwt.SigningMethodRS256, testRSAKid, keys.rsa, c)); w.Code != http.StatusOK {
+			t.Fatalf("azp %q autorizado: esperado 200, obtido %d", client, w.Code)
+		}
+	}
+
+	other := claimsFor(adminRole)
+	other["azp"] = "outro-client"
+	token := sign(t, jwt.SigningMethodRS256, testRSAKid, keys.rsa, other)
+	if _, err := v.Verify(context.Background(), token); !errors.Is(err, ErrUnauthorizedParty) {
+		t.Fatalf("azp não autorizado: esperado ErrUnauthorizedParty, obtido %v", err)
+	}
+	if w := do(r, "/auth", token); w.Code != http.StatusUnauthorized {
+		t.Fatalf("/auth com azp não autorizado: esperado 401, obtido %d", w.Code)
+	}
 }
 
 func TestJWKSVerifier_UnknownKidDoesNotHammerJWKS(t *testing.T) {

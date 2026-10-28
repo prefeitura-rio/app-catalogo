@@ -128,6 +128,31 @@ type KeycloakSettings struct {
 type AuthSettings struct {
 	JWTIssuer string
 	JWKSURL   string
+	// AuthorizedParties são os clients do Keycloak (claim azp) cujos tokens o
+	// serviço aceita. Vazia, nenhum token é aceito (falha fechada).
+	AuthorizedParties []string
+}
+
+// defaultJWTAuthorizedParties é o client do superapp, padrão de AUTH_JWT_AUTHORIZED_PARTIES.
+const defaultJWTAuthorizedParties = "superapp"
+
+// parseAuthorizedParties converte a lista separada por vírgula de
+// AUTH_JWT_AUTHORIZED_PARTIES, sem espaços, itens vazios nem repetidos.
+func parseAuthorizedParties(raw string) []string {
+	var parties []string
+	seen := map[string]struct{}{}
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		parties = append(parties, p)
+	}
+	return parties
 }
 
 // keycloakIssuer monta o emissor do realm (KEYCLOAK_URL/realms/KEYCLOAK_REALM).
@@ -350,6 +375,7 @@ func Load() (*AppConfig, error) {
 
 	cfg.Auth.JWTIssuer = getEnv(v, "AUTH_JWT_ISSUER", keycloakIssuer(cfg.Keycloak.URL, cfg.Keycloak.Realm))
 	cfg.Auth.JWKSURL = getEnv(v, "AUTH_JWKS_URL", defaultJWKSURL(cfg.Auth.JWTIssuer))
+	cfg.Auth.AuthorizedParties = parseAuthorizedParties(getEnv(v, "AUTH_JWT_AUTHORIZED_PARTIES", defaultJWTAuthorizedParties))
 
 	if err := cfg.Database.Validate(); err != nil {
 		return nil, fmt.Errorf("configuração de banco inválida: %w", err)
