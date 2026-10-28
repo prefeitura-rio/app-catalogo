@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
 
@@ -54,6 +55,17 @@ var DefaultWebhookConfig = WebhookConfig{
 	RetryMaxDelay:  time.Hour,
 	BatchSize:      20,
 	Retention:      7 * 24 * time.Hour,
+}
+
+// maxWebhookEventTypeChars é o limite da coluna event_type (informativa: é truncada).
+const maxWebhookEventTypeChars = 64
+
+// truncateRunes corta s em no máximo n caracteres, sem partir um caractere UTF-8.
+func truncateRunes(s string, n int) string {
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	return string([]rune(s)[:n])
 }
 
 // Resultados do webhook no label result de catalogo_salesforce_webhook_events_total.
@@ -131,7 +143,7 @@ func (s *SalesForceWebhookService) Enqueue(
 		}
 		key = unique
 	}
-	ev, created, err := s.store.Enqueue(ctx, key, slug, eventType, s.cfg.Lease)
+	ev, created, err := s.store.Enqueue(ctx, key, slug, truncateRunes(eventType, maxWebhookEventTypeChars), s.cfg.Lease)
 	if err != nil {
 		return nil, false, err
 	}

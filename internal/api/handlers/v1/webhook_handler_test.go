@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -244,5 +245,26 @@ func TestWebhook_NilQueueReturns503(t *testing.T) {
 	h := NewWebhookHandler(nil, testWebhookSecret)
 	if w := postWebhook(t, h, webhookBody, signWebhook(webhookBody)); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("sem fila: esperava 503, got %d", w.Code)
+	}
+}
+
+func TestWebhook_OversizedSlugIsRejectedWith400(t *testing.T) {
+	q := newRecordingWebhookQueue()
+	h := NewWebhookHandler(q, testWebhookSecret)
+
+	long := strings.Repeat("ã", maximumSalesForceWebhookSlugChars+1)
+	body := []byte(`{"event":{"type":"updated","created":"2026-10-28T12:00:00Z"},"sobject":{"Slug":"` + long + `"}}`)
+	if w := postWebhook(t, h, body, signWebhook(body)); w.Code != http.StatusBadRequest {
+		t.Fatalf("slug acima do limite: esperava 400 (não 503, que faria o remetente reenviar sem fim), got %d", w.Code)
+	}
+	if q.enqueuedCount() != 0 {
+		t.Fatal("slug acima do limite não deveria ser gravado")
+	}
+
+	// No limite (em caracteres, não bytes) é aceito.
+	atLimit := strings.Repeat("ã", maximumSalesForceWebhookSlugChars)
+	body = []byte(`{"event":{"type":"updated","created":"2026-10-28T12:00:00Z"},"sobject":{"Slug":"` + atLimit + `"}}`)
+	if w := postWebhook(t, h, body, signWebhook(body)); w.Code != http.StatusOK || q.enqueuedCount() != 1 {
+		t.Fatalf("slug no limite: status=%d enqueued=%d", w.Code, q.enqueuedCount())
 	}
 }

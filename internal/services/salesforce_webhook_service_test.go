@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
 )
@@ -343,6 +345,31 @@ func TestWebhookService_RetryDelayIsExponentialAndCapped(t *testing.T) {
 		if got := svc.retryDelay(attempt); got != want {
 			t.Errorf("attempt %d: esperava %v, got %v", attempt, want, got)
 		}
+	}
+}
+
+// lastEventType devolve o event_type gravado no evento id.
+func (m *memWebhookStore) lastEventType(id int64) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.events[id].ev.EventType
+}
+
+func TestWebhookService_LongEventTypeIsTruncatedToColumnLimit(t *testing.T) {
+	store := newMemWebhookStore()
+	svc := NewSalesForceWebhookService(store, &scriptedSyncer{}, testWebhookConfig)
+
+	long := strings.Repeat("é", maxWebhookEventTypeChars+10)
+	ev, created, err := svc.Enqueue(context.Background(), []byte(`{"x":1}`), "servico-tipo", long, "2026-10-28T12:00:00Z")
+	if err != nil || !created {
+		t.Fatalf("enqueue: created=%v err=%v", created, err)
+	}
+	got := store.lastEventType(ev.ID)
+	if n := utf8.RuneCountInString(got); n != maxWebhookEventTypeChars || !utf8.ValidString(got) {
+		t.Fatalf("event_type deveria ter %d caracteres válidos, got %d (válido=%v)", maxWebhookEventTypeChars, n, utf8.ValidString(got))
+	}
+	if short := truncateRunes("updated", maxWebhookEventTypeChars); short != "updated" {
+		t.Fatalf("tipo curto não deveria mudar: %q", short)
 	}
 }
 

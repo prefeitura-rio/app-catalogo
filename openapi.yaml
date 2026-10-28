@@ -659,7 +659,8 @@ paths:
         processamento; sem `event.created`, cada entrega é processada.
 
         Se `SALESFORCE_WEBHOOK_SECRET` não estiver configurado, retorna `401`.
-        Payload acima de 64 KiB retorna `413`. Falha ao gravar o evento retorna `503`
+        Payload acima de 64 KiB retorna `413`; identificador (`Slug`/`Id`) acima de
+        255 caracteres retorna `400`. Falha ao gravar o evento retorna `503`
         (o remetente deve reenviar).
       security: []
       parameters:

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/rs/zerolog/log"
@@ -17,7 +18,12 @@ import (
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
 )
 
-const maximumSalesForceWebhookBodyBytes int64 = 64 << 10
+const (
+	maximumSalesForceWebhookBodyBytes int64 = 64 << 10
+	// maximumSalesForceWebhookSlugChars é o limite da coluna slug de
+	// salesforce_webhook_events: acima disso o evento nunca seria gravado.
+	maximumSalesForceWebhookSlugChars = 255
+)
 
 // salesForceWebhookQueue grava o evento antes da resposta e o processa com novas
 // tentativas (services.SalesForceWebhookService).
@@ -98,6 +104,10 @@ func (h *WebhookHandler) SalesForce(c *gin.Context) {
 	}
 	if slug == "" {
 		c.JSON(http.StatusOK, gin.H{"status": "ignored"})
+		return
+	}
+	if utf8.RuneCountInString(slug) > maximumSalesForceWebhookSlugChars {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "identificador do serviço excede o limite permitido"})
 		return
 	}
 
