@@ -268,3 +268,18 @@ func TestWebhook_OversizedSlugIsRejectedWith400(t *testing.T) {
 		t.Fatalf("slug no limite: status=%d enqueued=%d", w.Code, q.enqueuedCount())
 	}
 }
+
+func TestWebhook_SlugWithControlCharacterIsRejectedWith400(t *testing.T) {
+	q := newRecordingWebhookQueue()
+	h := NewWebhookHandler(q, testWebhookSecret)
+
+	for _, slug := range []string{`servico\u0000teste`, `servico\nteste`, `\u0007`} {
+		body := []byte(`{"event":{"type":"updated","created":"2026-10-28T12:00:00Z"},"sobject":{"Slug":"` + slug + `"}}`)
+		if w := postWebhook(t, h, body, signWebhook(body)); w.Code != http.StatusBadRequest {
+			t.Errorf("slug %s: esperava 400, got %d", slug, w.Code)
+		}
+	}
+	if q.enqueuedCount() != 0 {
+		t.Fatalf("slug com caractere de controle não deveria ser gravado, got %v", q.enqueued)
+	}
+}

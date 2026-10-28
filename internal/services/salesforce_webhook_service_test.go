@@ -373,6 +373,19 @@ func TestWebhookService_LongEventTypeIsTruncatedToColumnLimit(t *testing.T) {
 	}
 }
 
+func TestWebhookService_EventTypeControlCharactersAreRemoved(t *testing.T) {
+	store := newMemWebhookStore()
+	svc := NewSalesForceWebhookService(store, &scriptedSyncer{}, testWebhookConfig)
+
+	ev, _, err := svc.Enqueue(context.Background(), []byte(`{"x":2}`), "servico-nul", "upd\x00ated\n", "2026-10-28T12:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := store.lastEventType(ev.ID); got != "updated" {
+		t.Fatalf("event_type deveria ficar sem caracteres de controle, got %q", got)
+	}
+}
+
 func TestWebhookEventKey_IsStableSHA256(t *testing.T) {
 	a := WebhookEventKey([]byte("abc"))
 	if a != "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" {

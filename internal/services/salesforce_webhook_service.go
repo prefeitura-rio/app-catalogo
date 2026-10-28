@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
@@ -59,6 +60,18 @@ var DefaultWebhookConfig = WebhookConfig{
 
 // maxWebhookEventTypeChars é o limite da coluna event_type (informativa: é truncada).
 const maxWebhookEventTypeChars = 64
+
+// sanitizeEventType deixa o event_type (só descritivo) gravável: sem caracteres de
+// controle (NUL é recusado pelo Postgres) e no limite da coluna.
+func sanitizeEventType(eventType string) string {
+	clean := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, eventType)
+	return truncateRunes(clean, maxWebhookEventTypeChars)
+}
 
 // truncateRunes corta s em no máximo n caracteres, sem partir um caractere UTF-8.
 func truncateRunes(s string, n int) string {
@@ -143,7 +156,7 @@ func (s *SalesForceWebhookService) Enqueue(
 		}
 		key = unique
 	}
-	ev, created, err := s.store.Enqueue(ctx, key, slug, truncateRunes(eventType, maxWebhookEventTypeChars), s.cfg.Lease)
+	ev, created, err := s.store.Enqueue(ctx, key, slug, sanitizeEventType(eventType), s.cfg.Lease)
 	if err != nil {
 		return nil, false, err
 	}

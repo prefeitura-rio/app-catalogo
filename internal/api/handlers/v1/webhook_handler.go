@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
@@ -108,6 +109,12 @@ func (h *WebhookHandler) SalesForce(c *gin.Context) {
 	}
 	if utf8.RuneCountInString(slug) > maximumSalesForceWebhookSlugChars {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "identificador do serviço excede o limite permitido"})
+		return
+	}
+	// Caractere de controle (ex.: NUL, que o Postgres recusa em texto) nunca é um
+	// slug válido: 400, em vez de 503 e reenvio sem fim.
+	if strings.IndexFunc(slug, unicode.IsControl) >= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "identificador do serviço inválido"})
 		return
 	}
 
