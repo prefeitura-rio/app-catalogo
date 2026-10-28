@@ -11,12 +11,24 @@ type SearchRequest struct {
 	PerPage int           `json:"per_page"`
 }
 
+const (
+	// SearchDefaultPerPage é o tamanho de página quando per_page é ausente ou menor que 1.
+	SearchDefaultPerPage = 10
+	// SearchMaxPerPage é o teto de per_page do contrato (openapi.yaml, searchPerPage).
+	SearchMaxPerPage = 100
+)
+
+// Normalize aplica os limites de paginação: page mínimo 1; per_page menor que 1
+// vira o default e acima do máximo é limitado ao máximo.
 func (r *SearchRequest) Normalize() {
 	if r.Page < 1 {
 		r.Page = 1
 	}
-	if r.PerPage < 1 || r.PerPage > 100 {
-		r.PerPage = 10
+	if r.PerPage < 1 {
+		r.PerPage = SearchDefaultPerPage
+	}
+	if r.PerPage > SearchMaxPerPage {
+		r.PerPage = SearchMaxPerPage
 	}
 }
 
