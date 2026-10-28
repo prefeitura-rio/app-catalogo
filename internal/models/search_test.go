@@ -11,7 +11,13 @@ func TestSearchRequest_Normalize(t *testing.T) {
 		{SearchRequest{Page: 0, PerPage: 0}, 1, 10},
 		{SearchRequest{Page: -1, PerPage: -5}, 1, 10},
 		{SearchRequest{Page: 3, PerPage: 50}, 3, 50},
-		{SearchRequest{Page: 1, PerPage: 999}, 1, 10},
+		{SearchRequest{Page: 1, PerPage: 1}, 1, 1},
+		{SearchRequest{Page: 1, PerPage: 100}, 1, 100},
+		// Acima do máximo do contrato (openapi.yaml: maximum 100) limita a 100,
+		// em vez de cair no default (DEV-16).
+		{SearchRequest{Page: 1, PerPage: 101}, 1, 100},
+		{SearchRequest{Page: 1, PerPage: 999}, 1, 100},
+		{SearchRequest{Page: 1, PerPage: 9999}, 1, 100},
 	}
 
 	for _, tc := range cases {
