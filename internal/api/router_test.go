@@ -184,6 +184,9 @@ func TestSetupRouter_Authorization(t *testing.T) {
 	if w := f.do(http.MethodGet, "/api/v1/catalog/nao-uuid", user); w.Code != http.StatusBadRequest {
 		t.Errorf("catálogo autenticado com ID inválido: esperado 400, obtido %d", w.Code)
 	}
+	if w := f.do(http.MethodGet, "/api/v1/catalog/"+itemID, user); w.Code != http.StatusInternalServerError {
+		t.Errorf("catálogo autenticado com banco fora: esperado 500, obtido %d", w.Code)
+	}
 }
 
 func TestSetupRouter_PublicRoutes(t *testing.T) {
@@ -192,8 +195,9 @@ func TestSetupRouter_PublicRoutes(t *testing.T) {
 	if w := f.do(http.MethodGet, "/api/public/catalog/nao-uuid", ""); w.Code != http.StatusBadRequest {
 		t.Fatalf("catálogo público com ID inválido: esperado 400, obtido %d", w.Code)
 	}
-	if w := f.do(http.MethodGet, "/api/public/catalog/"+itemID, ""); w.Code != http.StatusNotFound {
-		t.Fatalf("catálogo público com banco fora: esperado 404, obtido %d", w.Code)
+	// Banco fora não é item ausente: 500, não 404.
+	if w := f.do(http.MethodGet, "/api/public/catalog/"+itemID, ""); w.Code != http.StatusInternalServerError {
+		t.Fatalf("catálogo público com banco fora: esperado 500, obtido %d", w.Code)
 	}
 	// Sem segredo configurado o webhook recusa tudo (falha fechada).
 	if w := f.do(http.MethodPost, "/api/webhooks/salesforce", ""); w.Code != http.StatusUnauthorized {
