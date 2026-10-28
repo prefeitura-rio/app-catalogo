@@ -163,6 +163,11 @@ spec:
         sidecar.istio.io/proxyCPULimit: "200m"
         sidecar.istio.io/proxyMemory: "128Mi"
         sidecar.istio.io/proxyMemoryLimit: "256Mi"
+        # Scrape das métricas de sync (catalogo_sync_*, webhook) pelo Prometheus
+        # do istio-system (job kubernetes-pods); o Istio as serve mescladas no 15020.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9091"
+        prometheus.io/path: "/metrics"
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -295,4 +300,20 @@ spec:
     - protocol: TCP
       port: 80
       targetPort: 8080
+  type: ClusterIP
+
+---
+# Service das métricas do worker (GET /metrics na porta 9091), só dentro do cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: catalogo-worker-metrics
+spec:
+  selector:
+    app: catalogo-worker
+  ports:
+    - name: http-metrics
+      protocol: TCP
+      port: 9091
+      targetPort: metrics
   type: ClusterIP
