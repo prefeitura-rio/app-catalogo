@@ -68,7 +68,7 @@ type JWKSVerifier struct {
 }
 
 // NewJWKSVerifier cria o verificador. issuer, jwksURL e ao menos um client
-// autorizado (claim azp) são obrigatórios: sem eles nenhum token é aceito.
+// autorizado (claim azp) são obrigatórios; faltando algum, nenhum token é aceito.
 func NewJWKSVerifier(issuer, jwksURL string, authorizedParties []string) (*JWKSVerifier, error) {
 	issuer = strings.TrimSpace(issuer)
 	jwksURL = strings.TrimSpace(jwksURL)
