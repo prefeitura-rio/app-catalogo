@@ -53,17 +53,24 @@ type ResilienceConfig struct {
 	// OpenTimeout é quanto tempo o circuito fica aberto antes de deixar passar
 	// uma chamada de teste (meio-aberto).
 	OpenTimeout time.Duration
+	// MaxElapsed limita o tempo total da chamada, somando tentativas e esperas
+	// (0 = sem limite além do contexto do chamador). Estourar o limite conta
+	// como falha do serviço.
+	MaxElapsed time.Duration
 }
 
 // O RMI está no caminho síncrono de GET /api/v1/recommendations: poucas
 // tentativas, espera curta e circuito que abre cedo, para a recomendação cair
-// rápido na genérica quando o serviço está fora.
+// rápido na genérica quando o serviço está fora. MaxElapsed mantém o pior caso
+// no timeout de 10s que uma única requisição já tinha: os retries só ocupam o
+// tempo que uma falha rápida deixou sobrando.
 var defaultRMIResilience = ResilienceConfig{
 	MaxAttempts:      3,
 	BaseDelay:        100 * time.Millisecond,
 	MaxDelay:         1 * time.Second,
 	FailureThreshold: 5,
 	OpenTimeout:      30 * time.Second,
+	MaxElapsed:       10 * time.Second,
 }
 
 // O app-go-api é consumido pelo sync em background: aceita esperar mais entre
@@ -257,20 +264,34 @@ func (r *resilientCaller) backoff(attempt int) time.Duration {
 // transitórias são repetidas e contam para abrir o circuito; um erro não
 // transitório (4xx, resposta inválida) volta na hora e conta como serviço
 // disponível. Com o circuito aberto, retorna um erro que envolve ErrCircuitOpen
-// sem chamar op.
+// sem chamar op. O prazo do chamador (ou MaxElapsed) estourado durante uma
+// tentativa conta como falha do serviço; o cancelamento pelo chamador, não.
 func (r *resilientCaller) do(ctx context.Context, op func(context.Context) error) error {
+	callCtx := ctx
+	if r.config.MaxElapsed > 0 {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithTimeout(ctx, r.config.MaxElapsed)
+		defer cancel()
+	}
+
 	for attempt := 1; ; attempt++ {
 		if err := r.breaker.allow(); err != nil {
 			return fmt.Errorf("%s: %w", r.client, err)
 		}
+		if attempt > 1 {
+			observability.HTTPClientRetriesTotal.WithLabelValues(r.client).Inc()
+		}
 
-		err := op(ctx)
+		err := op(callCtx)
 		switch {
 		case err == nil:
 			r.breaker.onSuccess()
 			return nil
-		case ctx.Err() != nil:
+		case errors.Is(ctx.Err(), context.Canceled):
 			r.breaker.onAbandon()
+			return err
+		case callCtx.Err() != nil:
+			r.breaker.onFailure()
 			return err
 		case !isTransient(err):
 			r.breaker.onSuccess()
@@ -285,11 +306,10 @@ func (r *resilientCaller) do(ctx context.Context, op func(context.Context) error
 
 		timer := time.NewTimer(r.backoff(attempt))
 		select {
-		case <-ctx.Done():
+		case <-callCtx.Done():
 			timer.Stop()
 			return err
 		case <-timer.C:
 		}
-		observability.HTTPClientRetriesTotal.WithLabelValues(r.client).Inc()
 	}
 }

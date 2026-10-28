@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // CPF sintético (não pertence a ninguém): só precisa ter 11 dígitos.
@@ -149,5 +150,51 @@ func TestRMIClient_ErroDeTransporteNaoExpoeCPF(t *testing.T) {
 	}
 	if !isTransient(err) {
 		t.Fatalf("erro de transporte deve ser transitório: %v", err)
+	}
+}
+
+func TestRMIClient_RespostaAcimaDoLimiteNaoRepete(t *testing.T) {
+	t.Parallel()
+
+	client, calls := newTestRMIClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"cpf":"` + strings.Repeat("0", int(maximumRMIResponseBytes)) + `"}`))
+	}, fastResilience(1))
+
+	if _, err := client.GetCitizen(context.Background(), syntheticCPF); err == nil {
+		t.Fatal("esperava erro para resposta acima do limite")
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("resposta grande demais não deve repetir, got %d chamadas", calls.Load())
+	}
+	if client.CircuitState() != CircuitClosed {
+		t.Fatalf("resposta grande demais não deve abrir o circuito, got %s", client.CircuitState())
+	}
+}
+
+func TestRMIClient_LentoRespeitaMaxElapsed(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	cfg := fastResilience(5)
+	cfg.MaxElapsed = 100 * time.Millisecond
+	client, calls := newTestRMIClient(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}, cfg)
+
+	started := time.Now()
+	_, err := client.GetCitizen(context.Background(), syntheticCPF)
+	if err == nil {
+		t.Fatal("esperava erro com o RMI lento")
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("GetCitizen passou do MaxElapsed: %v", elapsed)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("esperava 1 chamada dentro do prazo, got %d", calls.Load())
 	}
 }

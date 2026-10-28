@@ -348,3 +348,77 @@ func TestMetricas_ExpostasPorCliente(t *testing.T) {
 		}
 	}
 }
+
+func TestResilientCaller_MaxElapsedLimitaTempoTotalEContaFalha(t *testing.T) {
+	t.Parallel()
+
+	cfg := fastResilience(1)
+	cfg.MaxElapsed = 50 * time.Millisecond
+	caller := newResilientCaller(uniqueClientName(t), cfg)
+
+	// Serviço lento: só responde quando o contexto da tentativa acaba.
+	var calls int
+	started := time.Now()
+	err := caller.do(context.Background(), func(attemptCtx context.Context) error {
+		calls++
+		<-attemptCtx.Done()
+		return markTransient(attemptCtx.Err())
+	})
+	elapsed := time.Since(started)
+
+	if err == nil {
+		t.Fatal("esperava erro de prazo")
+	}
+	if elapsed > time.Second {
+		t.Fatalf("MaxElapsed=50ms não limitou a chamada: %v", elapsed)
+	}
+	if calls != 1 {
+		t.Fatalf("prazo esgotado não deve gerar nova tentativa, got %d", calls)
+	}
+	if caller.breaker.State() != CircuitOpen {
+		t.Fatalf("lentidão além do prazo deve contar como falha, got %s", caller.breaker.State())
+	}
+}
+
+func TestResilientCaller_PrazoDoChamadorContaComoFalha(t *testing.T) {
+	t.Parallel()
+
+	caller := newResilientCaller(uniqueClientName(t), fastResilience(1))
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	err := caller.do(ctx, func(attemptCtx context.Context) error {
+		<-attemptCtx.Done()
+		return markTransient(attemptCtx.Err())
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("esperava DeadlineExceeded, got %v", err)
+	}
+	if caller.breaker.State() != CircuitOpen {
+		t.Fatalf("serviço que não respondeu no prazo deve contar como falha, got %s", caller.breaker.State())
+	}
+}
+
+func TestResilientCaller_RetryNaoContadoQuandoCircuitoAbreAntes(t *testing.T) {
+	t.Parallel()
+
+	name := uniqueClientName(t)
+	caller := newResilientCaller(name, fastResilience(2))
+	retriesBefore := retriesMetric(name)
+
+	var calls int
+	err := caller.do(context.Background(), func(context.Context) error {
+		calls++
+		return errTransientTest
+	})
+	// 1ª falha, retry (2ª tentativa) falha e abre o circuito; a 3ª é recusada.
+	if !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("esperava ErrCircuitOpen na 3ª tentativa, got %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("esperava 2 tentativas reais, got %d", calls)
+	}
+	if got := retriesMetric(name) - retriesBefore; got != 1 {
+		t.Fatalf("retries aumentou %v, want 1 (só a tentativa que de fato ocorreu)", got)
+	}
+}

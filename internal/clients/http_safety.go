@@ -16,13 +16,16 @@ func noRedirectHTTPClient(timeout time.Duration) *http.Client {
 	}
 }
 
+// errHTTPBodyTooLarge indica resposta maior que o limite: repetir não adianta.
+var errHTTPBodyTooLarge = errors.New("HTTP response body exceeds its byte limit")
+
 func readBoundedHTTPBody(responseBody io.Reader, maximumBytes int64) ([]byte, error) {
 	encodedBody, readError := io.ReadAll(io.LimitReader(responseBody, maximumBytes+1))
 	if readError != nil {
 		return nil, errors.New("read bounded HTTP response body")
 	}
 	if int64(len(encodedBody)) > maximumBytes {
-		return nil, errors.New("HTTP response body exceeds its byte limit")
+		return nil, errHTTPBodyTooLarge
 	}
 	return encodedBody, nil
 }

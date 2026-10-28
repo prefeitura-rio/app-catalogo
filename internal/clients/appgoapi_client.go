@@ -3,6 +3,7 @@ package clients
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -187,7 +188,11 @@ func (c *AppGoAPIClient) getOnce(ctx context.Context, path, authHeader string, d
 
 	body, err := readBoundedHTTPBody(resp.Body, maximumAppGoAPIResponseBytes)
 	if err != nil {
-		return markTransient(fmt.Errorf("appgoapi: falha ao ler resposta: %w", err))
+		readErr := fmt.Errorf("appgoapi: falha ao ler resposta: %w", err)
+		if errors.Is(err, errHTTPBodyTooLarge) {
+			return readErr
+		}
+		return markTransient(readErr)
 	}
 	if resp.StatusCode != http.StatusOK {
 		statusErr := fmt.Errorf("appgoapi: retornou status %d", resp.StatusCode)

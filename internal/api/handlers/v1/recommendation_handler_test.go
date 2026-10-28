@@ -33,6 +33,14 @@ func (circuitOpenProfiles) GetOrSync(context.Context, string) (*models.CitizenPr
 	return nil, fmt.Errorf("rmi: %w", clients.ErrCircuitOpen)
 }
 
+// slowProfiles simula o RMI lento: só devolve quando o contexto acaba.
+type slowProfiles struct{}
+
+func (slowProfiles) GetOrSync(ctx context.Context, _ string) (*models.CitizenProfile, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 type recordingRecommender struct {
 	personalizedCalls atomic.Int32
 	anonymousCalls    atomic.Int32
@@ -43,8 +51,12 @@ func (r *recordingRecommender) Recommend(context.Context, *models.CitizenProfile
 	return nil, fmt.Errorf("recomendação personalizada não deveria ser chamada sem perfil")
 }
 
-func (r *recordingRecommender) RecommendAnonymous(_ context.Context, req *models.RecommendationRequest) (*models.RecommendationResponse, error) {
+func (r *recordingRecommender) RecommendAnonymous(ctx context.Context, req *models.RecommendationRequest) (*models.RecommendationResponse, error) {
 	r.anonymousCalls.Add(1)
+	// Como o Redis e o Postgres reais: com o contexto vencido, a consulta falha.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return &models.RecommendationResponse{
 		Items:        []*models.RankedItem{{ID: "item-generico", Title: "Item genérico"}},
 		Context:      req.Context,
@@ -87,6 +99,41 @@ func TestRecommendationsAuthenticated_CircuitoAbertoRespondeGenerica(t *testing.
 	}
 	if recommender.anonymousCalls.Load() != 1 || recommender.personalizedCalls.Load() != 0 {
 		t.Fatalf("anônima=%d personalizada=%d", recommender.anonymousCalls.Load(), recommender.personalizedCalls.Load())
+	}
+}
+
+// TestRecommendationsAuthenticated_RMILentoRespondeGenericaNoPrazo cobre o RMI
+// lento antes de o circuito abrir: a busca do perfil não pode consumir o prazo
+// inteiro da requisição, senão a recomendação genérica roda com o contexto
+// vencido e vira 500.
+func TestRecommendationsAuthenticated_RMILentoRespondeGenericaNoPrazo(t *testing.T) {
+	t.Parallel()
+
+	recommender := &recordingRecommender{}
+	engine := gin.New()
+	engine.Use(middleware.Timeout(300 * time.Millisecond))
+	engine.GET("/api/v1/recommendations", func(c *gin.Context) {
+		c.Set(middleware.UserCPFKey, syntheticCPF)
+		c.Next()
+	}, (&RecommendationHandler{recomSvc: recommender, citizenSvc: slowProfiles{}}).Authenticated)
+
+	started := time.Now()
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/recommendations", nil))
+	elapsed := time.Since(started)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want 200", w.Code, w.Body.String())
+	}
+	var resp models.RecommendationResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("resposta inválida: %v", err)
+	}
+	if resp.Personalized {
+		t.Fatalf("esperava recomendação genérica, got %+v", resp)
+	}
+	if elapsed >= 300*time.Millisecond {
+		t.Fatalf("a resposta deveria sair antes do prazo da requisição, levou %v", elapsed)
 	}
 }
 

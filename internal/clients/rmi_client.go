@@ -123,7 +123,11 @@ func (c *RMIClient) fetchCitizen(ctx context.Context, requestURL, authHeader str
 
 	body, err := readBoundedHTTPBody(resp.Body, maximumRMIResponseBytes)
 	if err != nil {
-		return nil, markTransient(fmt.Errorf("rmi: falha ao ler resposta: %w", err))
+		readErr := fmt.Errorf("rmi: falha ao ler resposta: %w", err)
+		if errors.Is(err, errHTTPBodyTooLarge) {
+			return nil, readErr
+		}
+		return nil, markTransient(readErr)
 	}
 	if resp.StatusCode != http.StatusOK {
 		statusErr := fmt.Errorf("rmi: retornou status %d", resp.StatusCode)

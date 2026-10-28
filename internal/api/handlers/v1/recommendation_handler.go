@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -55,7 +56,9 @@ func (h *RecommendationHandler) Authenticated(c *gin.Context) {
 
 	req := h.parseRequest(c)
 
-	profile, err := h.citizenSvc.GetOrSync(c.Request.Context(), cpf)
+	profileCtx, cancelProfile := profileLookupContext(c.Request.Context())
+	profile, err := h.citizenSvc.GetOrSync(profileCtx, cpf)
+	cancelProfile()
 	if err != nil || profile == nil {
 		// Sem perfil (cidadão sem cadastro, RMI fora do ar ou com o circuit
 		// breaker aberto): retornar recomendação genérica, nunca 500.
@@ -100,6 +103,17 @@ func (h *RecommendationHandler) Anonymous(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, resp)
+}
+
+// profileLookupContext limita a busca do perfil (que pode depender do RMI) à
+// metade do prazo restante da requisição, para sobrar tempo de servir a
+// recomendação genérica quando o RMI está lento.
+func profileLookupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, time.Until(deadline)/2)
 }
 
 func (h *RecommendationHandler) parseRequest(c *gin.Context) *models.RecommendationRequest {
