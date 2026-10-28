@@ -18,8 +18,8 @@ func init() {
 	gin.SetMode(gin.TestMode)
 }
 
-func request(r http.Handler, method, path, remoteAddr string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, path, nil)
+func request(r http.Handler, path, remoteAddr string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, path, nil)
 	if remoteAddr != "" {
 		req.RemoteAddr = remoteAddr
 	}
@@ -34,11 +34,11 @@ func TestRateLimitMiddleware(t *testing.T) {
 	r.GET("/", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	const ip = "192.0.2.10:1234"
-	if w := request(r, http.MethodGet, "/", ip); w.Code != http.StatusOK {
+	if w := request(r, "/", ip); w.Code != http.StatusOK {
 		t.Fatalf("1ª requisição: esperado 200, obtido %d", w.Code)
 	}
 
-	w := request(r, http.MethodGet, "/", ip)
+	w := request(r, "/", ip)
 	if w.Code != http.StatusOK {
 		t.Fatalf("2ª requisição: esperado 200, obtido %d", w.Code)
 	}
@@ -50,7 +50,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 	}
 
 	for i := 0; i < 2; i++ {
-		w = request(r, http.MethodGet, "/", ip)
+		w = request(r, "/", ip)
 		if w.Code != http.StatusTooManyRequests {
 			t.Fatalf("acima do limite: esperado 429, obtido %d", w.Code)
 		}
@@ -59,7 +59,7 @@ func TestRateLimitMiddleware(t *testing.T) {
 		}
 	}
 
-	if w := request(r, http.MethodGet, "/", "198.51.100.7:4321"); w.Code != http.StatusOK {
+	if w := request(r, "/", "198.51.100.7:4321"); w.Code != http.StatusOK {
 		t.Fatalf("outro IP tem contador próprio: esperado 200, obtido %d", w.Code)
 	}
 }
@@ -73,11 +73,11 @@ func TestRateLimitMiddleware_LimiterIsPerInstance(t *testing.T) {
 	}
 	a, b := newRouter(), newRouter()
 	const ip = "203.0.113.5:1"
-	request(a, http.MethodGet, "/", ip)
-	if w := request(a, http.MethodGet, "/", ip); w.Code != http.StatusTooManyRequests {
+	request(a, "/", ip)
+	if w := request(a, "/", ip); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("esperado 429 no mesmo limitador, obtido %d", w.Code)
 	}
-	if w := request(b, http.MethodGet, "/", ip); w.Code != http.StatusOK {
+	if w := request(b, "/", ip); w.Code != http.StatusOK {
 		t.Fatalf("outro limitador não compartilha contador: esperado 200, obtido %d", w.Code)
 	}
 }
@@ -123,7 +123,7 @@ func TestRequestLogger(t *testing.T) {
 	}
 	for _, tc := range cases {
 		buf.Reset()
-		request(r, http.MethodGet, "/status/"+tc.code+"?cpf=nao-logar", "192.0.2.20:5555")
+		request(r, "/status/"+tc.code+"?cpf=nao-logar", "192.0.2.20:5555")
 
 		var line logLine
 		if err := json.Unmarshal(buf.Bytes(), &line); err != nil {
@@ -150,7 +150,7 @@ func TestMetricsHandler(t *testing.T) {
 	r := gin.New()
 	r.GET("/metrics", MetricsHandler())
 
-	w := request(r, http.MethodGet, "/metrics", "")
+	w := request(r, "/metrics", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("esperado 200, obtido %d", w.Code)
 	}
