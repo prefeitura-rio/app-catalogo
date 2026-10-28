@@ -3,9 +3,11 @@ package clients
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -145,5 +147,99 @@ func TestAppGoAPIClient_GetCourses_RequiresAuthHeader(t *testing.T) {
 	}
 	if gotAuth != "Bearer test-token" {
 		t.Fatalf("Authorization=%q", gotAuth)
+	}
+}
+
+func newResilienceTestAppGoAPIClient(t *testing.T, handler http.HandlerFunc, cfg ResilienceConfig) (*AppGoAPIClient, *atomic.Int32) {
+	t.Helper()
+	var apiCalls atomic.Int32
+	client := newTestAppGoAPIClient(t, withKeycloakToken(func(w http.ResponseWriter, r *http.Request) {
+		apiCalls.Add(1)
+		handler(w, r)
+	}))
+	client.resilience = newResilientCaller(uniqueClientName(t), cfg)
+	return client, &apiCalls
+}
+
+func writeEmptyCourses(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"data": map[string]any{
+			"courses":    []any{},
+			"pagination": map[string]any{"total": 0, "page": 1},
+		},
+	})
+}
+
+func TestAppGoAPIClient_RepeteEm5xxE429(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusTooManyRequests} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+			var attempts atomic.Int32
+			client, calls := newResilienceTestAppGoAPIClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				if attempts.Add(1) == 1 {
+					w.WriteHeader(status)
+					return
+				}
+				writeEmptyCourses(w)
+			}, fastResilience(5))
+
+			if _, _, err := client.GetCourses(context.Background(), 1, time.Time{}); err != nil {
+				t.Fatalf("GetCourses: %v", err)
+			}
+			if calls.Load() != 2 {
+				t.Fatalf("esperava 2 chamadas, got %d", calls.Load())
+			}
+			if got := retriesMetric(client.resilience.client); got != 1 {
+				t.Fatalf("retries=%v, want 1", got)
+			}
+		})
+	}
+}
+
+func TestAppGoAPIClient_4xxNaoRepete(t *testing.T) {
+	t.Parallel()
+
+	client, calls := newResilienceTestAppGoAPIClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}, fastResilience(1))
+
+	if _, _, err := client.GetJobs(context.Background(), 1, time.Time{}); err == nil {
+		t.Fatal("esperava erro para 404")
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("404 não deve repetir, got %d chamadas", calls.Load())
+	}
+	if client.CircuitState() != CircuitClosed {
+		t.Fatalf("404 não deve abrir o circuito, got %s", client.CircuitState())
+	}
+}
+
+func TestAppGoAPIClient_CircuitoAbreERecusaSemChamarAAPI(t *testing.T) {
+	t.Parallel()
+
+	client, calls := newResilienceTestAppGoAPIClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}, fastResilience(3))
+
+	if _, _, err := client.GetMEIOpportunities(context.Background(), 1, time.Time{}); err == nil {
+		t.Fatal("esperava erro com a API respondendo 500")
+	}
+	if client.CircuitState() != CircuitOpen {
+		t.Fatalf("esperava circuito aberto, got %s", client.CircuitState())
+	}
+	if got := circuitMetric(client.resilience.client); got != float64(CircuitOpen) {
+		t.Fatalf("catalogo_http_client_circuit_state=%v, want 2", got)
+	}
+	callsWhenOpened := calls.Load()
+
+	_, _, err := client.GetCourses(context.Background(), 1, time.Time{})
+	if !errors.Is(err, ErrCircuitOpen) {
+		t.Fatalf("esperava ErrCircuitOpen, got %v", err)
+	}
+	if calls.Load() != callsWhenOpened {
+		t.Fatalf("com o circuito aberto a API não pode ser chamada: %d → %d", callsWhenOpened, calls.Load())
 	}
 }

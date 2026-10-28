@@ -1,6 +1,7 @@
 package v1
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,9 +13,20 @@ import (
 	"github.com/prefeitura-rio/app-catalogo/internal/services"
 )
 
+// recommender é o que o handler usa de services.RecommendationService.
+type recommender interface {
+	Recommend(ctx context.Context, profile *models.CitizenProfile, req *models.RecommendationRequest) (*models.RecommendationResponse, error)
+	RecommendAnonymous(ctx context.Context, req *models.RecommendationRequest) (*models.RecommendationResponse, error)
+}
+
+// citizenProfileProvider é o que o handler usa de services.CitizenProfileService.
+type citizenProfileProvider interface {
+	GetOrSync(ctx context.Context, cpf string) (*models.CitizenProfile, error)
+}
+
 type RecommendationHandler struct {
-	recomSvc   *services.RecommendationService
-	citizenSvc *services.CitizenProfileService
+	recomSvc   recommender
+	citizenSvc citizenProfileProvider
 }
 
 func NewRecommendationHandler(recomSvc *services.RecommendationService, citizenSvc *services.CitizenProfileService) *RecommendationHandler {
@@ -45,7 +57,8 @@ func (h *RecommendationHandler) Authenticated(c *gin.Context) {
 
 	profile, err := h.citizenSvc.GetOrSync(c.Request.Context(), cpf)
 	if err != nil || profile == nil {
-		// Sem perfil: retornar recomendação anônima
+		// Sem perfil (cidadão sem cadastro, RMI fora do ar ou com o circuit
+		// breaker aberto): retornar recomendação genérica, nunca 500.
 		resp, err := h.recomSvc.RecommendAnonymous(c.Request.Context(), req)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "falha nas recomendações"})
