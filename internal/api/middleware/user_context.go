@@ -22,6 +22,7 @@ const (
 
 type jwtClaims struct {
 	jwt.RegisteredClaims
+	AuthorizedParty   string `json:"azp"`
 	PreferredUsername string `json:"preferred_username"`
 	Name              string `json:"name"`
 	Email             string `json:"email"`
@@ -45,7 +46,7 @@ func normalizeCPF(raw string) (string, bool) {
 }
 
 // ExtractUserContext lê o JWT de X-Auth-Request-Token e só cria identidade e
-// papel quando o verifier confere assinatura, emissor, exp e iat. O header pode
+// papel quando o verifier confere assinatura, emissor, exp, iat e azp. O header pode
 // chegar direto do cliente, então nada nele é confiável sem essa verificação.
 // Com verifier nil nenhuma requisição é autenticada (falha fechada).
 func ExtractUserContext(verifier TokenVerifier) gin.HandlerFunc {

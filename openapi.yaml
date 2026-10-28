@@ -10,8 +10,8 @@ info:
     ## Autenticação
 
     O JWT do Keycloak é enviado no header `X-Auth-Request-Token` (Bearer JWT).
-    O serviço verifica o token: assinatura pelas chaves do JWKS do realm, `iss`, `exp`
-    e `iat`. Token ausente ou inválido não autentica (401 nas rotas protegidas).
+    O serviço verifica o token: assinatura pelas chaves do JWKS do realm, `iss`, `exp`,
+    `iat` e `azp` (client autorizado). Token ausente ou inválido não autentica (401 nas rotas protegidas).
     O claim `preferred_username` no JWT contém o CPF do cidadão (apenas dígitos).
 
     Rotas marcadas com `bearerAuth` requerem esse header.
@@ -738,7 +738,7 @@ components:
       bearerFormat: JWT
       description: |
         JWT do Keycloak no header `X-Auth-Request-Token`, verificado pelo serviço
-        (assinatura via JWKS, `iss`, `exp`, `iat`).
+        (assinatura via JWKS, `iss`, `exp`, `iat`, `azp`).
         O claim `preferred_username` deve conter o CPF do cidadão (apenas dígitos).
     adminAuth:
       type: http

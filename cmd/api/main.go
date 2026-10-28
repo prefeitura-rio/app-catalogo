@@ -173,12 +173,12 @@ func main() {
 	}
 
 	var tokenVerifier middleware.TokenVerifier
-	jwksVerifier, err := middleware.NewJWKSVerifier(cfg.Auth.JWTIssuer, cfg.Auth.JWKSURL)
+	jwksVerifier, err := middleware.NewJWKSVerifier(cfg.Auth.JWTIssuer, cfg.Auth.JWKSURL, cfg.Auth.AuthorizedParties)
 	if err != nil {
-		log.Error().Err(err).Msg("AUTH_JWT_ISSUER/AUTH_JWKS_URL (ou KEYCLOAK_URL/KEYCLOAK_REALM) ausentes — endpoints autenticados responderão 401")
+		log.Error().Err(err).Msg("AUTH_JWT_ISSUER/AUTH_JWKS_URL (ou KEYCLOAK_URL/KEYCLOAK_REALM) ou AUTH_JWT_AUTHORIZED_PARTIES ausentes — endpoints autenticados responderão 401")
 	} else {
 		tokenVerifier = jwksVerifier
-		log.Info().Str("issuer", cfg.Auth.JWTIssuer).Msg("verificação de JWT via JWKS ativada")
+		log.Info().Str("issuer", cfg.Auth.JWTIssuer).Strs("authorized_parties", cfg.Auth.AuthorizedParties).Msg("verificação de JWT via JWKS ativada")
 	}
 
 	router := api.SetupRouter(cfg, db.Pool, api.RouterDeps{

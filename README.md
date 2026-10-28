@@ -49,6 +49,7 @@ O Adminer (UI do banco) em `http://localhost:8083`.
 | `APP_RMI_URL` | URL base do app-rmi (perfil do cidadão) |
 | `KEYCLOAK_URL` / `KEYCLOAK_REALM` / `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` | Auth para chamadas ao app-rmi e app-go-api |
 | `AUTH_JWT_ISSUER` / `AUTH_JWKS_URL` | Emissor e JWKS para verificar o JWT de `X-Auth-Request-Token` (padrão derivado de `KEYCLOAK_URL`/`KEYCLOAK_REALM`; ver [Autenticação](#autenticação)) |
+| `AUTH_JWT_AUTHORIZED_PARTIES` | Clients do Keycloak (claim `azp`) aceitos, separados por vírgula (padrão `superapp`; ver [Autenticação](#autenticação)) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Endpoint SigNoz/OTel (opcional) |
 
 ## Comandos
@@ -114,17 +115,18 @@ GET  /metrics                    métricas Prometheus
 O JWT do cidadão chega no header `X-Auth-Request-Token`. O header pode vir direto do cliente, então o serviço não confia na borda: verifica o token antes de criar qualquer identidade ou papel (`internal/api/middleware`).
 
 - Assinatura conferida com as chaves públicas do JWKS do Keycloak (cache em memória), só com algoritmos assimétricos (RS*, PS*, ES*); `none` e HS* são recusados.
-- Claims obrigatórias: `iss` igual a `AUTH_JWT_ISSUER`, `exp` presente e válido e `iat` coerente (tolerância de 30s).
+- Claims obrigatórias: `iss` igual a `AUTH_JWT_ISSUER`, `exp` presente e válido, `iat` coerente (tolerância de 30s) e `azp` igual a um dos clients de `AUTH_JWT_AUTHORIZED_PARTIES` (comparação exata). Token sem `azp` ou emitido para outro client do realm não autentica.
 - `GET /api/v1/search`, `/api/v1/recommendations` e `/api/v1/catalog/:id` exigem token válido com CPF válido em `preferred_username`; caso contrário, 401.
 - `/api/v1/admin/*` exige token válido (sem ele, 401) com papel `ADMIN` (sem ele, 403); o CPF não é exigido nessas rotas.
-- Sem emissor/JWKS configurados, nenhum token é aceito (falha fechada).
+- Sem emissor/JWKS configurados, ou com `AUTH_JWT_AUTHORIZED_PARTIES` sem nenhum client (ex.: `,`), nenhum token é aceito (falha fechada).
 - `preferred_username` contém o CPF do cidadão. O papel `ADMIN` vem das roles `admin` ou `go:admin` em `resource_access.superapp.roles`.
-- `aud`/`azp` ainda não são conferidos: qualquer token válido assinado pelo realm é aceito.
+- `aud` não é conferido; a restrição ao client é feita pelo `azp`.
 
 | Variável | Padrão |
 |----------|--------|
 | `AUTH_JWT_ISSUER` | `KEYCLOAK_URL` + `/realms/` + `KEYCLOAK_REALM` |
 | `AUTH_JWKS_URL` | `<AUTH_JWT_ISSUER>/protocol/openid-connect/certs` |
+| `AUTH_JWT_AUTHORIZED_PARTIES` | `superapp` |
 
 CPF **nunca** é persistido — apenas `cpf_hash` (`SHA-256(CPF + CPF_HASH_SALT)`). O CPF em texto vai apenas para a chamada ao app-rmi, em memória.
 

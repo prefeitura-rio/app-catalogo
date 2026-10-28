@@ -39,6 +39,7 @@ var allowedJWTMethods = []string{
 var (
 	ErrTokenVerifierNotConfigured = errors.New("verificação de JWT não configurada")
 	ErrJWKSKeyNotFound            = errors.New("chave do JWT não encontrada no JWKS")
+	ErrUnauthorizedParty          = errors.New("azp do JWT não está entre os clients autorizados")
 )
 
 // TokenVerifier confere a assinatura e as claims de registro de um JWT e
@@ -50,13 +51,14 @@ type TokenVerifier interface {
 // JWKSVerifier valida JWTs emitidos pelo Keycloak usando as chaves públicas
 // publicadas no endpoint JWKS do realm, com cache em memória.
 type JWKSVerifier struct {
-	issuer     string
-	jwksURL    string
-	httpClient *http.Client
-	refreshTTL time.Duration
-	minRefresh time.Duration
-	leeway     time.Duration
-	now        func() time.Time
+	issuer            string
+	jwksURL           string
+	authorizedParties map[string]struct{}
+	httpClient        *http.Client
+	refreshTTL        time.Duration
+	minRefresh        time.Duration
+	leeway            time.Duration
+	now               func() time.Time
 
 	mu        sync.RWMutex
 	keys      map[string]crypto.PublicKey
@@ -65,26 +67,34 @@ type JWKSVerifier struct {
 	refreshMu sync.Mutex
 }
 
-// NewJWKSVerifier cria o verificador. issuer e jwksURL são obrigatórios.
-func NewJWKSVerifier(issuer, jwksURL string) (*JWKSVerifier, error) {
+// NewJWKSVerifier cria o verificador. issuer, jwksURL e ao menos um client
+// autorizado (claim azp) são obrigatórios; faltando algum, nenhum token é aceito.
+func NewJWKSVerifier(issuer, jwksURL string, authorizedParties []string) (*JWKSVerifier, error) {
 	issuer = strings.TrimSpace(issuer)
 	jwksURL = strings.TrimSpace(jwksURL)
-	if issuer == "" || jwksURL == "" {
+	parties := make(map[string]struct{}, len(authorizedParties))
+	for _, p := range authorizedParties {
+		if p = strings.TrimSpace(p); p != "" {
+			parties[p] = struct{}{}
+		}
+	}
+	if issuer == "" || jwksURL == "" || len(parties) == 0 {
 		return nil, ErrTokenVerifierNotConfigured
 	}
 	return &JWKSVerifier{
-		issuer:     issuer,
-		jwksURL:    jwksURL,
-		httpClient: &http.Client{Timeout: defaultJWKSFetchTimeout},
-		refreshTTL: defaultJWKSRefreshTTL,
-		minRefresh: defaultJWKSMinRefresh,
-		leeway:     defaultJWTLeeway,
-		now:        time.Now,
-		keys:       map[string]crypto.PublicKey{},
+		issuer:            issuer,
+		jwksURL:           jwksURL,
+		authorizedParties: parties,
+		httpClient:        &http.Client{Timeout: defaultJWKSFetchTimeout},
+		refreshTTL:        defaultJWKSRefreshTTL,
+		minRefresh:        defaultJWKSMinRefresh,
+		leeway:            defaultJWTLeeway,
+		now:               time.Now,
+		keys:              map[string]crypto.PublicKey{},
 	}, nil
 }
 
-// Verify confere método, assinatura, emissor, exp e iat do token.
+// Verify confere método, assinatura, emissor, exp, iat e azp do token.
 func (v *JWKSVerifier) Verify(ctx context.Context, rawToken string) (*jwtClaims, error) {
 	rawToken = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(rawToken), "Bearer "))
 	if rawToken == "" {
@@ -107,6 +117,11 @@ func (v *JWKSVerifier) Verify(ctx context.Context, rawToken string) (*jwtClaims,
 	})
 	if err != nil {
 		return nil, err
+	}
+	// O azp identifica o client do realm para o qual o token foi emitido; sem
+	// essa conferência qualquer token válido do realm autenticaria aqui.
+	if _, ok := v.authorizedParties[claims.AuthorizedParty]; !ok {
+		return nil, ErrUnauthorizedParty
 	}
 	return claims, nil
 }
