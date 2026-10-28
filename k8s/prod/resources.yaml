@@ -241,6 +241,9 @@ spec:
         - name: catalogo-worker
           image: ghcr.io/prefeitura-rio/app-catalogo:stable@sha256:75b9ff767a0528625d0de060f1b64a53bcf14fc0f57821bcb82657c8f483ccce  # Updated by release workflow
           command: ["./worker"]
+          ports:
+            - name: metrics
+              containerPort: 9091
           envFrom:
             - secretRef:
                 name: catalogo-secrets

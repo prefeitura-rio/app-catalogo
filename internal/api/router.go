@@ -19,6 +19,7 @@ import (
 
 type RouterDeps struct {
 	SFSyncSvc     *services.SalesForceSyncService
+	WebhookSvc    *services.SalesForceWebhookService
 	DSManager     *datasource.Manager
 	SearchSvc     *services.SearchService
 	RecomSvc      *services.RecommendationService
@@ -52,7 +53,12 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 	r.GET("/metrics", observability.MetricsHandler())
 
 	// Webhook (auth própria por HMAC — fora da verificação do JWT)
-	webhookHandler := v1.NewWebhookHandler(deps.SFSyncSvc, deps.WebhookSecret)
+	var webhookHandler *v1.WebhookHandler
+	if deps.WebhookSvc != nil {
+		webhookHandler = v1.NewWebhookHandler(deps.WebhookSvc, deps.WebhookSecret)
+	} else {
+		webhookHandler = v1.NewWebhookHandler(nil, deps.WebhookSecret)
+	}
 	r.POST("/api/webhooks/salesforce", webhookHandler.SalesForce)
 
 	adminHandler := v1.NewAdminHandler(deps.ItemRepo, deps.DSManager)

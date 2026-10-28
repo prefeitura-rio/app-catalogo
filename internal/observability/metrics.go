@@ -40,6 +40,30 @@ var (
 		Buckets:   []float64{1, 5, 15, 30, 60, 120, 300},
 	}, []string{"source", "type"})
 
+	SyncRunsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "catalogo",
+		Name:      "sync_runs_total",
+		Help:      "Execuções de sincronização por fonte, contadas após as novas tentativas (result=success|failure)",
+	}, []string{"source", "trigger", "result"})
+
+	SyncRetriesTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "catalogo",
+		Name:      "sync_retries_total",
+		Help:      "Novas tentativas de sincronização após falha, por fonte",
+	}, []string{"source"})
+
+	SyncLastSuccessTimestamp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "catalogo",
+		Name:      "sync_last_success_timestamp_seconds",
+		Help:      "Horário (Unix, segundos) da última sincronização bem-sucedida por fonte",
+	}, []string{"source"})
+
+	SalesForceWebhookEventsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "catalogo",
+		Name:      "salesforce_webhook_events_total",
+		Help:      "Eventos do webhook SalesForce por resultado (enqueued|duplicate|processed|failed)",
+	}, []string{"result"})
+
 	CatalogItemsGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "catalogo",
 		Name:      "items_total",
@@ -65,6 +89,10 @@ func init() {
 		RecommendationsDuration,
 		SyncItemsTotal,
 		SyncDuration,
+		SyncRunsTotal,
+		SyncRetriesTotal,
+		SyncLastSuccessTimestamp,
+		SalesForceWebhookEventsTotal,
 		CatalogItemsGauge,
 		HTTPClientCircuitState,
 		HTTPClientRetriesTotal,
@@ -76,6 +104,18 @@ func MetricsHandler() gin.HandlerFunc {
 	h := promhttp.Handler()
 	return func(c *gin.Context) {
 		h.ServeHTTP(c.Writer, c.Request)
+	}
+}
+
+// NewMetricsServer devolve um servidor HTTP que expõe só GET /metrics, para o
+// worker, que não sobe a API HTTP e é onde rodam as syncs agendadas.
+func NewMetricsServer(addr string) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", promhttp.Handler())
+	return &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
 }
 
