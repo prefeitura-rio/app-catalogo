@@ -107,6 +107,18 @@ func MetricsHandler() gin.HandlerFunc {
 	}
 }
 
+// NewMetricsServer devolve um servidor HTTP que expõe só GET /metrics, para o
+// worker, que não sobe a API HTTP e é onde rodam as syncs agendadas.
+func NewMetricsServer(addr string) *http.Server {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", promhttp.Handler())
+	return &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+}
+
 // RequestLogger é um middleware Gin que loga requisições com zerolog.
 func RequestLogger() gin.HandlerFunc {
 	return func(c *gin.Context) {

@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,6 +17,7 @@ import (
 	"github.com/prefeitura-rio/app-catalogo/internal/config"
 	"github.com/prefeitura-rio/app-catalogo/internal/datasource"
 	"github.com/prefeitura-rio/app-catalogo/internal/db"
+	"github.com/prefeitura-rio/app-catalogo/internal/observability"
 	"github.com/prefeitura-rio/app-catalogo/internal/repository"
 	"github.com/prefeitura-rio/app-catalogo/internal/services"
 )
@@ -154,6 +157,27 @@ func main() {
 		cancel()
 	}()
 
+	// As métricas das syncs (execuções, novas tentativas, duração, último sucesso)
+	// são geradas neste processo: expõe /metrics numa porta própria.
+	var metricsSrv *http.Server
+	if cfg.Worker.MetricsPort > 0 {
+		metricsSrv = observability.NewMetricsServer(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Worker.MetricsPort))
+		go func() {
+			log.Info().Str("addr", metricsSrv.Addr).Msg("worker: métricas em /metrics")
+			if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error().Err(err).Msg("worker: falha no servidor de métricas")
+			}
+		}()
+	}
+
 	manager.Start(ctx)
+
+	if metricsSrv != nil {
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+			log.Warn().Err(err).Msg("worker: erro ao encerrar servidor de métricas")
+		}
+		cancelShutdown()
+	}
 	log.Info().Msg("worker: encerrado")
 }

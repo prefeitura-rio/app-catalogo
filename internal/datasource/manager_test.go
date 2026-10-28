@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -273,5 +274,52 @@ func metricValue(t *testing.T, m prometheus.Metric) float64 {
 	default:
 		t.Fatalf("métrica sem contador nem gauge: %v", m.Desc())
 		return 0
+	}
+}
+
+// TestWorkerMetricsServer_ExposesScheduledSyncMetrics reproduz o worker: as syncs
+// agendadas rodam pelo Manager.Start e o /metrics é o do servidor próprio do worker.
+func TestWorkerMetricsServer_ExposesScheduledSyncMetrics(t *testing.T) {
+	src := &flakySource{name: "worker-scheduled", failures: 2}
+	m := NewManager(WithRetryPolicy(fastRetry))
+	m.Register(src)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	m.Start(ctx)
+
+	srv := httptest.NewServer(observability.NewMetricsServer("").Handler)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /metrics: status %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	for _, want := range []string{
+		`catalogo_sync_runs_total{result="success",source="worker-scheduled",trigger="initial"} 1`,
+		`catalogo_sync_retries_total{source="worker-scheduled"} 2`,
+		`catalogo_sync_last_success_timestamp_seconds{source="worker-scheduled"}`,
+		`catalogo_sync_duration_seconds_count{source="worker-scheduled",type="initial"} 3`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/metrics do worker não contém %q", want)
+		}
+	}
+
+	// Só GET /metrics é servido.
+	if r, err := http.Get(srv.URL + "/health"); err == nil {
+		r.Body.Close()
+		if r.StatusCode != http.StatusNotFound {
+			t.Errorf("/health no servidor de métricas: esperava 404, got %d", r.StatusCode)
+		}
 	}
 }

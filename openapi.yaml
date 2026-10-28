@@ -655,7 +655,8 @@ paths:
         e sincroniza o registro (`SyncRecord`) em background. Se a sincronização falhar
         (ou o pod reiniciar), o evento fica pendente e é reprocessado com backoff
         exponencial (30s até 1h) até dar certo. Reentrega do mesmo body (mesmo
-        SHA-256) responde `duplicate` sem novo processamento.
+        SHA-256, com `event.created` preenchido) responde `duplicate` sem novo
+        processamento; sem `event.created`, cada entrega é processada.
 
         Se `SALESFORCE_WEBHOOK_SECRET` não estiver configurado, retorna `401`.
         Payload acima de 64 KiB retorna `413`. Falha ao gravar o evento retorna `503`

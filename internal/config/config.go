@@ -33,6 +33,13 @@ type AppConfig struct {
 	Gemini      GeminiSettings
 	Reranker    RerankerSettings
 	Embedding   EmbeddingSettings
+	Worker      WorkerSettings
+}
+
+// WorkerSettings configura o processo worker (cmd/worker).
+type WorkerSettings struct {
+	// MetricsPort é a porta em que o worker expõe GET /metrics (0 desativa).
+	MetricsPort int
 }
 
 type AppSettings struct {
@@ -297,6 +304,9 @@ func Load() (*AppConfig, error) {
 			Host:           getEnv(v, "SERVER_HOST", "0.0.0.0"),
 			Port:           getInt(v, "SERVER_PORT", 8080),
 			RequestTimeout: getInt(v, "SERVER_REQUEST_TIMEOUT", 30),
+		},
+		Worker: WorkerSettings{
+			MetricsPort: getInt(v, "WORKER_METRICS_PORT", 9091),
 		},
 		Redis: RedisSettings{
 			Host:         getEnv(v, "REDIS_HOST", "localhost"),

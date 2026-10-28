@@ -22,7 +22,7 @@ const maximumSalesForceWebhookBodyBytes int64 = 64 << 10
 // salesForceWebhookQueue grava o evento antes da resposta e o processa com novas
 // tentativas (services.SalesForceWebhookService).
 type salesForceWebhookQueue interface {
-	Enqueue(ctx context.Context, body []byte, slug, eventType string) (*models.SalesForceWebhookEvent, bool, error)
+	Enqueue(ctx context.Context, body []byte, slug, eventType, eventCreated string) (*models.SalesForceWebhookEvent, bool, error)
 	Process(ctx context.Context, ev *models.SalesForceWebhookEvent) error
 }
 
@@ -49,7 +49,7 @@ type sfWebhookPayload struct {
 
 // SalesForce godoc
 // @Summary      Webhook SalesForce (Carta de Serviços)
-// @Description  Recebe notificações de criação/atualização. Valida HMAC-SHA256 via X-Salesforce-Signature. Usa sobject.Slug (ou Id como fallback) como identificador do serviço na API CloudHub. O evento é gravado antes da resposta (queued) e reprocessado com backoff até a sincronização dar certo; reentrega do mesmo body responde duplicate. Sem SALESFORCE_WEBHOOK_SECRET retorna 401. Payload > 64KiB retorna 413. Falha ao gravar o evento retorna 503 (reenviar).
+// @Description  Recebe notificações de criação/atualização. Valida HMAC-SHA256 via X-Salesforce-Signature. Usa sobject.Slug (ou Id como fallback) como identificador do serviço na API CloudHub. O evento é gravado antes da resposta (queued) e reprocessado com backoff até a sincronização dar certo; reentrega do mesmo body (com event.created) responde duplicate. Sem SALESFORCE_WEBHOOK_SECRET retorna 401. Payload > 64KiB retorna 413. Falha ao gravar o evento retorna 503 (reenviar).
 // @Tags         webhooks
 // @Accept       json
 // @Produce      json
@@ -109,7 +109,7 @@ func (h *WebhookHandler) SalesForce(c *gin.Context) {
 
 	// O evento é gravado antes da resposta: se o processamento falhar ou o pod
 	// reiniciar, ele continua pendente e é retomado pelo reprocessador.
-	ev, created, err := h.events.Enqueue(c.Request.Context(), body, slug, payload.Event.Type)
+	ev, created, err := h.events.Enqueue(c.Request.Context(), body, slug, payload.Event.Type, payload.Event.Created)
 	if err != nil {
 		log.Error().Err(err).Str("slug", slug).Msg("webhook: falha ao gravar evento")
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "falha ao registrar o evento; reenvie o evento"})

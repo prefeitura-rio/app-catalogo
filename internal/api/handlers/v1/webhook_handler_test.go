@@ -30,18 +30,20 @@ type recordingWebhookQueue struct {
 	processed   chan *models.SalesForceWebhookEvent
 	lastBody    []byte
 	lastEvtType string
+	lastCreated string
 }
 
 func newRecordingWebhookQueue() *recordingWebhookQueue {
 	return &recordingWebhookQueue{processed: make(chan *models.SalesForceWebhookEvent, 4)}
 }
 
-func (q *recordingWebhookQueue) Enqueue(_ context.Context, body []byte, slug, eventType string) (*models.SalesForceWebhookEvent, bool, error) {
+func (q *recordingWebhookQueue) Enqueue(_ context.Context, body []byte, slug, eventType, eventCreated string) (*models.SalesForceWebhookEvent, bool, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.enqueued = append(q.enqueued, slug)
 	q.lastBody = append([]byte(nil), body...)
 	q.lastEvtType = eventType
+	q.lastCreated = eventCreated
 	if q.enqueueErr != nil {
 		return nil, false, q.enqueueErr
 	}
@@ -108,8 +110,8 @@ func TestWebhook_ValidEventIsPersistedBeforeResponseAndProcessed(t *testing.T) {
 	if q.enqueuedCount() != 1 || q.enqueued[0] != "servico-teste" {
 		t.Fatalf("esperava o evento gravado com o slug, got %v", q.enqueued)
 	}
-	if !bytes.Equal(q.lastBody, webhookBody) || q.lastEvtType != "updated" {
-		t.Errorf("body/tipo repassados errados: %q %q", q.lastBody, q.lastEvtType)
+	if !bytes.Equal(q.lastBody, webhookBody) || q.lastEvtType != "updated" || q.lastCreated != "2026-10-28T12:00:00Z" {
+		t.Errorf("body/tipo/criação repassados errados: %q %q %q", q.lastBody, q.lastEvtType, q.lastCreated)
 	}
 
 	select {

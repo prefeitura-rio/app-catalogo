@@ -2,8 +2,10 @@ package services
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -99,14 +101,37 @@ func WebhookEventKey(body []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// uniqueWebhookEventKey gera uma chave que não colide com nenhuma reentrega.
+func uniqueWebhookEventKey(body []byte) (string, error) {
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	h.Write(body)
+	h.Write(nonce)
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 // Enqueue grava o evento, já assumido pela primeira tentativa. created = false
 // quando o mesmo body já foi recebido (reentrega): nada a processar de novo.
+// A reentrega só é reconhecida quando o evento traz o horário de criação
+// (eventCreated): sem ele, duas mudanças distintas do mesmo serviço teriam o
+// mesmo body, e tratá-las como uma só perderia a segunda.
 func (s *SalesForceWebhookService) Enqueue(
 	ctx context.Context,
 	body []byte,
-	slug, eventType string,
+	slug, eventType, eventCreated string,
 ) (*models.SalesForceWebhookEvent, bool, error) {
-	ev, created, err := s.store.Enqueue(ctx, WebhookEventKey(body), slug, eventType, s.cfg.Lease)
+	key := WebhookEventKey(body)
+	if strings.TrimSpace(eventCreated) == "" {
+		unique, err := uniqueWebhookEventKey(body)
+		if err != nil {
+			return nil, false, err
+		}
+		key = unique
+	}
+	ev, created, err := s.store.Enqueue(ctx, key, slug, eventType, s.cfg.Lease)
 	if err != nil {
 		return nil, false, err
 	}

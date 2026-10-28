@@ -153,7 +153,7 @@ func TestWebhookService_FailedEventStaysPendingAndIsReprocessed(t *testing.T) {
 	syncer := &scriptedSyncer{failures: 2}
 	svc := NewSalesForceWebhookService(store, syncer, testWebhookConfig)
 
-	ev, created, err := svc.Enqueue(ctx, []byte(`{"sobject":{"Slug":"servico-teste"}}`), "servico-teste", "updated")
+	ev, created, err := svc.Enqueue(ctx, []byte(`{"sobject":{"Slug":"servico-teste"}}`), "servico-teste", "updated", "2026-10-28T12:00:00Z")
 	if err != nil || !created {
 		t.Fatalf("enqueue: created=%v err=%v", created, err)
 	}
@@ -214,7 +214,7 @@ func TestWebhookService_EventOwnedByDeadPodIsResumedAfterLease(t *testing.T) {
 	syncer := &scriptedSyncer{}
 	svc := NewSalesForceWebhookService(store, syncer, testWebhookConfig)
 
-	ev, _, err := svc.Enqueue(ctx, []byte(`{"id":1}`), "servico-orfao", "updated")
+	ev, _, err := svc.Enqueue(ctx, []byte(`{"id":1}`), "servico-orfao", "updated", "2026-10-28T12:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestWebhookService_DuplicateDeliveryIsNotProcessedAgain(t *testing.T) {
 	svc := NewSalesForceWebhookService(store, syncer, testWebhookConfig)
 
 	body := []byte(`{"event":{"type":"updated","created":"2026-10-28T12:00:00Z"},"sobject":{"Slug":"servico-dup"}}`)
-	ev, created, err := svc.Enqueue(ctx, body, "servico-dup", "updated")
+	ev, created, err := svc.Enqueue(ctx, body, "servico-dup", "updated", "2026-10-28T12:00:00Z")
 	if err != nil || !created {
 		t.Fatalf("enqueue: created=%v err=%v", created, err)
 	}
@@ -248,7 +248,7 @@ func TestWebhookService_DuplicateDeliveryIsNotProcessedAgain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	again, created, err := svc.Enqueue(ctx, body, "servico-dup", "updated")
+	again, created, err := svc.Enqueue(ctx, body, "servico-dup", "updated", "2026-10-28T12:00:00Z")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -271,19 +271,40 @@ func TestWebhookService_DuplicateDeliveryIsNotProcessedAgain(t *testing.T) {
 	}
 }
 
+func TestWebhookService_SameBodyWithoutEventCreatedIsNotTreatedAsRedelivery(t *testing.T) {
+	ctx := context.Background()
+	store := newMemWebhookStore()
+	syncer := &scriptedSyncer{}
+	svc := NewSalesForceWebhookService(store, syncer, testWebhookConfig)
+
+	// Sem event.created, duas mudanças do mesmo serviço chegam com o mesmo body.
+	body := []byte(`{"event":{"type":"updated"},"sobject":{"Slug":"servico-sem-data"}}`)
+	first, created, err := svc.Enqueue(ctx, body, "servico-sem-data", "updated", "")
+	if err != nil || !created {
+		t.Fatalf("1ª entrega: created=%v err=%v", created, err)
+	}
+	second, created, err := svc.Enqueue(ctx, body, "servico-sem-data", "updated", "  ")
+	if err != nil || !created {
+		t.Fatalf("2ª mudança não pode ser descartada como reentrega: created=%v err=%v", created, err)
+	}
+	if first.EventKey == second.EventKey || first.EventKey == WebhookEventKey(body) {
+		t.Fatalf("chaves deveriam ser únicas e diferentes do hash do body: %s %s", first.EventKey, second.EventKey)
+	}
+}
+
 func TestWebhookService_SuccessCoversEarlierPendingEventsOfSameSlug(t *testing.T) {
 	ctx := context.Background()
 	store := newMemWebhookStore()
 	syncer := &scriptedSyncer{failures: 1}
 	svc := NewSalesForceWebhookService(store, syncer, testWebhookConfig)
 
-	first, _, _ := svc.Enqueue(ctx, []byte(`{"n":1}`), "servico-x", "updated")
+	first, _, _ := svc.Enqueue(ctx, []byte(`{"n":1}`), "servico-x", "updated", "2026-10-28T12:00:01Z")
 	_ = svc.Process(ctx, first) // falha: fica pendente
 
-	other, _, _ := svc.Enqueue(ctx, []byte(`{"n":2}`), "outro-servico", "updated")
+	other, _, _ := svc.Enqueue(ctx, []byte(`{"n":2}`), "outro-servico", "updated", "2026-10-28T12:00:02Z")
 
 	store.advance(5 * time.Second)
-	second, _, _ := svc.Enqueue(ctx, []byte(`{"n":3}`), "servico-x", "updated")
+	second, _, _ := svc.Enqueue(ctx, []byte(`{"n":3}`), "servico-x", "updated", "2026-10-28T12:00:03Z")
 	if err := svc.Process(ctx, second); err != nil {
 		t.Fatal(err)
 	}

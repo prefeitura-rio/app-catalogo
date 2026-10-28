@@ -51,6 +51,7 @@ O Adminer (UI do banco) em `http://localhost:8083`.
 | `AUTH_JWT_ISSUER` / `AUTH_JWKS_URL` | Emissor e JWKS para verificar o JWT de `X-Auth-Request-Token` (padrão derivado de `KEYCLOAK_URL`/`KEYCLOAK_REALM`; ver [Autenticação](#autenticação)) |
 | `AUTH_JWT_AUTHORIZED_PARTIES` | Clients do Keycloak (claim `azp`) aceitos, separados por vírgula (padrão `superapp`; ver [Autenticação](#autenticação)) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Endpoint SigNoz/OTel (opcional) |
+| `WORKER_METRICS_PORT` | Porta em que o worker expõe `GET /metrics` com as métricas de sync (padrão `9091`; `0` desativa) |
 
 ## Comandos
 
