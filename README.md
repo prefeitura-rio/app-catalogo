@@ -50,6 +50,7 @@ O Adminer (UI do banco) em `http://localhost:8083`.
 | `KEYCLOAK_URL` / `KEYCLOAK_REALM` / `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` | Auth para chamadas ao app-rmi e app-go-api |
 | `AUTH_JWT_ISSUER` / `AUTH_JWKS_URL` | Emissor e JWKS para verificar o JWT de `X-Auth-Request-Token` (padrão derivado de `KEYCLOAK_URL`/`KEYCLOAK_REALM`; ver [Autenticação](#autenticação)) |
 | `AUTH_JWT_AUTHORIZED_PARTIES` | Clients do Keycloak (claim `azp`) aceitos, separados por vírgula (padrão `superapp`; ver [Autenticação](#autenticação)) |
+| `TRUSTED_PROXIES` | IPs/CIDRs dos proxies cujo `X-Forwarded-For` define o IP do cliente (rate limiting e log), separados por vírgula. Padrão: loopback, redes privadas e proxies do LB do Google (`35.191.0.0/16`, `130.211.0.0/22`); os manifests acrescentam o IP do LB de cada ambiente. Lista vazia (`,`) = sempre o IP da conexão |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Endpoint SigNoz/OTel (opcional) |
 | `WORKER_METRICS_PORT` | Porta em que o worker expõe `GET /metrics` com as métricas de sync (padrão `9091`; `0` desativa) |
 
@@ -100,7 +101,7 @@ GET  /ready                      readiness probe (pinga o banco)
 GET  /metrics                    métricas Prometheus
 ```
 
-> Rate limiting: 300 req/min por IP, em memória. Para múltiplas réplicas é necessário migrar para Redis.
+> Rate limiting: 300 req/min por IP, em memória. Para múltiplas réplicas é necessário migrar para Redis. O IP é o do cliente real: o `X-Forwarded-For` só é lido quando a conexão vem de um proxy de `TRUSTED_PROXIES`, da direita para a esquerda, e o primeiro endereço que não é proxy é o cliente; o que o cliente escreve no cabeçalho (ou em `X-Real-IP`) não muda a chave.
 
 ## Fontes de Dados
 

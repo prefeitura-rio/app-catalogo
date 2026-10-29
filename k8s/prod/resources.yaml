@@ -168,6 +168,10 @@ spec:
               value: "app-catalogo"
             - name: TRACING_SERVICE_VERSION
               value: "v1.0.0"
+            # Proxies cujo X-Forwarded-For define o IP do cliente (rate limiting e log):
+            # sidecar/gateway do Istio, proxies do LB do Google e o IP do LB de services.pref.rio.
+            - name: TRUSTED_PROXIES
+              value: "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7,35.191.0.0/16,130.211.0.0/22,34.8.34.21/32"
           envFrom:
             - secretRef:
                 name: catalogo-secrets

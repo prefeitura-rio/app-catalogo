@@ -49,6 +49,12 @@ func unreachablePool(t *testing.T) *pgxpool.Pool {
 
 func newRouterFixture(t *testing.T) routerFixture {
 	t.Helper()
+	return newRouterFixtureWithProxies(t, nil)
+}
+
+// newRouterFixtureWithProxies monta o router com TRUSTED_PROXIES = trustedProxies.
+func newRouterFixtureWithProxies(t *testing.T, trustedProxies []string) routerFixture {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("rsa: %v", err)
@@ -73,7 +79,7 @@ func newRouterFixture(t *testing.T) routerFixture {
 
 	cfg := &config.AppConfig{
 		App:     config.AppSettings{Environment: "test"},
-		Server:  config.ServerSettings{RequestTimeout: 5},
+		Server:  config.ServerSettings{RequestTimeout: 5, TrustedProxies: trustedProxies},
 		Tracing: config.TracingSettings{ServiceName: "app-catalogo-test"},
 	}
 	pool := unreachablePool(t)
