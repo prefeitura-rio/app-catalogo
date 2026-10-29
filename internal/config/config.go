@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -92,6 +93,10 @@ type ServerSettings struct {
 	Host           string
 	Port           int
 	RequestTimeout int
+	// TrustedProxies são os IPs/CIDRs dos proxies cujo X-Forwarded-For é
+	// aceito para resolver o IP do cliente (rate limiting e log de acesso).
+	// Vazia, o IP é sempre o da conexão.
+	TrustedProxies []string
 }
 
 func (s *ServerSettings) Validate() error {
@@ -101,7 +106,49 @@ func (s *ServerSettings) Validate() error {
 	if s.Port <= 0 {
 		return errors.New("SERVER_PORT deve ser maior que zero")
 	}
+	for _, p := range s.TrustedProxies {
+		if !validProxyAddress(p) {
+			return fmt.Errorf("TRUSTED_PROXIES: %q não é IP nem CIDR válido", p)
+		}
+	}
 	return nil
+}
+
+// defaultTrustedProxies é o padrão de TRUSTED_PROXIES: loopback (sidecar do
+// Istio, que entrega as requisições a partir de 127.0.0.6), redes privadas
+// (gateway do Istio e pods) e as faixas de onde os proxies do load balancer
+// HTTP(S) do Google se conectam aos backends. O IP do forwarding rule do load
+// balancer, que ele também acrescenta ao X-Forwarded-For, é de cada ambiente e
+// vem dos manifests.
+const defaultTrustedProxies = "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7,35.191.0.0/16,130.211.0.0/22"
+
+// parseCSV converte uma lista separada por vírgula, sem espaços, itens vazios
+// nem repetidos.
+func parseCSV(raw string) []string {
+	var items []string
+	seen := map[string]struct{}{}
+	for _, p := range strings.Split(raw, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		items = append(items, p)
+	}
+	return items
+}
+
+// validProxyAddress diz se p é um IP ou um CIDR, o que o Gin aceita em
+// SetTrustedProxies.
+func validProxyAddress(p string) bool {
+	if strings.Contains(p, "/") {
+		_, _, err := net.ParseCIDR(p)
+		return err == nil
+	}
+	return net.ParseIP(p) != nil
 }
 
 type RedisSettings struct {
@@ -146,20 +193,7 @@ const defaultJWTAuthorizedParties = "superapp"
 // parseAuthorizedParties converte a lista separada por vírgula de
 // AUTH_JWT_AUTHORIZED_PARTIES, sem espaços, itens vazios nem repetidos.
 func parseAuthorizedParties(raw string) []string {
-	var parties []string
-	seen := map[string]struct{}{}
-	for _, p := range strings.Split(raw, ",") {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		if _, ok := seen[p]; ok {
-			continue
-		}
-		seen[p] = struct{}{}
-		parties = append(parties, p)
-	}
-	return parties
+	return parseCSV(raw)
 }
 
 // keycloakIssuer monta o emissor do realm (KEYCLOAK_URL/realms/KEYCLOAK_REALM).
@@ -304,6 +338,7 @@ func Load() (*AppConfig, error) {
 			Host:           getEnv(v, "SERVER_HOST", "0.0.0.0"),
 			Port:           getInt(v, "SERVER_PORT", 8080),
 			RequestTimeout: getInt(v, "SERVER_REQUEST_TIMEOUT", 30),
+			TrustedProxies: parseCSV(getEnv(v, "TRUSTED_PROXIES", defaultTrustedProxies)),
 		},
 		Worker: WorkerSettings{
 			MetricsPort: getInt(v, "WORKER_METRICS_PORT", 9091),
