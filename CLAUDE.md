@@ -52,8 +52,8 @@ CPF **nunca** persiste em texto — apenas `cpf_hash` (SHA-256 + salt via `CPF_H
 ## API
 
 ```
-POST /api/v1/search          ← busca autenticada (ranking por perfil)
-POST /api/public/search      ← busca pública (ranking por popularidade)
+GET  /api/v1/search          ← busca autenticada (ranking por perfil)
+GET  /api/public/search      ← busca pública (ranking por popularidade)
 GET  /api/v1/recommendations
 GET  /api/public/recommendations
 GET  /api/v1/catalog/:id

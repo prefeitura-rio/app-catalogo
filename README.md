@@ -76,8 +76,8 @@ just reset           # DESTRUTIVO: apaga tudo e reinicia do zero
 ### Busca e recomendação
 
 ```
-POST /api/v1/search              busca (requer X-Auth-Request-Token; mesmo ranking que public por ora)
-POST /api/public/search          busca por relevância FTS (sem auth)
+GET  /api/v1/search              busca (requer X-Auth-Request-Token; mesmo ranking que public por ora)
+GET  /api/public/search          busca por relevância FTS (sem auth)
 GET  /api/v1/recommendations     recomendações personalizadas por perfil — requer auth
 GET  /api/public/recommendations recomendações com scoring neutro (sem auth)
 GET  /api/v1/catalog/:id         detalhe de um item do catálogo
