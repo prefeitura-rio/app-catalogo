@@ -108,3 +108,100 @@ func TestSearch_ExcludesTypesenseSource(t *testing.T) {
 		t.Fatal("search must exclude source=typesense")
 	}
 }
+
+func TestSearchOrderBy_HasUniqueTieBreaker(t *testing.T) {
+	cases := map[string]string{
+		"sem texto (recência)": searchOrderBy(false),
+		"com texto (rank)":     searchOrderBy(true),
+		"híbrida (RRF)":        hybridOrderByRRF,
+	}
+	for name, orderBy := range cases {
+		if !strings.HasSuffix(orderBy, ", ci.id") {
+			t.Errorf("%s: ORDER BY sem desempate único por ci.id: %q", name, orderBy)
+		}
+	}
+	if !strings.HasPrefix(searchOrderBy(false), "ORDER BY ci.created_at DESC") {
+		t.Errorf("sem texto deve manter a ordem por recência: %q", searchOrderBy(false))
+	}
+	if !strings.HasPrefix(searchOrderBy(true), "ORDER BY rank DESC") {
+		t.Errorf("com texto deve manter a ordem por relevância: %q", searchOrderBy(true))
+	}
+}
+
+// Itens gravados no mesmo lote do UpsertBatch têm created_at idêntico, e itens
+// de mesmo título empatam no rank. Paginando com per_page fixo, cada item
+// precisa aparecer exatamente uma vez e a união das páginas precisa cobrir o
+// total declarado (DEV-142).
+func TestSearch_PaginationIsStableWithTies(t *testing.T) {
+	pool := testCatalogPool(t)
+	itemRepo := NewCatalogItemRepository(pool)
+	searchRepo := NewSearchRepository(pool)
+	ctx := context.Background()
+
+	token := fmt.Sprintf("orgpaginacao%d", time.Now().UnixNano())
+	const n = 60
+	items := make([]*models.CatalogItem, 0, n)
+	exts := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		ext := fmt.Sprintf("%s-%02d", token, i)
+		exts = append(exts, ext)
+		items = append(items, &models.CatalogItem{
+			ExternalID:     ext,
+			Source:         models.SourceSalesForce,
+			Type:           models.TypeService,
+			Title:          "Serviço paginação " + token,
+			Organization:   token,
+			Status:         models.StatusActive,
+			Tags:           []string{},
+			Bairros:        []string{},
+			TargetAudience: json.RawMessage(`{}`),
+			SourceData:     json.RawMessage(`{}`),
+		})
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(),
+			`DELETE FROM catalog_items WHERE external_id = ANY($1::text[])`, exts)
+	})
+	if _, err := itemRepo.UpsertBatch(ctx, items); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	// Garante o empate total em created_at, como no full sync em staging.
+	if _, err := pool.Exec(ctx,
+		`UPDATE catalog_items SET created_at = '2026-10-14T15:52:58.846518Z' WHERE external_id = ANY($1::text[])`,
+		exts); err != nil {
+		t.Fatalf("empata created_at: %v", err)
+	}
+
+	for name, q := range map[string]string{"sem texto": "", "com texto": token} {
+		t.Run(name, func(t *testing.T) {
+			const perPage = 7
+			seen := make(map[string]int, n)
+			for page := 1; page <= (n+perPage-1)/perPage; page++ {
+				results, total, err := searchRepo.Search(ctx, &models.SearchRequest{
+					Q:       q,
+					Types:   []models.ItemType{models.TypeService},
+					Filters: models.SearchFilters{Orgao: token},
+					Page:    page,
+					PerPage: perPage,
+				})
+				if err != nil {
+					t.Fatalf("search page %d: %v", page, err)
+				}
+				if total != n {
+					t.Fatalf("page %d: total=%d want %d", page, total, n)
+				}
+				for _, r := range results {
+					seen[r.Item.ID.String()]++
+				}
+			}
+			for id, c := range seen {
+				if c != 1 {
+					t.Errorf("item %s apareceu %d vezes entre as páginas", id, c)
+				}
+			}
+			if len(seen) != n {
+				t.Fatalf("união das páginas cobre %d itens distintos, want %d", len(seen), n)
+			}
+		})
+	}
+}
