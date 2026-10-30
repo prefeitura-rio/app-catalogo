@@ -52,6 +52,16 @@ func (c *RedisCache) Set(ctx context.Context, key string, value interface{}, ttl
 	return c.client.Set(ctx, key, data, ttl).Err()
 }
 
+// SetNX serializa e armazena o valor com TTL só se a chave ainda não existe.
+// Retorna true quando gravou e false quando outra escrita chegou antes.
+func (c *RedisCache) SetNX(ctx context.Context, key string, value interface{}, ttl time.Duration) (bool, error) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return false, err
+	}
+	return c.client.SetNX(ctx, key, data, ttl).Result()
+}
+
 // Del remove uma chave do cache.
 func (c *RedisCache) Del(ctx context.Context, keys ...string) error {
 	return c.client.Del(ctx, keys...).Err()

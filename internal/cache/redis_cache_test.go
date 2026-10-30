@@ -60,6 +60,9 @@ func TestRedisCache_Unavailable(t *testing.T) {
 	if err := c.Del(ctx, "k"); err == nil {
 		t.Fatal("Del deveria falhar")
 	}
+	if ok, err := c.SetNX(ctx, "k", "v", time.Minute); err == nil || ok {
+		t.Fatalf("SetNX deveria falhar, obtido ok=%v err=%v", ok, err)
+	}
 }
 
 func TestRedisCache_SetRejectsUnserializableValue(t *testing.T) {
@@ -67,6 +70,9 @@ func TestRedisCache_SetRejectsUnserializableValue(t *testing.T) {
 	t.Cleanup(func() { _ = c.client.Close() })
 	if err := c.Set(context.Background(), "k", make(chan int), time.Minute); err == nil {
 		t.Fatal("valor não serializável deveria falhar antes de chegar ao Redis")
+	}
+	if ok, err := c.SetNX(context.Background(), "k", make(chan int), time.Minute); err == nil || ok {
+		t.Fatalf("SetNX de valor não serializável deveria falhar antes do Redis, obtido ok=%v err=%v", ok, err)
 	}
 }
 
@@ -160,5 +166,29 @@ func TestRedisCache_IntegrationExpires(t *testing.T) {
 			t.Fatal("chave deveria expirar pelo TTL")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// SetNX grava só a primeira escrita, com TTL; a segunda não sobrescreve.
+func TestRedisCache_IntegrationSetNX(t *testing.T) {
+	c := newIntegrationCache(t)
+	ctx := context.Background()
+	key := fmt.Sprintf("catalogo:test:setnx:%d", time.Now().UnixNano())
+	t.Cleanup(func() { _ = c.Del(context.Background(), key) })
+
+	stored, err := c.SetNX(ctx, key, "primeiro", time.Minute)
+	if err != nil || !stored {
+		t.Fatalf("1ª escrita: esperado gravar, obtido stored=%v err=%v", stored, err)
+	}
+	stored, err = c.SetNX(ctx, key, "segundo", time.Minute)
+	if err != nil || stored {
+		t.Fatalf("2ª escrita: esperado não gravar, obtido stored=%v err=%v", stored, err)
+	}
+	var got string
+	if err := c.Get(ctx, key, &got); err != nil || got != "primeiro" {
+		t.Fatalf("valor esperado \"primeiro\", obtido %q (%v)", got, err)
+	}
+	if ttl := c.client.TTL(ctx, key).Val(); ttl <= 0 || ttl > time.Minute {
+		t.Fatalf("TTL esperado em (0, 1m], obtido %v", ttl)
 	}
 }

@@ -155,7 +155,7 @@ func main() {
 		sfSyncSvc,
 		services.DefaultWebhookConfig,
 	)
-	searchSvc := services.NewSearchService(searchRepo, redisCache, cfg.Cache.SearchTTL, geminiClient, rerankerClient)
+	searchSvc := services.NewSearchService(searchRepo, redisCache, cfg.Cache.SearchTTL, cfg.Cache.SearchVectorsTTL, geminiClient, rerankerClient)
 	citizenSvc := services.NewCitizenProfileService(
 		rmiClient,
 		profileRepo,
