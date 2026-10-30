@@ -82,6 +82,25 @@ func buildFilterClauses(req *models.SearchRequest, startIdx int) (string, []inte
 	return sql, args, idx
 }
 
+// Ordenações da busca. Cada página é uma query própria com LIMIT/OFFSET, então a
+// ordem precisa ser total: sem desempate único, linhas empatadas (ex.: o mesmo
+// created_at gravado por lote no UpsertBatch, ou o mesmo rank) podem trocar de
+// posição entre páginas, repetindo itens e omitindo outros. ci.id (PK) desempata.
+const (
+	searchOrderByRecency = "ORDER BY ci.created_at DESC, ci.id"
+	searchOrderByRank    = "ORDER BY rank DESC, ci.id"
+	hybridOrderByRRF     = "ORDER BY r.rrf_score DESC, ci.id"
+)
+
+// searchOrderBy devolve o ORDER BY de Search: por relevância quando há texto de
+// busca, por recência quando não há.
+func searchOrderBy(hasQuery bool) string {
+	if hasQuery {
+		return searchOrderByRank
+	}
+	return searchOrderByRecency
+}
+
 // Search executa busca FTS melhorada com ts_rank_cd + boost de similaridade de título.
 // Usado como fallback quando embedding não está disponível.
 func (r *SearchRepository) Search(ctx context.Context, req *models.SearchRequest) ([]*SearchResult, int, error) {
@@ -113,13 +132,13 @@ func (r *SearchRepository) Search(ctx context.Context, req *models.SearchRequest
 			)
 		`
 		tsCondition = "AND ci.search_vector @@ websearch_to_tsquery('portuguese', unaccent($1))"
-		orderBy = "ORDER BY rank DESC"
+		orderBy = searchOrderBy(true)
 		queryArg = req.Q
 	} else {
 		rankExpr = "1.0"
 		headlineExpr = "''"
 		tsCondition = ""
-		orderBy = "ORDER BY ci.created_at DESC"
+		orderBy = searchOrderBy(false)
 	}
 
 	// Quando não há query, os args dos filtros começam em $1 (não há $1 reservado para a query).
@@ -283,9 +302,9 @@ func (r *SearchRepository) SearchHybrid(ctx context.Context, req *models.SearchR
 			r.headline
 		FROM rrf r
 		JOIN catalog_items ci ON ci.id = r.id
-		ORDER BY r.rrf_score DESC
 		%s
-	`, baseWhere, baseWhere, limitClause)
+		%s
+	`, baseWhere, baseWhere, hybridOrderByRRF, limitClause)
 
 	results, err := r.scanResults(ctx, mainSQL, mainArgs)
 	if err != nil {
@@ -404,9 +423,9 @@ func (r *SearchRepository) SearchHybridWithHyDE(ctx context.Context, req *models
 			r.headline
 		FROM rrf r
 		JOIN catalog_items ci ON ci.id = r.id
-		ORDER BY r.rrf_score DESC
 		%s
-	`, baseWhere, baseWhere, baseWhere, limitClause)
+		%s
+	`, baseWhere, baseWhere, baseWhere, hybridOrderByRRF, limitClause)
 
 	results, err := r.scanResults(ctx, mainSQL, mainArgs)
 	if err != nil {
