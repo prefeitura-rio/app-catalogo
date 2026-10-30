@@ -92,7 +92,7 @@ func angleVector(deg float64) []float32 {
 
 // Reprodução da reprovação na 6.2 do DEV-143: o HyDE muda a cada requisição, e
 // cada página é uma requisição. Sem os vetores guardados por busca, a lista RRF
-// e o total mudam entre as páginas (controle); com eles, as páginas cobrem a
+// e o total mudam entre as páginas (controle); guardando os vetores, as páginas cobrem a
 // lista inteira uma única vez e o total é o mesmo em todas, também além do fim.
 func TestSearchService_HybridPaginationStableWhenHyDEVaries(t *testing.T) {
 	pool := integrationPool(t)

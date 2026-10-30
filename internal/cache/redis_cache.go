@@ -59,7 +59,14 @@ func (c *RedisCache) SetNX(ctx context.Context, key string, value interface{}, t
 	if err != nil {
 		return false, err
 	}
-	return c.client.SetNX(ctx, key, data, ttl).Result()
+	err = c.client.SetArgs(ctx, key, data, redis.SetArgs{Mode: "NX", TTL: ttl}).Err()
+	if errors.Is(err, redis.Nil) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Del remove uma chave do cache.
