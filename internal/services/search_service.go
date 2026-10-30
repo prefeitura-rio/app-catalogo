@@ -21,27 +21,42 @@ import (
 const rerankerTop = 20
 
 type SearchService struct {
-	searchRepo *repository.SearchRepository
-	cache      *cache.RedisCache
-	searchTTL  time.Duration
-	gemini     *clients.GeminiEmbeddingClient // nil = busca semântica desativada
-	reranker   *clients.RerankerClient        // nil = reranking desativado
+	searchRepo  *repository.SearchRepository
+	cache       *cache.RedisCache
+	searchTTL   time.Duration
+	vectorStore vectorStore
+	vectorsTTL  time.Duration
+	encoder     semanticEncoder         // nil = busca semântica desativada
+	reranker    *clients.RerankerClient // nil = reranking desativado
 }
+
+// defaultSearchVectorsTTL vale quando o TTL configurado não é positivo: no
+// Redis, TTL zero grava a chave sem expiração.
+const defaultSearchVectorsTTL = time.Hour
 
 func NewSearchService(
 	searchRepo *repository.SearchRepository,
 	cache *cache.RedisCache,
 	searchTTL time.Duration,
+	vectorsTTL time.Duration,
 	gemini *clients.GeminiEmbeddingClient,
 	reranker *clients.RerankerClient,
 ) *SearchService {
-	return &SearchService{
-		searchRepo: searchRepo,
-		cache:      cache,
-		searchTTL:  searchTTL,
-		gemini:     gemini,
-		reranker:   reranker,
+	if vectorsTTL <= 0 {
+		vectorsTTL = defaultSearchVectorsTTL
 	}
+	s := &SearchService{
+		searchRepo:  searchRepo,
+		cache:       cache,
+		searchTTL:   searchTTL,
+		vectorStore: cache,
+		vectorsTTL:  vectorsTTL,
+		reranker:    reranker,
+	}
+	if gemini != nil {
+		s.encoder = gemini
+	}
+	return s
 }
 
 // Search executa o pipeline completo:
@@ -72,64 +87,24 @@ func (s *SearchService) Search(ctx context.Context, req *models.SearchRequest) (
 	var total int
 	var err error
 
-	if originalQ != "" && s.gemini != nil {
-		// Gera embedding da query E documento HyDE em paralelo (timeout 4s)
-		type embedResult struct {
-			vec []float32
-			err error
-		}
-		type hydeResult struct {
-			vec []float32
-			err error
-		}
-
-		embedCh := make(chan embedResult, 1)
-		hydeCh := make(chan hydeResult, 1)
-
-		parallelCtx, cancel := context.WithTimeout(ctx, 4*time.Second)
-		defer cancel()
-
-		// Goroutine 1: embedding da query original
-		go func() {
-			v, err := s.gemini.EmbedQuery(parallelCtx, originalQ)
-			embedCh <- embedResult{v, err}
-		}()
-
-		// Goroutine 2: HyDE — gera documento hipotético e embeda
-		go func() {
-			hydeDoc, genErr := s.gemini.GenerateHyDE(parallelCtx, originalQ)
-			if genErr != nil {
-				hydeCh <- hydeResult{nil, genErr}
-				return
-			}
-			hydeVec, embedErr := s.gemini.EmbedQuery(parallelCtx, hydeDoc)
-			hydeCh <- hydeResult{hydeVec, embedErr}
-		}()
-
-		embedRes := <-embedCh
-		hydeRes := <-hydeCh
-
-		if embedRes.err != nil {
-			log.Warn().Err(embedRes.err).Msg("search: embedding indisponível, usando FTS")
+	if originalQ != "" && s.encoder != nil {
+		vecs, vecErr := s.semanticVectors(ctx, originalQ)
+		switch {
+		case vecErr != nil:
+			log.Warn().Err(vecErr).Msg("search: embedding indisponível, usando FTS")
 			results, total, err = s.searchRepo.Search(ctx, req)
-		} else if hydeRes.err != nil {
-			// HyDE falhou — fallback para busca híbrida sem HyDE
-			log.Debug().Err(hydeRes.err).Msg("search: hyde indisponível, usando hybrid sem hyde")
-			results, total, err = s.searchRepo.SearchHybrid(ctx, req, clients.VectorLiteral(embedRes.vec))
+		case vecs.HyDE == "":
+			results, total, err = s.searchRepo.SearchHybrid(ctx, req, vecs.Query)
 			if err != nil {
 				log.Warn().Err(err).Msg("search: hybrid falhou, caindo para FTS")
 				results, total, err = s.searchRepo.Search(ctx, req)
 			}
-		} else {
+		default:
 			// Caminho ideal: FTS + query_vec + hyde_vec (3 listas RRF)
-			results, total, err = s.searchRepo.SearchHybridWithHyDE(
-				ctx, req,
-				clients.VectorLiteral(embedRes.vec),
-				clients.VectorLiteral(hydeRes.vec),
-			)
+			results, total, err = s.searchRepo.SearchHybridWithHyDE(ctx, req, vecs.Query, vecs.HyDE)
 			if err != nil {
 				log.Warn().Err(err).Msg("search: hyde hybrid falhou, caindo para hybrid")
-				results, total, err = s.searchRepo.SearchHybrid(ctx, req, clients.VectorLiteral(embedRes.vec))
+				results, total, err = s.searchRepo.SearchHybrid(ctx, req, vecs.Query)
 			}
 		}
 	} else {

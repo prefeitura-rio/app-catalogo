@@ -243,6 +243,7 @@ type CitizenSyncSettings struct {
 
 type CacheSettings struct {
 	SearchTTL                      time.Duration
+	SearchVectorsTTL               time.Duration
 	RecommendationAuthenticatedTTL time.Duration
 	RecommendationClusterTTL       time.Duration
 }
@@ -388,6 +389,7 @@ func Load() (*AppConfig, error) {
 		},
 		Cache: CacheSettings{
 			SearchTTL:                      getDuration(v, "CACHE_SEARCH_TTL", 60*time.Second),
+			SearchVectorsTTL:               getDuration(v, "CACHE_SEARCH_VECTORS_TTL", time.Hour),
 			RecommendationAuthenticatedTTL: getDuration(v, "CACHE_RECOMMENDATION_AUTHENTICATED_TTL", 5*time.Minute),
 			RecommendationClusterTTL:       getDuration(v, "CACHE_RECOMMENDATION_CLUSTER_TTL", 15*time.Minute),
 		},
