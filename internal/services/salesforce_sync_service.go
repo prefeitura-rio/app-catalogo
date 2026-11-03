@@ -25,6 +25,17 @@ const (
 	defaultDetailConcurrency      = 8
 	maxDetailConcurrency          = 32
 	defaultListConcurrency        = 8
+
+	// cartaSyncVersion é a versão do mapeamento CloudHub → catalog_items, gravada
+	// no cursor (last_delta_token, que a API da Carta não usa) a cada sync completa.
+	// O DeltaSync só reprocessa serviços com lastModified/lastPublished novo; quando
+	// o mapeamento passa a extrair um campo novo, os itens já sincronizados só o
+	// recebem num FullSync. Suba esta versão nessa hora: o próximo DeltaSync (o
+	// inicial do worker, logo depois do deploy) encontra a versão antiga no cursor
+	// e executa um FullSync, uma única vez.
+	//
+	// Histórico: "" (antes do versionamento); "2" (responsibleOrgUnitSiciCode → sici_code).
+	cartaSyncVersion = "2"
 )
 
 var htmlTagPattern = regexp.MustCompile(`(?i)<[^>]*>`)
@@ -108,6 +119,13 @@ func (s *SalesForceSyncService) DeltaSync(ctx context.Context) error {
 	cursor, err := s.repo.GetSalesForceCursor(ctx, cartaServicosCursorObjectType)
 	if err != nil || cursor == nil || cursor.LastSyncAt == nil {
 		log.Info().Msg("salesforce: cursor não encontrado, executando full sync")
+		return s.FullSync(ctx)
+	}
+	if cursor.LastDeltaToken != cartaSyncVersion {
+		log.Info().
+			Str("cursor_version", cursor.LastDeltaToken).
+			Str("current_version", cartaSyncVersion).
+			Msg("salesforce: versão do mapeamento mudou desde a última sync, executando full sync")
 		return s.FullSync(ctx)
 	}
 	return s.runSync(ctx, *cursor.LastSyncAt, models.SyncTypeDeltaSync)
@@ -255,7 +273,7 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 	}
 
 	if finalStatus == models.SyncStatusCompleted {
-		_ = s.repo.UpsertSalesForceCursor(ctx, cartaServicosCursorObjectType, time.Now().UTC(), "")
+		_ = s.repo.UpsertSalesForceCursor(ctx, cartaServicosCursorObjectType, time.Now().UTC(), cartaSyncVersion)
 		if s.hierarchy != nil {
 			if err := s.hierarchy.RefreshHierarchyCounts(ctx); err != nil {
 				log.Warn().Err(err).Msg("salesforce: falha ao recalcular contagens da hierarquia")
