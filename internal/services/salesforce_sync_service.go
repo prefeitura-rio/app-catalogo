@@ -33,6 +33,7 @@ type cartaServicosAPI interface {
 	ListAllThemes(ctx context.Context, includeEmpty bool) ([]clients.CartaTheme, error)
 	ListAllSubthemes(ctx context.Context, themeSlug string) ([]clients.CartaSubtheme, error)
 	ListAllServicesBySubtheme(ctx context.Context, subthemeSlug string) ([]clients.CartaServiceListItem, error)
+	ListHomeFeatured(ctx context.Context) ([]models.CartaHomeFeatured, error)
 	GetService(ctx context.Context, slug string) (*clients.CartaServiceDetail, error)
 	GetServiceCanonical(ctx context.Context, slug string) (*clients.CartaServiceDetail, string, error)
 }
@@ -57,6 +58,7 @@ type cartaHierarchyRepository interface {
 	UpsertSlugAlias(ctx context.Context, oldSlug, canonicalSlug string) error
 	UpsertSlugAliases(ctx context.Context, canonicalSlug string, oldSlugs []string) error
 	DeleteSlugAlias(ctx context.Context, oldSlug string) error
+	ReplaceHomeFeatured(ctx context.Context, items []models.CartaHomeFeatured) error
 }
 
 // SalesForceSyncService sincroniza a Carta de Serviços (API CloudHub) para catalog_items.
@@ -176,6 +178,8 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 		Time("since", since).
 		Msg("salesforce: iniciando sync")
 
+	s.syncHomeFeatured(ctx)
+
 	listed, err := s.listAndPersistHierarchy(ctx, isFull)
 	if err != nil {
 		s.finishEvent(ctx, eventID, startedAt, models.SyncStatusFailed, 0, 0, err.Error())
@@ -288,6 +292,60 @@ func (s *SalesForceSyncService) finishEvent(
 	errMsg string,
 ) {
 	_ = s.repo.UpdateSyncEvent(ctx, eventID, status, processed, failed, errMsg, int(time.Since(startedAt).Milliseconds()))
+}
+
+// syncHomeFeatured atualiza o snapshot editorial da home. Falhas não derrubam o sync.
+func (s *SalesForceSyncService) syncHomeFeatured(ctx context.Context) {
+	if s.hierarchy == nil {
+		return
+	}
+	raw, err := s.client.ListHomeFeatured(ctx)
+	if err != nil {
+		log.Warn().Err(err).Msg("salesforce: falha ao buscar home_featured; mantendo snapshot anterior")
+		return
+	}
+
+	items := normalizeHomeFeatured(raw)
+	if err := s.hierarchy.ReplaceHomeFeatured(ctx, items); err != nil {
+		log.Warn().Err(err).Msg("salesforce: falha ao gravar home_featured; mantendo snapshot anterior")
+		return
+	}
+	log.Info().Int("count", len(items)).Msg("salesforce: home_featured sincronizado")
+}
+
+// normalizeHomeFeatured remove slugs vazios, deduplica por slug (menor position)
+// e garante positions únicas (mantém a primeira ocorrência).
+func normalizeHomeFeatured(raw []models.CartaHomeFeatured) []models.CartaHomeFeatured {
+	bySlug := make(map[string]models.CartaHomeFeatured, len(raw))
+	slugOrder := make([]string, 0, len(raw))
+	for _, item := range raw {
+		slug := strings.TrimSpace(item.Slug)
+		if slug == "" {
+			continue
+		}
+		item.Slug = slug
+		prev, seen := bySlug[slug]
+		if !seen {
+			bySlug[slug] = item
+			slugOrder = append(slugOrder, slug)
+			continue
+		}
+		if item.Position < prev.Position {
+			bySlug[slug] = item
+		}
+	}
+
+	items := make([]models.CartaHomeFeatured, 0, len(slugOrder))
+	seenPos := make(map[int]struct{}, len(slugOrder))
+	for _, slug := range slugOrder {
+		item := bySlug[slug]
+		if _, taken := seenPos[item.Position]; taken {
+			continue
+		}
+		seenPos[item.Position] = struct{}{}
+		items = append(items, item)
+	}
+	return items
 }
 
 func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isFull bool) ([]clients.CartaServiceListItem, error) {

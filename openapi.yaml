@@ -329,6 +329,12 @@ paths:
           in: query
           schema: { type: boolean, default: false }
           description: Inclui temas sem serviços publicados
+        - name: include_featured
+          in: query
+          schema: { type: boolean, default: false }
+          description: |
+            Quando true, inclui `home_featured` (snapshot editorial da home)
+            ao lado de `meta` e `data`. Lista vazia vem como `"home_featured": []`.
       responses:
         "200":
           description: Lista paginada de temas
@@ -1747,6 +1753,30 @@ components:
           description: Slug canônico do serviço
           example: iptu-2026
 
+    CartaHomeFeatured:
+      type: object
+      description: Item editorial da home (mesmo shape do CloudHub / models.CartaHomeFeatured).
+      properties:
+        slug: { type: string, example: iptu-2026 }
+        name: { type: string, example: IPTU 2026 }
+        summary:
+          type: string
+          description: Resumo em HTML
+        themeSlug: { type: string, example: tributos }
+        themeName: { type: string, example: Tributos }
+        subthemeSlug: { type: string, example: iptu }
+        subthemeName: { type: string, example: IPTU }
+        lastPublishedDate:
+          type: string
+          example: "2026-10-23T20:57:07.000Z"
+        position:
+          type: integer
+          description: Ordem editorial
+          example: 1
+        autoserviceCategory:
+          type: string
+          nullable: true
+
     CartaPagedThemes:
       type: object
       required: [meta, data]
@@ -1755,6 +1785,12 @@ components:
         data:
           type: array
           items: { $ref: "#/components/schemas/CartaTheme" }
+        home_featured:
+          type: array
+          description: |
+            Presente apenas quando `include_featured=true`.
+            Ordenado por `position`. Vazio explícito quando a curadoria removeu os destaques.
+          items: { $ref: "#/components/schemas/CartaHomeFeatured" }
 
     CartaPagedSubthemes:
       type: object

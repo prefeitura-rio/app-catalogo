@@ -759,7 +759,7 @@
     },
     "/api/public/themes": {
       "get": {
-        "description": "Lista temas ativos a partir da base local (sincronizada do CloudHub).",
+        "description": "Lista temas ativos a partir da base local (sincronizada do CloudHub). Com include_featured=true inclui home_featured.",
         "tags": [
           "carta"
         ],
@@ -787,6 +787,14 @@
           {
             "description": "Inclui temas sem serviços publicados",
             "name": "include_empty",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Inclui lista editorial home_featured",
+            "name": "include_featured",
             "in": "query",
             "schema": {
               "type": "boolean"
@@ -1826,6 +1834,42 @@
           }
         }
       },
+      "models.CartaHomeFeatured": {
+        "type": "object",
+        "properties": {
+          "autoserviceCategory": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastPublishedDate": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "subthemeName": {
+            "type": "string"
+          },
+          "subthemeSlug": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "themeName": {
+            "type": "string"
+          },
+          "themeSlug": {
+            "type": "string"
+          }
+        }
+      },
       "models.CartaMeta": {
         "type": "object",
         "properties": {
@@ -2448,6 +2492,12 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/models.CartaTheme"
+            }
+          },
+          "home_featured": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/models.CartaHomeFeatured"
             }
           },
           "meta": {

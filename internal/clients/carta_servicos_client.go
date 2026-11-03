@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/prefeitura-rio/app-catalogo/internal/models"
 )
 
 const (
@@ -18,9 +20,11 @@ const (
 	cartaRedirectBodyLimitBytes       int64 = 4 << 10 // 4 KiB
 	cartaServicosDefaultPerPage             = 100
 	cartaServicosMaxPerPage                 = 100
-	maxCartaServiceRedirectHops             = 3
-	cartaServicosRetryAttempts              = 3
-	cartaServicosRetryBaseDelay             = time.Second
+	// cartaHomeFeaturedListPerPage satisfaz page/per_page da API; home_featured não é paginado com data.
+	cartaHomeFeaturedListPerPage = 1
+	maxCartaServiceRedirectHops  = 3
+	cartaServicosRetryAttempts   = 3
+	cartaServicosRetryBaseDelay  = time.Second
 )
 
 // ErrServiceNotFound indica HTTP 404 na API CloudHub da Carta.
@@ -88,6 +92,9 @@ type CartaTheme struct {
 	SubthemesCount    int    `json:"subthemesCount"`
 	PublishedServices int    `json:"publishedServices"`
 }
+
+// CartaHomeFeatured é o DTO CloudHub/local do destaque editorial (tipo canônico em models).
+type CartaHomeFeatured = models.CartaHomeFeatured
 
 type CartaSubtheme struct {
 	Slug              string `json:"slug"`
@@ -221,6 +228,12 @@ type cartaPagedResponse[T any] struct {
 	Data []T       `json:"data"`
 }
 
+type cartaThemesFeaturedResponse struct {
+	Meta         CartaMeta           `json:"meta"`
+	Data         []CartaTheme        `json:"data"`
+	HomeFeatured []CartaHomeFeatured `json:"home_featured"`
+}
+
 type cartaServiceDetailResponse struct {
 	Data CartaServiceDetail `json:"data"`
 }
@@ -242,6 +255,22 @@ func (c *CartaServicosClient) ListThemes(ctx context.Context, page, perPage int,
 		return nil, CartaMeta{}, err
 	}
 	return resp.Data, resp.Meta, nil
+}
+
+// ListHomeFeatured retorna a lista editorial da home (não paginada junto com data).
+func (c *CartaServicosClient) ListHomeFeatured(ctx context.Context) ([]CartaHomeFeatured, error) {
+	q := url.Values{}
+	q.Set("page", "1")
+	q.Set("per_page", strconv.Itoa(cartaHomeFeaturedListPerPage))
+	q.Set("include_featured", "true")
+	var resp cartaThemesFeaturedResponse
+	if err := c.getJSON(ctx, "/themes", q, &resp); err != nil {
+		return nil, err
+	}
+	if resp.HomeFeatured == nil {
+		return []CartaHomeFeatured{}, nil
+	}
+	return resp.HomeFeatured, nil
 }
 
 // ListAllThemes pagina todos os temas.

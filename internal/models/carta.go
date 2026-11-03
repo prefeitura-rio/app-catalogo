@@ -64,3 +64,18 @@ type CartaOrgUnit struct {
 type CartaServiceRedirect struct {
 	Redirect string `json:"redirect"`
 }
+
+// CartaHomeFeatured é um serviço em destaque editorial da home da Carta.
+type CartaHomeFeatured struct {
+	Slug                string    `json:"slug"`
+	Name                string    `json:"name"`
+	Summary             string    `json:"summary"`
+	ThemeSlug           string    `json:"themeSlug"`
+	ThemeName           string    `json:"themeName"`
+	SubthemeSlug        string    `json:"subthemeSlug"`
+	SubthemeName        string    `json:"subthemeName"`
+	LastPublishedDate   string    `json:"lastPublishedDate"`
+	Position            int       `json:"position"`
+	AutoserviceCategory *string   `json:"autoserviceCategory" extensions:"x-nullable"`
+	SyncedAt            time.Time `json:"-"`
+}

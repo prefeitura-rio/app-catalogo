@@ -18,6 +18,7 @@ import (
 // cartaLocalStore cobre a navegação local da Carta.
 type cartaLocalStore interface {
 	ListThemes(ctx context.Context, page, perPage int, includeEmpty bool) ([]models.CartaTheme, models.CartaMeta, error)
+	ListHomeFeatured(ctx context.Context) ([]models.CartaHomeFeatured, error)
 	ListSubthemes(ctx context.Context, themeSlug string, page, perPage int) ([]models.CartaSubtheme, models.CartaMeta, error)
 	ListServicesBySubtheme(ctx context.Context, subthemeSlug string, page, perPage int) ([]models.CartaServiceSummary, models.CartaMeta, error)
 	GetServiceDetail(ctx context.Context, slug string) (data json.RawMessage, redirectTo string, err error)
@@ -45,8 +46,9 @@ func newCartaHandler(store cartaLocalStore) *CartaHandler {
 
 // cartaThemesPagedJSON tipa GET /api/public/themes para o OpenAPI.
 type cartaThemesPagedJSON struct {
-	Meta models.CartaMeta    `json:"meta"`
-	Data []models.CartaTheme `json:"data"`
+	Meta         models.CartaMeta            `json:"meta"`
+	Data         []models.CartaTheme         `json:"data"`
+	HomeFeatured *[]models.CartaHomeFeatured `json:"home_featured,omitempty"`
 }
 
 // cartaSubthemesPagedJSON tipa GET /api/public/themes/{slug}/subthemes para o OpenAPI.
@@ -85,12 +87,13 @@ type cartaServiceRedirectJSON struct {
 
 // ListThemes godoc
 // @Summary      Lista temas da Carta de Serviços
-// @Description  Lista temas ativos a partir da base local (sincronizada do CloudHub).
+// @Description  Lista temas ativos a partir da base local (sincronizada do CloudHub). Com include_featured=true inclui home_featured.
 // @Tags         carta
 // @Produce      json
-// @Param        page           query  int   false  "Página (1-based, máx. 1000)" default(1) maximum(1000)
-// @Param        per_page       query  int   false  "Itens por página (máx. 100)" default(100)
-// @Param        include_empty  query  bool  false  "Inclui temas sem serviços publicados"
+// @Param        page              query  int   false  "Página (1-based, máx. 1000)" default(1) maximum(1000)
+// @Param        per_page          query  int   false  "Itens por página (máx. 100)" default(100)
+// @Param        include_empty     query  bool  false  "Inclui temas sem serviços publicados"
+// @Param        include_featured  query  bool  false  "Inclui lista editorial home_featured"
 // @Success      200  {object}  cartaThemesPagedJSON
 // @Failure      500  {object}  map[string]string
 // @Failure      503  {object}  map[string]string
@@ -101,6 +104,7 @@ func (h *CartaHandler) ListThemes(c *gin.Context) {
 	}
 	page, perPage := parseCartaPage(c)
 	includeEmpty := strings.EqualFold(c.Query("include_empty"), "true")
+	includeFeatured := strings.EqualFold(c.Query("include_featured"), "true")
 
 	data, meta, err := h.store.ListThemes(c.Request.Context(), page, perPage, includeEmpty)
 	if err != nil {
@@ -110,7 +114,20 @@ func (h *CartaHandler) ListThemes(c *gin.Context) {
 	if data == nil {
 		data = []models.CartaTheme{}
 	}
-	c.JSON(http.StatusOK, cartaThemesPagedJSON{Meta: meta, Data: data})
+
+	resp := cartaThemesPagedJSON{Meta: meta, Data: data}
+	if includeFeatured {
+		featured, ferr := h.store.ListHomeFeatured(c.Request.Context())
+		if ferr != nil {
+			h.storeError(c, ferr)
+			return
+		}
+		if featured == nil {
+			featured = []models.CartaHomeFeatured{}
+		}
+		resp.HomeFeatured = &featured
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // ListSubthemes godoc

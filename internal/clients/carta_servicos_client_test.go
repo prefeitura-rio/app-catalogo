@@ -80,6 +80,87 @@ func TestCartaServicosClient_ListThemes_Happy(t *testing.T) {
 	}
 }
 
+func TestCartaServicosClient_ListHomeFeatured_Happy(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/themes" {
+			t.Errorf("path=%s", r.URL.Path)
+		}
+		if r.URL.Query().Get("include_featured") != "true" {
+			t.Errorf("include_featured=%s", r.URL.Query().Get("include_featured"))
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"meta": map[string]int{"page": 1, "per_page": 1, "total": 19, "total_pages": 19},
+			"data": []map[string]any{
+				{"slug": "tributos", "name": "Tributos", "subthemesCount": 7, "publishedServices": 140},
+			},
+			"home_featured": []map[string]any{
+				{
+					"slug":                "iptu-2026",
+					"name":                "IPTU 2026",
+					"summary":             "<p>...</p>",
+					"themeSlug":           "tributos",
+					"themeName":           "Tributos",
+					"subthemeSlug":        "iptu",
+					"subthemeName":        "IPTU",
+					"lastPublishedDate":   "2026-10-23T20:57:07.000Z",
+					"position":            1,
+					"autoserviceCategory": nil,
+				},
+				{
+					"slug":              "segunda-item",
+					"name":              "Segundo",
+					"summary":           "",
+					"themeSlug":         "saude",
+					"themeName":         "Saúde",
+					"subthemeSlug":      "vacina",
+					"subthemeName":      "Vacina",
+					"lastPublishedDate": "2026-09-01T00:00:00.000Z",
+					"position":          2,
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := mustCartaClient(t, srv.URL)
+	items, err := c.ListHomeFeatured(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("len=%d", len(items))
+	}
+	if items[0].Slug != "iptu-2026" || items[0].Position != 1 || items[0].ThemeSlug != "tributos" {
+		t.Fatalf("item0=%+v", items[0])
+	}
+	if items[0].AutoserviceCategory != nil {
+		t.Fatalf("autoserviceCategory want nil, got %v", items[0].AutoserviceCategory)
+	}
+	if items[1].Slug != "segunda-item" || items[1].Position != 2 {
+		t.Fatalf("item1=%+v", items[1])
+	}
+}
+
+func TestCartaServicosClient_ListHomeFeatured_Empty(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"meta":          map[string]int{"page": 1, "per_page": 1, "total": 0, "total_pages": 0},
+			"data":          []any{},
+			"home_featured": []any{},
+		})
+	}))
+	defer srv.Close()
+
+	c := mustCartaClient(t, srv.URL)
+	items, err := c.ListHomeFeatured(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if items == nil || len(items) != 0 {
+		t.Fatalf("want empty slice, got %#v", items)
+	}
+}
+
 func TestCartaServicosClient_ListAllThemes_Pagination(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		page := r.URL.Query().Get("page")
