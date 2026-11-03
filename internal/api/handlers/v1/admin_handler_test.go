@@ -8,12 +8,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/prefeitura-rio/app-catalogo/internal/datasource"
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
 )
 
@@ -107,5 +110,103 @@ func TestCatalogItemHandlers_InvalidID(t *testing.T) {
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("%s: esperado 400, obtido %d", path, w.Code)
 		}
+	}
+}
+
+// cartaStubSource simula a fonte da Carta: tem Sync (delta) e FullSync.
+type cartaStubSource struct {
+	syncCalls atomic.Int32
+	fullCalls atomic.Int32
+}
+
+func (s *cartaStubSource) Name() string                { return "salesforce" }
+func (s *cartaStubSource) Source() models.ItemSource   { return models.SourceSalesForce }
+func (s *cartaStubSource) SyncInterval() time.Duration { return time.Hour }
+func (s *cartaStubSource) Sync(context.Context) error {
+	s.syncCalls.Add(1)
+	return nil
+}
+func (s *cartaStubSource) FullSync(context.Context) error {
+	s.fullCalls.Add(1)
+	return nil
+}
+
+func triggerRouter(src *cartaStubSource) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	m := datasource.NewManager()
+	m.Register(src)
+	h := NewAdminHandler(nil, m)
+	r := gin.New()
+	r.POST("/api/v1/admin/sync/trigger", h.TriggerSync)
+	return r
+}
+
+func waitCalls(c *atomic.Int32) {
+	deadline := time.Now().Add(2 * time.Second)
+	for c.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(30 * time.Millisecond)
+}
+
+func TestTriggerSync_Modes(t *testing.T) {
+	cases := []struct {
+		name     string
+		query    string
+		wantMode string
+		wantFull int32
+		wantSync int32
+	}{
+		{"padrão é delta", "", "delta", 0, 1},
+		{"delta explícito", "?mode=delta", "delta", 0, 1},
+		{"full na fonte", "?source=salesforce&mode=full", "full", 1, 0},
+		{"full em todas", "?mode=full", "full", 1, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := &cartaStubSource{}
+			r := triggerRouter(src)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/admin/sync/trigger"+tc.query, nil))
+
+			if w.Code != http.StatusAccepted {
+				t.Fatalf("esperado 202, obtido %d (%s)", w.Code, w.Body.String())
+			}
+			var body map[string]string
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("corpo não é JSON: %v", err)
+			}
+			if body["status"] != "triggered" || body["mode"] != tc.wantMode {
+				t.Fatalf("corpo inesperado: %v", body)
+			}
+			if tc.wantFull > 0 {
+				waitCalls(&src.fullCalls)
+			} else {
+				waitCalls(&src.syncCalls)
+			}
+			if src.fullCalls.Load() != tc.wantFull || src.syncCalls.Load() != tc.wantSync {
+				t.Fatalf("full=%d sync=%d; esperado full=%d sync=%d",
+					src.fullCalls.Load(), src.syncCalls.Load(), tc.wantFull, tc.wantSync)
+			}
+		})
+	}
+}
+
+func TestTriggerSync_InvalidModeIs400AndTriggersNothing(t *testing.T) {
+	for _, mode := range []string{"FULL", "tudo", "1", "full%20"} {
+		t.Run(mode, func(t *testing.T) {
+			src := &cartaStubSource{}
+			r := triggerRouter(src)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/admin/sync/trigger?source=salesforce&mode="+mode, nil))
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("esperado 400, obtido %d (%s)", w.Code, w.Body.String())
+			}
+			time.Sleep(50 * time.Millisecond)
+			if src.fullCalls.Load() != 0 || src.syncCalls.Load() != 0 {
+				t.Fatalf("mode inválido não deveria disparar sync: full=%d sync=%d", src.fullCalls.Load(), src.syncCalls.Load())
+			}
+		})
 	}
 }

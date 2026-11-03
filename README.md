@@ -89,7 +89,7 @@ GET  /api/public/catalog/:id     idem, sem auth
 
 ```
 GET  /api/v1/admin/sync/status        status dos datasources (requer role admin)
-POST /api/v1/admin/sync/trigger       dispara sync ad-hoc; ?source= para fonte específica (requer role admin)
+POST /api/v1/admin/sync/trigger       dispara sync ad-hoc; ?source= para fonte específica, ?mode=full para reprocessar tudo (requer role admin)
 ```
 
 ### Webhooks e infra

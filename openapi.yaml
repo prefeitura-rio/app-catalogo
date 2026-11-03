@@ -641,6 +641,8 @@ paths:
         Dispara uma sincronização ad-hoc em background e retorna imediatamente.
         Se `source` for omitido, sincroniza todas as fontes registradas no worker.
         Fontes inválidas ou não registradas são ignoradas silenciosamente (sem erro na resposta).
+        Com `mode=full`, as fontes que têm sincronização completa (Carta de Serviços) reprocessam
+        todos os itens, ignorando o cursor incremental; as demais executam a sync normal.
       security:
         - adminAuth: []
       parameters:
@@ -651,6 +653,14 @@ paths:
             type: string
             enum: ["salesforce", "app-go-api", "typesense"]
           description: Nome da fonte. Omitir para sincronizar todas.
+        - name: mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["delta", "full"]
+            default: delta
+          description: Modo da sincronização. `full` reprocessa todos os itens nas fontes com sync completa.
       responses:
         "202":
           description: Sincronização disparada
@@ -668,15 +678,28 @@ paths:
                   source:
                     type: string
                     description: Fonte disparada. String vazia = todas as fontes.
+                  mode:
+                    type: string
+                    enum: ["delta", "full"]
+                    description: Modo da sincronização disparada.
               examples:
                 fonte_especifica:
                   value:
                     status: "triggered"
                     source: "salesforce"
+                    mode: "delta"
                 todas:
                   value:
                     status: "triggered"
                     source: ""
+                    mode: "delta"
+                carta_completa:
+                  value:
+                    status: "triggered"
+                    source: "salesforce"
+                    mode: "full"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":

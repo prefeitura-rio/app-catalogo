@@ -86,6 +86,98 @@ func TestManager_TriggerSync_ByName(t *testing.T) {
 	}
 }
 
+// fullStubSource tem sync completa distinta da incremental (como a Carta).
+type fullStubSource struct {
+	stubSource
+	fullCount atomic.Int32
+}
+
+func (s *fullStubSource) FullSync(_ context.Context) error {
+	s.fullCount.Add(1)
+	return nil
+}
+
+// waitCalled espera a primeira chamada registrada em c (ou 2 s).
+func waitCalled(c *atomic.Int32) {
+	deadline := time.Now().Add(2 * time.Second)
+	for c.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestParseSyncMode(t *testing.T) {
+	cases := map[string]SyncMode{"": SyncModeDelta, "delta": SyncModeDelta, "full": SyncModeFull}
+	for in, want := range cases {
+		got, err := ParseSyncMode(in)
+		if err != nil || got != want {
+			t.Errorf("ParseSyncMode(%q) = %q, %v; esperado %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"FULL", "full ", "all", "1", "'; drop table x"} {
+		if _, err := ParseSyncMode(in); err == nil {
+			t.Errorf("ParseSyncMode(%q) deveria falhar", in)
+		}
+	}
+}
+
+func TestManager_TriggerSyncMode_FullCallsFullSync(t *testing.T) {
+	m := NewManager()
+	carta := &fullStubSource{stubSource: stubSource{name: "salesforce"}}
+	other := &stubSource{name: "app-go-api"}
+	m.Register(carta)
+	m.Register(other)
+
+	if !m.TriggerSyncMode(context.Background(), "salesforce", SyncModeFull) {
+		t.Fatal("TriggerSyncMode deveria encontrar 'salesforce'")
+	}
+	waitCalled(&carta.fullCount)
+	time.Sleep(50 * time.Millisecond)
+
+	if carta.fullCount.Load() != 1 {
+		t.Errorf("FullSync: esperava 1 chamada, got %d", carta.fullCount.Load())
+	}
+	if carta.callCount.Load() != 0 {
+		t.Errorf("Sync incremental não deveria rodar no modo full, got %d", carta.callCount.Load())
+	}
+	if other.callCount.Load() != 0 {
+		t.Errorf("app-go-api não deveria ter sido chamada, got %d", other.callCount.Load())
+	}
+}
+
+func TestManager_TriggerAllMode_FullFallsBackToSync(t *testing.T) {
+	m := NewManager()
+	carta := &fullStubSource{stubSource: stubSource{name: "salesforce"}}
+	other := &stubSource{name: "app-go-api"}
+	m.Register(carta)
+	m.Register(other)
+
+	m.TriggerAllMode(context.Background(), SyncModeFull)
+	waitCalled(&carta.fullCount)
+	waitCalled(&other.callCount)
+
+	if carta.fullCount.Load() != 1 || carta.callCount.Load() != 0 {
+		t.Errorf("salesforce: full=%d sync=%d; esperado full=1 sync=0", carta.fullCount.Load(), carta.callCount.Load())
+	}
+	// Fonte sem FullSyncer roda a sync normal.
+	if other.callCount.Load() != 1 {
+		t.Errorf("app-go-api: esperava 1 sync normal, got %d", other.callCount.Load())
+	}
+}
+
+func TestManager_TriggerSync_DeltaKeepsSync(t *testing.T) {
+	m := NewManager()
+	carta := &fullStubSource{stubSource: stubSource{name: "salesforce"}}
+	m.Register(carta)
+
+	m.TriggerSync(context.Background(), "salesforce")
+	waitCalled(&carta.callCount)
+	time.Sleep(50 * time.Millisecond)
+
+	if carta.callCount.Load() != 1 || carta.fullCount.Load() != 0 {
+		t.Errorf("modo delta: sync=%d full=%d; esperado sync=1 full=0", carta.callCount.Load(), carta.fullCount.Load())
+	}
+}
+
 func TestManager_Start_InitialSync(t *testing.T) {
 	m := NewManager()
 	s := &stubSource{name: "test"}

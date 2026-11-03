@@ -539,6 +539,9 @@ func TestFullSync_HappyPath(t *testing.T) {
 	if repo.cursor == nil || repo.cursor.LastSyncAt == nil {
 		t.Fatal("cursor not advanced")
 	}
+	if repo.cursor.LastDeltaToken != cartaSyncVersion {
+		t.Fatalf("cursor deveria gravar a versão do mapeamento %q, got %q", cartaSyncVersion, repo.cursor.LastDeltaToken)
+	}
 	if len(repo.orphanKept) != 1 || repo.orphanKept[0] != "svc-a" {
 		t.Fatalf("orphanKept=%v", repo.orphanKept)
 	}
@@ -606,7 +609,7 @@ func TestDeltaSync_FetchesOnlyChanged(t *testing.T) {
 		},
 	}
 	repo := &stubSyncRepo{
-		cursor: &models.SalesForceSyncCursor{LastSyncAt: &since},
+		cursor: &models.SalesForceSyncCursor{LastSyncAt: &since, LastDeltaToken: cartaSyncVersion},
 	}
 	svc := newTestSync(client, repo)
 
@@ -646,7 +649,7 @@ func TestDeltaSync_SoftDeletesServiceRemovedFromListing(t *testing.T) {
 		},
 	}
 	repo := &stubSyncRepo{
-		cursor:      &models.SalesForceSyncCursor{LastSyncAt: &since},
+		cursor:      &models.SalesForceSyncCursor{LastSyncAt: &since, LastDeltaToken: cartaSyncVersion},
 		orphanCount: 1,
 	}
 	svc := newTestSync(client, repo)
@@ -677,6 +680,91 @@ func TestDeltaSync_NoCursorFallsBackToFull(t *testing.T) {
 	}
 	if len(repo.orphanKept) != 1 {
 		t.Fatal("full sync should soft-delete orphans")
+	}
+}
+
+// Cursor de antes do versionamento (last_delta_token vazio) ou de uma versão
+// anterior do mapeamento: o DeltaSync precisa reprocessar tudo (FullSync), mesmo
+// os serviços sem lastModified novo, para preencher os campos que o mapeamento
+// passou a extrair (ex.: sici_code), e então gravar a versão atual.
+func TestDeltaSync_OutdatedMappingVersionRunsFullSync(t *testing.T) {
+	for _, token := range []string{"", "1"} {
+		t.Run("token="+token, func(t *testing.T) {
+			since := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+			code := "1552"
+			oldDetail := sampleDetail("old-svc", "Velho")
+			oldDetail.ResponsibleOrgUnitSiciCode = &code
+			olderDetail := sampleDetail("older-svc", "Mais velho")
+			olderDetail.ResponsibleOrgUnitSiciCode = &code
+			client := &stubCartaClient{
+				themes:    []clients.CartaTheme{{Slug: "tributos", Name: "T"}},
+				subthemes: map[string][]clients.CartaSubtheme{"tributos": {{Slug: "iptu", Name: "I"}}},
+				services: map[string][]clients.CartaServiceListItem{
+					"iptu": {
+						sampleListItem("old-svc", "2026-01-01T00:00:00.000Z"),
+						sampleListItem("older-svc", "2025-05-01T00:00:00.000Z"),
+					},
+				},
+				details: map[string]*clients.CartaServiceDetail{
+					"old-svc":   oldDetail,
+					"older-svc": olderDetail,
+				},
+			}
+			repo := &stubSyncRepo{
+				cursor: &models.SalesForceSyncCursor{LastSyncAt: &since, LastDeltaToken: token},
+			}
+			svc := newTestSync(client, repo)
+
+			if err := svc.DeltaSync(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(client.getCalls) != 2 {
+				t.Fatalf("versão antiga deveria buscar o detalhe de todos os serviços, got %v", client.getCalls)
+			}
+			if len(repo.upserted) != 2 {
+				t.Fatalf("upserted=%d, esperado 2", len(repo.upserted))
+			}
+			for _, item := range repo.upserted {
+				if item.SiciCode != "1552" {
+					t.Fatalf("item %s sem sici_code após o reprocessamento", item.ExternalID)
+				}
+			}
+			if len(repo.events) == 0 || repo.events[0].EventType != models.SyncTypeFullSync {
+				t.Fatalf("evento deveria ser full_sync, got %+v", repo.events)
+			}
+			if repo.cursor == nil || repo.cursor.LastDeltaToken != cartaSyncVersion {
+				t.Fatalf("cursor deveria gravar a versão %q, got %+v", cartaSyncVersion, repo.cursor)
+			}
+
+			// Com a versão gravada, o próximo DeltaSync volta a ser incremental.
+			client.getCalls = nil
+			if err := svc.DeltaSync(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(client.getCalls) != 0 {
+				t.Fatalf("DeltaSync seguinte não deveria buscar detalhes sem mudança, got %v", client.getCalls)
+			}
+			if last := repo.events[len(repo.events)-1]; last.EventType != models.SyncTypeDeltaSync {
+				t.Fatalf("segunda sync deveria ser delta_sync, got %s", last.EventType)
+			}
+		})
+	}
+}
+
+// Full sync que falha não grava a versão: a próxima sync tenta o FullSync de novo.
+func TestDeltaSync_OutdatedVersionFailureKeepsCursor(t *testing.T) {
+	since := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	client := &stubCartaClient{listErr: errors.New("cloudhub fora")}
+	repo := &stubSyncRepo{
+		cursor: &models.SalesForceSyncCursor{LastSyncAt: &since, LastDeltaToken: ""},
+	}
+	svc := newTestSync(client, repo)
+
+	if err := svc.DeltaSync(context.Background()); err == nil {
+		t.Fatal("esperava erro da listagem")
+	}
+	if repo.cursor.LastDeltaToken != "" || !repo.cursor.LastSyncAt.Equal(since) {
+		t.Fatalf("cursor não deveria mudar após falha, got %+v", repo.cursor)
 	}
 }
 
@@ -959,7 +1047,7 @@ func TestDeltaSync_SkipsHierarchySoftDelete(t *testing.T) {
 			"new-svc": sampleDetail("new-svc", "Novo"),
 		},
 	}
-	repo := &stubSyncRepo{cursor: &models.SalesForceSyncCursor{LastSyncAt: &since}}
+	repo := &stubSyncRepo{cursor: &models.SalesForceSyncCursor{LastSyncAt: &since, LastDeltaToken: cartaSyncVersion}}
 	hier := &stubHierarchyRepo{}
 	svc := newTestSyncWithHierarchy(client, repo, hier)
 

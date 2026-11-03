@@ -28,3 +28,8 @@ func (s *SalesForceDataSource) SyncInterval() time.Duration { return s.syncInter
 func (s *SalesForceDataSource) Sync(ctx context.Context) error {
 	return s.syncSvc.DeltaSync(ctx)
 }
+
+// FullSync reprocessa a Carta inteira (detalhe de todos os serviços), ignorando o cursor.
+func (s *SalesForceDataSource) FullSync(ctx context.Context) error {
+	return s.syncSvc.FullSync(ctx)
+}
