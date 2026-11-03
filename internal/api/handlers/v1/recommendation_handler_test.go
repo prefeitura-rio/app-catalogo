@@ -233,3 +233,55 @@ func envOrDefault(key, fallback string) string {
 	}
 	return fallback
 }
+
+// limitCapturingRecommender guarda o limit que chega ao serviço.
+type limitCapturingRecommender struct {
+	limit atomic.Int64
+}
+
+func (r *limitCapturingRecommender) Recommend(context.Context, *models.CitizenProfile, *models.RecommendationRequest) (*models.RecommendationResponse, error) {
+	return nil, fmt.Errorf("recomendação personalizada não deveria ser chamada na rota pública")
+}
+
+func (r *limitCapturingRecommender) RecommendAnonymous(_ context.Context, req *models.RecommendationRequest) (*models.RecommendationResponse, error) {
+	r.limit.Store(int64(req.Limit))
+	return &models.RecommendationResponse{Items: []*models.RankedItem{}, Context: req.Context}, nil
+}
+
+// TestRecommendationsAnonymous_LimitRespeitaTetoDoContrato cobre DEV-166:
+// limit acima de 50 é limitado a 50 (o máximo do contrato), e só o limit
+// ausente, não numérico ou menor que 1 cai no default 10.
+func TestRecommendationsAnonymous_LimitRespeitaTetoDoContrato(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	cases := []struct {
+		query string
+		want  int64
+	}{
+		{"", 10},
+		{"limit=abc", 10},
+		{"limit=0", 10},
+		{"limit=-5", 10},
+		{"limit=25", 25},
+		{"limit=50", 50},
+		{"limit=51", 50},
+		{"limit=200", 50},
+	}
+
+	for _, tc := range cases {
+		recommender := &limitCapturingRecommender{}
+		engine := gin.New()
+		engine.GET("/api/public/recommendations", (&RecommendationHandler{recomSvc: recommender}).Anonymous)
+
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/public/recommendations?"+tc.query, nil))
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("%q: status=%d body=%s, want 200", tc.query, w.Code, w.Body.String())
+		}
+		if got := recommender.limit.Load(); got != tc.want {
+			t.Errorf("%q: limit no serviço = %d, want %d", tc.query, got, tc.want)
+		}
+	}
+}
