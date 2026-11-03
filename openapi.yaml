@@ -109,6 +109,8 @@ paths:
                     page: 1
                     per_page: 10
                     items: []
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -165,6 +167,8 @@ paths:
                     page: 1
                     per_page: 10
                     items: []
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":
@@ -225,6 +229,8 @@ paths:
                           acessibilidade: 0.15
                           faixa_etaria: 0.08
                           tipo: 0.02
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "429":
@@ -266,6 +272,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RecommendationResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "429":
           $ref: "#/components/responses/TooManyRequests"
         "500":

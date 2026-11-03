@@ -2,6 +2,8 @@ package models
 
 import (
 	"encoding/json"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,6 +30,52 @@ const (
 	StatusInactive ItemStatus = "inactive"
 	StatusDraft    ItemStatus = "draft"
 )
+
+// ItemTypes são os valores do enum item_type do banco, na ordem do contrato.
+var ItemTypes = []ItemType{TypeService, TypeCourse, TypeJob, TypeMEIOpportunity}
+
+// ErrInvalidItemType indica um valor de `types` fora de ItemTypes.
+var ErrInvalidItemType = errors.New("types inválido: valores aceitos são " + joinItemTypes(ItemTypes))
+
+func joinItemTypes(types []ItemType) string {
+	strs := make([]string, len(types))
+	for i, t := range types {
+		strs[i] = string(t)
+	}
+	return strings.Join(strs, ", ")
+}
+
+// Valid informa se t é um dos valores do enum item_type (comparação exata).
+func (t ItemType) Valid() bool {
+	for _, known := range ItemTypes {
+		if t == known {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseItemTypes lê os valores do parâmetro `types` (repetido e/ou separado por
+// vírgula), ignorando entradas vazias. Valor fora do enum devolve
+// ErrInvalidItemType, para que a entrada do cliente nunca chegue ao cast
+// `::item_type[]` do Postgres.
+func ParseItemTypes(raws []string) ([]ItemType, error) {
+	var types []ItemType
+	for _, raw := range raws {
+		for _, s := range strings.Split(raw, ",") {
+			s = strings.TrimSpace(s)
+			if s == "" {
+				continue
+			}
+			t := ItemType(s)
+			if !t.Valid() {
+				return nil, ErrInvalidItemType
+			}
+			types = append(types, t)
+		}
+	}
+	return types, nil
+}
 
 type CatalogItem struct {
 	ID              uuid.UUID       `json:"id"`

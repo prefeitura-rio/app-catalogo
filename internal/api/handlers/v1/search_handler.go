@@ -50,12 +50,17 @@ func NewSearchHandler(searchSvc *services.SearchService, citizenSvc *services.Ci
 // @Param        tema               query  string    false  "[service] Tema do serviço"
 // @Param        segmento           query  string    false  "[mei_opportunity] Segmento do negócio"
 // @Success      200                {object}  models.SearchResponse
+// @Failure      400                {object}  map[string]string
 // @Failure      500                {object}  map[string]string
 // @Router       /api/v1/search [get]
 // @Router       /api/public/search [get]
 func (h *SearchHandler) Search(c *gin.Context) {
+	req, err := parseSearchQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	started := time.Now()
-	req := parseSearchQuery(c)
 	// Rótulos com valores fixos (true|false): nunca o texto nem os tipos
 	// enviados pelo cliente, para não explodir a cardinalidade da métrica.
 	hasQuery := strconv.FormatBool(strings.TrimSpace(req.Q) != "")
@@ -73,19 +78,16 @@ func (h *SearchHandler) Search(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
-func parseSearchQuery(c *gin.Context) models.SearchRequest {
+func parseSearchQuery(c *gin.Context) (models.SearchRequest, error) {
+	types, err := models.ParseItemTypes(c.QueryArray("types"))
+	if err != nil {
+		return models.SearchRequest{}, err
+	}
 	req := models.SearchRequest{
+		Types:   types,
 		Q:       c.Query("q"),
 		Page:    queryInt(c, "page", 1),
 		PerPage: queryInt(c, "per_page", 10),
-	}
-
-	for _, raw := range c.QueryArray("types") {
-		for _, t := range strings.Split(raw, ",") {
-			if t = strings.TrimSpace(t); t != "" {
-				req.Types = append(req.Types, models.ItemType(t))
-			}
-		}
 	}
 
 	req.Filters = models.SearchFilters{
@@ -103,7 +105,7 @@ func parseSearchQuery(c *gin.Context) models.SearchRequest {
 		Segmento:          c.Query("segmento"),
 	}
 
-	return req
+	return req, nil
 }
 
 func queryInt(c *gin.Context, key string, def int) int {

@@ -112,10 +112,15 @@ func TestSearch_RotulosNaoUsamEntradaDoCliente(t *testing.T) {
 	engine := gin.New()
 	engine.GET("/api/public/search", (&SearchHandler{searchSvc: fakeSearcher{}}).Search)
 
-	w := httptest.NewRecorder()
-	engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/public/search?q=rotulo-hostil-xyz&types=tipo-hostil-xyz", nil))
-	if w.Code != http.StatusOK {
-		t.Fatalf("status=%d", w.Code)
+	for query, wantCode := range map[string]int{
+		"q=rotulo-hostil-xyz&types=course":          http.StatusOK,
+		"q=rotulo-hostil-xyz&types=tipo-hostil-xyz": http.StatusBadRequest,
+	} {
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/public/search?"+query, nil))
+		if w.Code != wantCode {
+			t.Fatalf("%s: status=%d, want %d", query, w.Code, wantCode)
+		}
 	}
 
 	mw := httptest.NewRecorder()
