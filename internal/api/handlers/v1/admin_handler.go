@@ -64,24 +64,31 @@ func (h *AdminHandler) SyncStatus(c *gin.Context) {
 // @Tags         admin
 // @Security     BearerAuth
 // @Param        source  query  string  false  "Fonte: salesforce, app-go-api, typesense. Vazio = todas."
+// @Param        mode    query  string  false  "delta (padrão) ou full. full reprocessa todos os itens nas fontes com sync completa (Carta)."  Enums(delta, full)
 // @Produce      json
 // @Success      202  {object}  map[string]string
+// @Failure      400  {object}  map[string]string
 // @Failure      401  {object}  map[string]string
 // @Failure      403  {object}  map[string]string
 // @Router       /api/v1/admin/sync/trigger [post]
 func (h *AdminHandler) TriggerSync(c *gin.Context) {
 	source := c.Query("source")
+	mode, err := datasource.ParseSyncMode(c.Query("mode"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "mode inválido: use delta ou full"})
+		return
+	}
 
 	go func() {
 		ctx := context.Background()
 		if source == "" {
-			h.manager.TriggerAll(ctx)
+			h.manager.TriggerAllMode(ctx, mode)
 		} else {
-			_ = h.manager.TriggerSync(ctx, source)
+			_ = h.manager.TriggerSyncMode(ctx, source, mode)
 		}
 	}()
 
-	c.JSON(http.StatusAccepted, gin.H{"status": "triggered", "source": source})
+	c.JSON(http.StatusAccepted, gin.H{"status": "triggered", "source": source, "mode": string(mode)})
 }
 
 // GetCatalogItem godoc

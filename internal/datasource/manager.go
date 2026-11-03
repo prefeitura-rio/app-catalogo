@@ -3,6 +3,7 @@ package datasource
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -18,6 +19,29 @@ const (
 	triggerPeriodic = "periodic"
 	triggerManual   = "manual"
 )
+
+// SyncMode é o modo de uma sincronização manual.
+type SyncMode string
+
+const (
+	// SyncModeDelta executa a sync normal da fonte (incremental quando há cursor).
+	SyncModeDelta SyncMode = "delta"
+	// SyncModeFull executa FullSync nas fontes que implementam FullSyncer; as
+	// demais, que não têm modo completo distinto, executam a sync normal.
+	SyncModeFull SyncMode = "full"
+)
+
+// ParseSyncMode converte o modo recebido na API; vazio equivale a delta.
+func ParseSyncMode(v string) (SyncMode, error) {
+	switch SyncMode(v) {
+	case "", SyncModeDelta:
+		return SyncModeDelta, nil
+	case SyncModeFull:
+		return SyncModeFull, nil
+	default:
+		return "", fmt.Errorf("modo de sync inválido %q: use %q ou %q", v, SyncModeDelta, SyncModeFull)
+	}
+}
 
 // RetryPolicy define as novas tentativas de uma sincronização que falhou:
 // a espera começa em BaseDelay e dobra a cada tentativa, limitada a MaxDelay,
@@ -132,6 +156,11 @@ func (m *Manager) Start(ctx context.Context) {
 
 // TriggerAll dispara sync imediata em todas as fontes registradas em paralelo.
 func (m *Manager) TriggerAll(ctx context.Context) {
+	m.TriggerAllMode(ctx, SyncModeDelta)
+}
+
+// TriggerAllMode dispara sync imediata, no modo pedido, em todas as fontes registradas em paralelo.
+func (m *Manager) TriggerAllMode(ctx context.Context, mode SyncMode) {
 	m.mu.RLock()
 	sources := make([]DataSource, len(m.sources))
 	copy(sources, m.sources)
@@ -139,7 +168,7 @@ func (m *Manager) TriggerAll(ctx context.Context) {
 
 	for _, src := range sources {
 		go func(s DataSource) {
-			if err := m.syncWithRetry(ctx, s, triggerManual); err != nil {
+			if err := m.syncWithRetryMode(ctx, s, triggerManual, mode); err != nil {
 				log.Error().Err(err).Str("source", s.Name()).Msg("datasource: sync manual (all) falhou")
 			}
 		}(src)
@@ -149,13 +178,19 @@ func (m *Manager) TriggerAll(ctx context.Context) {
 // TriggerSync dispara uma sync imediata para uma fonte específica (por nome).
 // Retorna false se a fonte não foi encontrada.
 func (m *Manager) TriggerSync(ctx context.Context, sourceName string) bool {
+	return m.TriggerSyncMode(ctx, sourceName, SyncModeDelta)
+}
+
+// TriggerSyncMode dispara uma sync imediata, no modo pedido, para uma fonte
+// específica (por nome). Retorna false se a fonte não foi encontrada.
+func (m *Manager) TriggerSyncMode(ctx context.Context, sourceName string, mode SyncMode) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	for _, src := range m.sources {
 		if src.Name() == sourceName || string(src.Source()) == sourceName {
 			go func(s DataSource) {
-				if err := m.syncWithRetry(ctx, s, triggerManual); err != nil {
+				if err := m.syncWithRetryMode(ctx, s, triggerManual, mode); err != nil {
 					log.Error().Err(err).Str("source", s.Name()).Msg("datasource: sync manual falhou")
 				}
 			}(src)
@@ -192,13 +227,31 @@ func (m *Manager) runSource(ctx context.Context, s DataSource) {
 // syncWithRetry executa s.Sync com novas tentativas (espera que dobra a cada falha) e
 // registra as métricas da execução. Para quando o context é cancelado.
 func (m *Manager) syncWithRetry(ctx context.Context, s DataSource, trigger string) error {
+	return m.syncWithRetryMode(ctx, s, trigger, SyncModeDelta)
+}
+
+// syncFunc escolhe a operação do modo pedido: FullSync quando o modo é full e a
+// fonte o implementa; Sync nos demais casos.
+func syncFunc(s DataSource, mode SyncMode) func(context.Context) error {
+	if mode == SyncModeFull {
+		if fs, ok := s.(FullSyncer); ok {
+			return fs.FullSync
+		}
+		log.Info().Str("source", s.Name()).Msg("datasource: fonte sem full sync dedicado, executando a sync normal")
+	}
+	return s.Sync
+}
+
+// syncWithRetryMode é syncWithRetry no modo pedido (ver syncFunc).
+func (m *Manager) syncWithRetryMode(ctx context.Context, s DataSource, trigger string, mode SyncMode) error {
 	policy := m.retry
 	name := s.Name()
+	run := syncFunc(s, mode)
 
 	var err error
 	for attempt := 1; ; attempt++ {
 		started := time.Now()
-		err = s.Sync(ctx)
+		err = run(ctx)
 		observability.SyncDuration.WithLabelValues(name, trigger).Observe(time.Since(started).Seconds())
 
 		if err == nil {
@@ -218,6 +271,7 @@ func (m *Manager) syncWithRetry(ctx context.Context, s DataSource, trigger strin
 		log.Warn().Err(err).
 			Str("source", name).
 			Str("trigger", trigger).
+			Str("mode", string(mode)).
 			Int("attempt", attempt).
 			Int("max_attempts", policy.MaxAttempts).
 			Dur("retry_in", wait).

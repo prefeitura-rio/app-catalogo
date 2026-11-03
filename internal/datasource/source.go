@@ -37,3 +37,10 @@ type DataSource interface {
 	// na primeira execução (sem cursor), deve executar full sync automaticamente.
 	Sync(ctx context.Context) error
 }
+
+// FullSyncer é implementada pelas fontes cuja sincronização completa difere da
+// incremental (Sync). O Manager a usa quando uma sync manual pede o modo full.
+type FullSyncer interface {
+	// FullSync reprocessa todos os itens da fonte, ignorando o cursor incremental.
+	FullSync(ctx context.Context) error
+}

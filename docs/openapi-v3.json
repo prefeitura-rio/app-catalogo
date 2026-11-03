@@ -1014,11 +1014,36 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "delta (padrão) ou full. full reprocessa todos os itens nas fontes com sync completa (Carta).",
+            "name": "mode",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "delta",
+                "full"
+              ]
+            }
           }
         ],
         "responses": {
           "202": {
             "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
             "content": {
               "application/json": {
                 "schema": {
