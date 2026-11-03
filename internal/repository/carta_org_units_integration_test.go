@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,7 +133,7 @@ func TestCartaRepo_ListOrgUnitsAndFilterBySici(t *testing.T) {
 			t.Fatalf("unmarshal: %v", err)
 		}
 		slug, _ := detail["slug"].(string)
-		if slug != "" && !(len(slug) >= len(prefix) && slug[:len(prefix)] == prefix) {
+		if slug != "" && !strings.HasPrefix(slug, prefix) {
 			// may include other env data; only assert our fixtures when present
 			continue
 		}
