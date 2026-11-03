@@ -23,9 +23,15 @@ func NewCartaRepository(db *pgxpool.Pool) *CartaRepository {
 	return &CartaRepository{db: db}
 }
 
-func clampCartaPage(page, perPage int) (int, int) {
+const CartaMaxPage = 1000
+
+// ClampCartaPage normaliza page/per_page da Carta (page máx. 1000, per_page máx. 100).
+func ClampCartaPage(page, perPage int) (int, int) {
 	if page < 1 {
 		page = 1
+	}
+	if page > CartaMaxPage {
+		page = CartaMaxPage
 	}
 	if perPage < 1 {
 		perPage = 100
@@ -34,6 +40,10 @@ func clampCartaPage(page, perPage int) (int, int) {
 		perPage = 100
 	}
 	return page, perPage
+}
+
+func clampCartaPage(page, perPage int) (int, int) {
+	return ClampCartaPage(page, perPage)
 }
 
 func cartaMeta(page, perPage, total int) models.CartaMeta {
@@ -295,6 +305,10 @@ func enrichCartaServiceSummary(sum *models.CartaServiceSummary, sourceData []byt
 	if v, ok := detail["responsibleOrgUnitShortName"].(string); ok {
 		sum.ResponsibleOrgUnitShortName = v
 	}
+	if v, ok := detail["responsibleOrgUnitSiciCode"].(string); ok {
+		code := v
+		sum.ResponsibleOrgUnitSiciCode = &code
+	}
 	info, _ := detail["info"].(map[string]any)
 	if info == nil {
 		return
@@ -305,6 +319,162 @@ func enrichCartaServiceSummary(sum *models.CartaServiceSummary, sourceData []byt
 	if v, ok := info["isFree"].(bool); ok {
 		sum.IsFree = v
 	}
+}
+
+// ListOrgUnits pagina órgãos com ao menos 1 serviço publicado e sici_code preenchido.
+// Uma única agregação (CTE) + COUNT(*) OVER() evita o GROUP BY duplicado.
+func (r *CartaRepository) ListOrgUnits(ctx context.Context, page, perPage int) ([]models.CartaOrgUnit, models.CartaMeta, error) {
+	page, perPage = clampCartaPage(page, perPage)
+	offset := (page - 1) * perPage
+
+	rows, err := r.db.Query(ctx, `
+		WITH orgs AS (
+			SELECT
+				sici_code,
+				COALESCE(NULLIF(MAX(organization), ''), sici_code) AS responsible_org_unit,
+				COALESCE(MAX(source_data->>'responsibleOrgUnitShortName'), '') AS short_name,
+				COUNT(*)::INT AS published_services
+			FROM catalog_items
+			WHERE source = 'salesforce'
+			  AND deleted_at IS NULL
+			  AND status = 'active'
+			  AND sici_code IS NOT NULL
+			  AND sici_code <> ''
+			GROUP BY sici_code
+		)
+		SELECT
+			sici_code,
+			responsible_org_unit,
+			short_name,
+			published_services,
+			COUNT(*) OVER()::INT AS total
+		FROM orgs
+		ORDER BY responsible_org_unit ASC
+		LIMIT $1 OFFSET $2`, perPage, offset)
+	if err != nil {
+		return nil, models.CartaMeta{}, err
+	}
+	defer rows.Close()
+
+	out := make([]models.CartaOrgUnit, 0, perPage)
+	total := 0
+	for rows.Next() {
+		var u models.CartaOrgUnit
+		if err := rows.Scan(
+			&u.ResponsibleOrgUnitSiciCode,
+			&u.ResponsibleOrgUnit,
+			&u.ResponsibleOrgUnitShortName,
+			&u.PublishedServices,
+			&total,
+		); err != nil {
+			return nil, models.CartaMeta{}, err
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, models.CartaMeta{}, err
+	}
+	// Página vazia (OFFSET além do fim) não traz COUNT(*) OVER(); consulta só o total.
+	if len(out) == 0 {
+		if err := r.db.QueryRow(ctx, `
+			SELECT COUNT(*) FROM (
+				SELECT sici_code
+				FROM catalog_items
+				WHERE source = 'salesforce'
+				  AND deleted_at IS NULL
+				  AND status = 'active'
+				  AND sici_code IS NOT NULL
+				  AND sici_code <> ''
+				GROUP BY sici_code
+			) AS orgs`).Scan(&total); err != nil {
+			return nil, models.CartaMeta{}, err
+		}
+	}
+	return out, cartaMeta(page, perPage, total), nil
+}
+
+// ListServicesBySiciCode pagina o detalhe completo (source_data) dos serviços de um órgão.
+// Código em branco retorna erro; código sem serviço retorna slice vazio.
+func (r *CartaRepository) ListServicesBySiciCode(ctx context.Context, siciCode string, page, perPage int) ([]json.RawMessage, models.CartaMeta, error) {
+	siciCode = strings.TrimSpace(siciCode)
+	if siciCode == "" {
+		return nil, models.CartaMeta{}, fmt.Errorf("sici code vazio")
+	}
+	page, perPage = clampCartaPage(page, perPage)
+
+	var total int
+	if err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM catalog_items
+		WHERE source = 'salesforce'
+		  AND deleted_at IS NULL
+		  AND status = 'active'
+		  AND sici_code = $1`, siciCode).Scan(&total); err != nil {
+		return nil, models.CartaMeta{}, err
+	}
+
+	offset := (page - 1) * perPage
+	rows, err := r.db.Query(ctx, `
+		SELECT source_data
+		FROM catalog_items
+		WHERE source = 'salesforce'
+		  AND deleted_at IS NULL
+		  AND status = 'active'
+		  AND sici_code = $1
+		ORDER BY title ASC
+		LIMIT $2 OFFSET $3`, siciCode, perPage, offset)
+	if err != nil {
+		return nil, models.CartaMeta{}, err
+	}
+	defer rows.Close()
+
+	out := make([]json.RawMessage, 0, perPage)
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, models.CartaMeta{}, err
+		}
+		out = append(out, json.RawMessage(raw))
+	}
+	return out, cartaMeta(page, perPage, total), rows.Err()
+}
+
+// ListAllServices pagina o detalhe completo de todos os serviços publicados da Carta.
+// Serviços sem sici_code entram aqui; ordem por sici_code, depois title.
+func (r *CartaRepository) ListAllServices(ctx context.Context, page, perPage int) ([]json.RawMessage, models.CartaMeta, error) {
+	page, perPage = clampCartaPage(page, perPage)
+
+	var total int
+	if err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM catalog_items
+		WHERE source = 'salesforce'
+		  AND deleted_at IS NULL
+		  AND status = 'active'`).Scan(&total); err != nil {
+		return nil, models.CartaMeta{}, err
+	}
+
+	offset := (page - 1) * perPage
+	rows, err := r.db.Query(ctx, `
+		SELECT source_data
+		FROM catalog_items
+		WHERE source = 'salesforce'
+		  AND deleted_at IS NULL
+		  AND status = 'active'
+		ORDER BY sici_code NULLS FIRST, title ASC
+		LIMIT $1 OFFSET $2`, perPage, offset)
+	if err != nil {
+		return nil, models.CartaMeta{}, err
+	}
+	defer rows.Close()
+
+	out := make([]json.RawMessage, 0, perPage)
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, models.CartaMeta{}, err
+		}
+		out = append(out, json.RawMessage(raw))
+	}
+	return out, cartaMeta(page, perPage, total), rows.Err()
 }
 
 // UpsertSlugAlias grava/atualiza o mapeamento slug antigo → canônico.

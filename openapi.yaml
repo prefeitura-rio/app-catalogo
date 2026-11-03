@@ -321,7 +321,7 @@ paths:
       parameters:
         - name: page
           in: query
-          schema: { type: integer, minimum: 1, default: 1 }
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 1 }
         - name: per_page
           in: query
           schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
@@ -358,7 +358,7 @@ paths:
           schema: { type: string }
         - name: page
           in: query
-          schema: { type: integer, minimum: 1, default: 1 }
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 1 }
         - name: per_page
           in: query
           schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
@@ -384,7 +384,10 @@ paths:
     get:
       tags: [Carta]
       summary: Lista serviços de um subtema
-      description: Lista serviços ativos do catálogo local filtrados por `subtheme_slug`.
+      description: |
+        Lista serviços ativos do catálogo local filtrados por `subtheme_slug`.
+        O resumo inclui `responsibleOrgUnit`, `responsibleOrgUnitShortName` e
+        `responsibleOrgUnitSiciCode` (sempre presente no JSON; `null` quando o órgão não tem SICI).
       security: []
       parameters:
         - name: slug
@@ -393,7 +396,7 @@ paths:
           schema: { type: string }
         - name: page
           in: query
-          schema: { type: integer, minimum: 1, default: 1 }
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 1 }
         - name: per_page
           in: query
           schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
@@ -406,6 +409,106 @@ paths:
                 $ref: "#/components/schemas/CartaPagedServices"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: Carta de serviços não disponível
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/public/org-units:
+    get:
+      tags: [Carta]
+      summary: Lista órgãos da Carta de Serviços
+      description: |
+        Lista órgãos/secretarias com ao menos 1 serviço publicado e `responsibleOrgUnitSiciCode`
+        preenchido. Um item por código SICI. Órgão sem serviço ou código nulo não entra.
+      security: []
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+      responses:
+        "200":
+          description: Lista paginada de órgãos
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CartaPagedOrgUnits"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: Carta de serviços não disponível
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/public/org-units/{siciCode}/services:
+    get:
+      tags: [Carta]
+      summary: Lista serviços de um órgão da Carta
+      description: |
+        Retorna o detalhe completo dos serviços publicados filtrados por igualdade de texto
+        em `responsibleOrgUnitSiciCode`. Código em branco: 400. Código sem serviço: 200 com `data: []`.
+      security: []
+      parameters:
+        - name: siciCode
+          in: path
+          required: true
+          schema: { type: string }
+          description: Código SICI do órgão (ex. "1552")
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+      responses:
+        "200":
+          description: Lista paginada de detalhes completos
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CartaPagedServiceDetails"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: Carta de serviços não disponível
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/public/services:
+    get:
+      tags: [Carta]
+      summary: Lista todos os serviços da Carta
+      description: |
+        Retorna o detalhe completo de todos os serviços publicados, ordenados por `sici_code`
+        e `title`. Serviços sem código SICI entram nesta lista e não entram no GET por órgão.
+      security: []
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 1 }
+        - name: per_page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 100 }
+      responses:
+        "200":
+          description: Lista paginada de detalhes completos
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CartaPagedServiceDetails"
         "500":
           $ref: "#/components/responses/InternalError"
         "503":
@@ -1542,6 +1645,27 @@ components:
         name: { type: string }
         publishedServices: { type: integer }
 
+    CartaOrgUnit:
+      type: object
+      required:
+        - responsibleOrgUnitSiciCode
+        - responsibleOrgUnit
+        - responsibleOrgUnitShortName
+        - publishedServices
+      properties:
+        responsibleOrgUnitSiciCode:
+          type: string
+          description: Código SICI do órgão (texto, ex. "1552")
+        responsibleOrgUnit:
+          type: string
+          description: Nome do órgão responsável
+        responsibleOrgUnitShortName:
+          type: string
+          description: Sigla/nome curto do órgão
+        publishedServices:
+          type: integer
+          description: Quantidade de serviços publicados com este código
+
     CartaServiceListItem:
       type: object
       properties:
@@ -1556,6 +1680,11 @@ components:
         summary: { type: string }
         responsibleOrgUnit: { type: string }
         responsibleOrgUnitShortName: { type: string }
+        responsibleOrgUnitSiciCode:
+          type: ["string", "null"]
+          description: |
+            Código SICI do órgão responsável (texto). Sempre presente no JSON do resumo/detalhe;
+            `null` quando o órgão não tem SICI preenchido no Salesforce.
         isFree: { type: boolean }
         themeSlug: { type: string }
         subthemeSlug: { type: string }
@@ -1590,6 +1719,9 @@ components:
         subthemeName: { type: string }
         responsibleOrgUnit: { type: string }
         responsibleOrgUnitShortName: { type: string }
+        responsibleOrgUnitSiciCode:
+          type: ["string", "null"]
+          description: Código SICI do órgão responsável (texto; null quando ausente)
         flags: { $ref: "#/components/schemas/CartaServiceFlags" }
         info: { type: object }
         howToRequest: { type: object }
@@ -1641,3 +1773,21 @@ components:
         data:
           type: array
           items: { $ref: "#/components/schemas/CartaServiceListItem" }
+
+    CartaPagedOrgUnits:
+      type: object
+      required: [meta, data]
+      properties:
+        meta: { $ref: "#/components/schemas/CartaMeta" }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/CartaOrgUnit" }
+
+    CartaPagedServiceDetails:
+      type: object
+      required: [meta, data]
+      properties:
+        meta: { $ref: "#/components/schemas/CartaMeta" }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/CartaServiceDetail" }

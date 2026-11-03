@@ -44,10 +44,20 @@ type CartaServiceSummary struct {
 	LastPublishedDate           string `json:"lastPublishedDate,omitempty"`
 	ResponsibleOrgUnit          string `json:"responsibleOrgUnit,omitempty"`
 	ResponsibleOrgUnitShortName string `json:"responsibleOrgUnitShortName,omitempty"`
-	Summary                     string `json:"summary,omitempty"`
-	IsFree                      bool   `json:"isFree,omitempty"`
-	ThemeSlug                   string `json:"themeSlug,omitempty"`
-	SubthemeSlug                string `json:"subthemeSlug,omitempty"`
+	// ResponsibleOrgUnitSiciCode é sempre serializado (null quando o órgão não tem SICI).
+	ResponsibleOrgUnitSiciCode *string `json:"responsibleOrgUnitSiciCode" extensions:"x-nullable"`
+	Summary                    string  `json:"summary,omitempty"`
+	IsFree                     bool    `json:"isFree,omitempty"`
+	ThemeSlug                  string  `json:"themeSlug,omitempty"`
+	SubthemeSlug               string  `json:"subthemeSlug,omitempty"`
+}
+
+// CartaOrgUnit é um órgão/secretaria com ao menos 1 serviço publicado e sici_code preenchido.
+type CartaOrgUnit struct {
+	ResponsibleOrgUnitSiciCode  string `json:"responsibleOrgUnitSiciCode"`
+	ResponsibleOrgUnit          string `json:"responsibleOrgUnit"`
+	ResponsibleOrgUnitShortName string `json:"responsibleOrgUnitShortName"`
+	PublishedServices           int    `json:"publishedServices"`
 }
 
 // CartaServiceRedirect é o corpo JSON de 301 quando o slug pedido é um alias antigo.

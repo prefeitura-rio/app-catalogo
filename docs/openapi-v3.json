@@ -81,6 +81,164 @@
         }
       }
     },
+    "/api/public/org-units": {
+      "get": {
+        "description": "Lista órgãos/secretarias com ao menos 1 serviço publicado e código SICI preenchido.",
+        "tags": [
+          "carta"
+        ],
+        "summary": "Lista órgãos da Carta de Serviços",
+        "parameters": [
+          {
+            "description": "Página (1-based, máx. 1000)",
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "default": 1
+            }
+          },
+          {
+            "description": "Itens por página (máx. 100)",
+            "name": "per_page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.cartaOrgUnitsPagedJSON"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/public/org-units/{siciCode}/services": {
+      "get": {
+        "description": "Retorna o detalhe completo dos serviços publicados filtrados por responsibleOrgUnitSiciCode (igualdade de texto).",
+        "tags": [
+          "carta"
+        ],
+        "summary": "Lista serviços de um órgão da Carta",
+        "parameters": [
+          {
+            "description": "Código SICI do órgão",
+            "name": "siciCode",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Página (1-based, máx. 1000)",
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "default": 1
+            }
+          },
+          {
+            "description": "Itens por página (máx. 100)",
+            "name": "per_page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.cartaServiceDetailsPagedJSON"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/public/recommendations": {
       "get": {
         "description": "Recomendações sem autenticação, com scoring neutro. cluster_hint aceita bairro ou faixa etária para leve personalização.",
@@ -347,6 +505,74 @@
         }
       }
     },
+    "/api/public/services": {
+      "get": {
+        "description": "Retorna o detalhe completo de todos os serviços publicados, ordenados por sici_code e title. Serviços sem código SICI entram nesta lista.",
+        "tags": [
+          "carta"
+        ],
+        "summary": "Lista todos os serviços da Carta",
+        "parameters": [
+          {
+            "description": "Página (1-based, máx. 1000)",
+            "name": "page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "default": 1
+            }
+          },
+          {
+            "description": "Itens por página (máx. 100)",
+            "name": "per_page",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/v1.cartaServiceDetailsPagedJSON"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal Server Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/public/services/{slug}": {
       "get": {
         "description": "Retorna o payload completo do serviço publicado a partir de catalog_items.source_data. Slugs antigos respondem 301 com {\"redirect\":\"<slug-canonico>\"} (sem header Location).",
@@ -443,7 +669,7 @@
     },
     "/api/public/subthemes/{slug}/services": {
       "get": {
-        "description": "Lista serviços ativos do catálogo local filtrados por subtema.",
+        "description": "Lista serviços ativos do catálogo local filtrados por subtema. O resumo inclui responsibleOrgUnit, responsibleOrgUnitShortName e responsibleOrgUnitSiciCode (este último é sempre presente no JSON e null quando o órgão não tem SICI).",
         "tags": [
           "carta"
         ],
@@ -459,11 +685,12 @@
             }
           },
           {
-            "description": "Página (1-based)",
+            "description": "Página (1-based, máx. 1000)",
             "name": "page",
             "in": "query",
             "schema": {
               "type": "integer",
+              "maximum": 1000,
               "default": 1
             }
           },
@@ -539,11 +766,12 @@
         "summary": "Lista temas da Carta de Serviços",
         "parameters": [
           {
-            "description": "Página (1-based)",
+            "description": "Página (1-based, máx. 1000)",
             "name": "page",
             "in": "query",
             "schema": {
               "type": "integer",
+              "maximum": 1000,
               "default": 1
             }
           },
@@ -623,11 +851,12 @@
             }
           },
           {
-            "description": "Página (1-based)",
+            "description": "Página (1-based, máx. 1000)",
             "name": "page",
             "in": "query",
             "schema": {
               "type": "integer",
+              "maximum": 1000,
               "default": 1
             }
           },
@@ -1510,6 +1739,9 @@
           "responsibleOrgUnitShortName": {
             "type": "string"
           },
+          "responsibleOrgUnitSiciCode": {
+            "type": "string"
+          },
           "serviceCatalogId": {
             "type": "string"
           },
@@ -1611,6 +1843,23 @@
           }
         }
       },
+      "models.CartaOrgUnit": {
+        "type": "object",
+        "properties": {
+          "publishedServices": {
+            "type": "integer"
+          },
+          "responsibleOrgUnit": {
+            "type": "string"
+          },
+          "responsibleOrgUnitShortName": {
+            "type": "string"
+          },
+          "responsibleOrgUnitSiciCode": {
+            "type": "string"
+          }
+        }
+      },
       "models.CartaServiceSummary": {
         "type": "object",
         "properties": {
@@ -1640,6 +1889,11 @@
           },
           "responsibleOrgUnitShortName": {
             "type": "string"
+          },
+          "responsibleOrgUnitSiciCode": {
+            "description": "ResponsibleOrgUnitSiciCode é sempre serializado (null quando o órgão não tem SICI).",
+            "type": "string",
+            "nullable": true
           },
           "serviceCatalogId": {
             "type": "string"
@@ -1723,6 +1977,9 @@
             "type": "string"
           },
           "short_desc": {
+            "type": "string"
+          },
+          "sici_code": {
             "type": "string"
           },
           "source": {
@@ -2116,6 +2373,34 @@
         "properties": {
           "data": {
             "$ref": "#/components/schemas/clients.CartaServiceDetail"
+          }
+        }
+      },
+      "v1.cartaOrgUnitsPagedJSON": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/models.CartaOrgUnit"
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/models.CartaMeta"
+          }
+        }
+      },
+      "v1.cartaServiceDetailsPagedJSON": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/clients.CartaServiceDetail"
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/models.CartaMeta"
           }
         }
       },

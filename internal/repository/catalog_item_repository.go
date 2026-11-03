@@ -45,12 +45,12 @@ func (r *CatalogItemRepository) Upsert(ctx context.Context, item *models.Catalog
 			external_id, source, type, title, description, short_desc,
 			organization, url, image_url, target_audience, bairros,
 			modalidade, status, tags, source_data, theme_slug, subtheme_slug,
-			valid_from, valid_until, source_updated_at
+			sici_code, valid_from, valid_until, source_updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
 			$7, $8, $9, $10, $11,
 			$12, $13, $14, $15, NULLIF($16, ''), NULLIF($17, ''),
-			$18, $19, $20
+			NULLIF(TRIM($18), ''), $19, $20, $21
 		)
 		ON CONFLICT (source, external_id) DO UPDATE SET
 			type             = EXCLUDED.type,
@@ -68,6 +68,7 @@ func (r *CatalogItemRepository) Upsert(ctx context.Context, item *models.Catalog
 			source_data      = EXCLUDED.source_data,
 			theme_slug       = EXCLUDED.theme_slug,
 			subtheme_slug    = EXCLUDED.subtheme_slug,
+			sici_code        = EXCLUDED.sici_code,
 			valid_from       = EXCLUDED.valid_from,
 			valid_until      = EXCLUDED.valid_until,
 			source_updated_at = EXCLUDED.source_updated_at,
@@ -91,6 +92,7 @@ func (r *CatalogItemRepository) Upsert(ctx context.Context, item *models.Catalog
 		sourceData,
 		item.ThemeSlug,
 		item.SubthemeSlug,
+		item.SiciCode,
 		item.ValidFrom,
 		item.ValidUntil,
 		item.SourceUpdatedAt,
@@ -135,12 +137,12 @@ func (r *CatalogItemRepository) UpsertBatch(ctx context.Context, items []*models
 				external_id, source, type, title, description, short_desc,
 				organization, url, image_url, target_audience, bairros,
 				modalidade, status, tags, source_data, theme_slug, subtheme_slug,
-				valid_from, valid_until, source_updated_at
+				sici_code, valid_from, valid_until, source_updated_at
 			) VALUES (
 				$1, $2, $3, $4, $5, $6,
 				$7, $8, $9, $10, $11,
 				$12, $13, $14, $15, NULLIF($16, ''), NULLIF($17, ''),
-				$18, $19, $20
+				NULLIF(TRIM($18), ''), $19, $20, $21
 			)
 			ON CONFLICT (source, external_id) DO UPDATE SET
 				type             = EXCLUDED.type,
@@ -158,6 +160,7 @@ func (r *CatalogItemRepository) UpsertBatch(ctx context.Context, items []*models
 				source_data      = EXCLUDED.source_data,
 				theme_slug       = EXCLUDED.theme_slug,
 				subtheme_slug    = EXCLUDED.subtheme_slug,
+				sici_code        = EXCLUDED.sici_code,
 				valid_from       = EXCLUDED.valid_from,
 				valid_until      = EXCLUDED.valid_until,
 				source_updated_at = EXCLUDED.source_updated_at,
@@ -181,6 +184,7 @@ func (r *CatalogItemRepository) UpsertBatch(ctx context.Context, items []*models
 			sourceData,
 			item.ThemeSlug,
 			item.SubthemeSlug,
+			item.SiciCode,
 			item.ValidFrom,
 			item.ValidUntil,
 			item.SourceUpdatedAt,

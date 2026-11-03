@@ -96,6 +96,7 @@ type CatalogItem struct {
 	SourceData      json.RawMessage `json:"source_data,omitempty" swaggertype:"object"`
 	ThemeSlug       string          `json:"theme_slug,omitempty"`
 	SubthemeSlug    string          `json:"subtheme_slug,omitempty"`
+	SiciCode        string          `json:"sici_code,omitempty"`
 	ValidFrom       *time.Time      `json:"valid_from,omitempty"`
 	ValidUntil      *time.Time      `json:"valid_until,omitempty"`
 	SourceUpdatedAt *time.Time      `json:"source_updated_at,omitempty"`
