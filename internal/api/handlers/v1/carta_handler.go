@@ -21,6 +21,9 @@ type cartaLocalStore interface {
 	ListSubthemes(ctx context.Context, themeSlug string, page, perPage int) ([]models.CartaSubtheme, models.CartaMeta, error)
 	ListServicesBySubtheme(ctx context.Context, subthemeSlug string, page, perPage int) ([]models.CartaServiceSummary, models.CartaMeta, error)
 	GetServiceDetail(ctx context.Context, slug string) (data json.RawMessage, redirectTo string, err error)
+	ListOrgUnits(ctx context.Context, page, perPage int) ([]models.CartaOrgUnit, models.CartaMeta, error)
+	ListServicesBySiciCode(ctx context.Context, siciCode string, page, perPage int) ([]json.RawMessage, models.CartaMeta, error)
+	ListAllServices(ctx context.Context, page, perPage int) ([]json.RawMessage, models.CartaMeta, error)
 }
 
 // CartaHandler expõe a hierarquia themes → subthemes → services a partir do banco local.
@@ -63,6 +66,18 @@ type cartaDetailJSON struct {
 	Data clients.CartaServiceDetail `json:"data"`
 }
 
+// cartaOrgUnitsPagedJSON tipa GET /api/public/org-units para o OpenAPI.
+type cartaOrgUnitsPagedJSON struct {
+	Meta models.CartaMeta      `json:"meta"`
+	Data []models.CartaOrgUnit `json:"data"`
+}
+
+// cartaServiceDetailsPagedJSON tipa listagens paginadas de detalhe completo da Carta.
+type cartaServiceDetailsPagedJSON struct {
+	Meta models.CartaMeta             `json:"meta"`
+	Data []clients.CartaServiceDetail `json:"data"`
+}
+
 // cartaServiceRedirectJSON é o corpo de 301 quando o slug é um alias antigo.
 type cartaServiceRedirectJSON struct {
 	Redirect string `json:"redirect" example:"iptu-2026"`
@@ -73,7 +88,7 @@ type cartaServiceRedirectJSON struct {
 // @Description  Lista temas ativos a partir da base local (sincronizada do CloudHub).
 // @Tags         carta
 // @Produce      json
-// @Param        page           query  int   false  "Página (1-based)" default(1)
+// @Param        page           query  int   false  "Página (1-based, máx. 1000)" default(1) maximum(1000)
 // @Param        per_page       query  int   false  "Itens por página (máx. 100)" default(100)
 // @Param        include_empty  query  bool  false  "Inclui temas sem serviços publicados"
 // @Success      200  {object}  cartaThemesPagedJSON
@@ -104,7 +119,7 @@ func (h *CartaHandler) ListThemes(c *gin.Context) {
 // @Tags         carta
 // @Produce      json
 // @Param        slug      path   string  true   "Slug do tema"
-// @Param        page      query  int     false  "Página (1-based)" default(1)
+// @Param        page      query  int     false  "Página (1-based, máx. 1000)" default(1) maximum(1000)
 // @Param        per_page  query  int     false  "Itens por página (máx. 100)" default(100)
 // @Success      200  {object}  cartaSubthemesPagedJSON
 // @Failure      400  {object}  map[string]string
@@ -135,11 +150,11 @@ func (h *CartaHandler) ListSubthemes(c *gin.Context) {
 
 // ListServicesBySubtheme godoc
 // @Summary      Lista serviços de um subtema
-// @Description  Lista serviços ativos do catálogo local filtrados por subtema.
+// @Description  Lista serviços ativos do catálogo local filtrados por subtema. O resumo inclui responsibleOrgUnit, responsibleOrgUnitShortName e responsibleOrgUnitSiciCode (este último é sempre presente no JSON e null quando o órgão não tem SICI).
 // @Tags         carta
 // @Produce      json
 // @Param        slug      path   string  true   "Slug do subtema"
-// @Param        page      query  int     false  "Página (1-based)" default(1)
+// @Param        page      query  int     false  "Página (1-based, máx. 1000)" default(1) maximum(1000)
 // @Param        per_page  query  int     false  "Itens por página (máx. 100)" default(100)
 // @Success      200  {object}  cartaServicesPagedJSON
 // @Failure      400  {object}  map[string]string
@@ -166,6 +181,99 @@ func (h *CartaHandler) ListServicesBySubtheme(c *gin.Context) {
 		data = []models.CartaServiceSummary{}
 	}
 	c.JSON(http.StatusOK, cartaServicesPagedJSON{Meta: meta, Data: data})
+}
+
+// ListOrgUnits godoc
+// @Summary      Lista órgãos da Carta de Serviços
+// @Description  Lista órgãos/secretarias com ao menos 1 serviço publicado e código SICI preenchido.
+// @Tags         carta
+// @Produce      json
+// @Param        page      query  int  false  "Página (1-based, máx. 1000)" default(1) maximum(1000)
+// @Param        per_page  query  int  false  "Itens por página (máx. 100)" default(100)
+// @Success      200  {object}  cartaOrgUnitsPagedJSON
+// @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  map[string]string
+// @Router       /api/public/org-units [get]
+func (h *CartaHandler) ListOrgUnits(c *gin.Context) {
+	if h.unavailable(c) {
+		return
+	}
+	page, perPage := parseCartaPage(c)
+
+	data, meta, err := h.store.ListOrgUnits(c.Request.Context(), page, perPage)
+	if err != nil {
+		h.storeError(c, err)
+		return
+	}
+	if data == nil {
+		data = []models.CartaOrgUnit{}
+	}
+	c.JSON(http.StatusOK, cartaOrgUnitsPagedJSON{Meta: meta, Data: data})
+}
+
+// ListServicesByOrgUnit godoc
+// @Summary      Lista serviços de um órgão da Carta
+// @Description  Retorna o detalhe completo dos serviços publicados filtrados por responsibleOrgUnitSiciCode (igualdade de texto).
+// @Tags         carta
+// @Produce      json
+// @Param        siciCode  path   string  true   "Código SICI do órgão"
+// @Param        page      query  int     false  "Página (1-based, máx. 1000)" default(1) maximum(1000)
+// @Param        per_page  query  int     false  "Itens por página (máx. 100)" default(100)
+// @Success      200  {object}  cartaServiceDetailsPagedJSON
+// @Failure      400  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  map[string]string
+// @Router       /api/public/org-units/{siciCode}/services [get]
+func (h *CartaHandler) ListServicesByOrgUnit(c *gin.Context) {
+	if h.unavailable(c) {
+		return
+	}
+	siciCode := strings.TrimSpace(c.Param("siciCode"))
+	if siciCode == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "código SICI obrigatório"})
+		return
+	}
+	page, perPage := parseCartaPage(c)
+
+	raws, meta, err := h.store.ListServicesBySiciCode(c.Request.Context(), siciCode, page, perPage)
+	if err != nil {
+		h.storeError(c, err)
+		return
+	}
+	data, ok := unmarshalCartaServiceDetails(c, raws)
+	if !ok {
+		return
+	}
+	c.JSON(http.StatusOK, cartaServiceDetailsPagedJSON{Meta: meta, Data: data})
+}
+
+// ListAllServices godoc
+// @Summary      Lista todos os serviços da Carta
+// @Description  Retorna o detalhe completo de todos os serviços publicados, ordenados por sici_code e title. Serviços sem código SICI entram nesta lista.
+// @Tags         carta
+// @Produce      json
+// @Param        page      query  int  false  "Página (1-based, máx. 1000)" default(1) maximum(1000)
+// @Param        per_page  query  int  false  "Itens por página (máx. 100)" default(100)
+// @Success      200  {object}  cartaServiceDetailsPagedJSON
+// @Failure      500  {object}  map[string]string
+// @Failure      503  {object}  map[string]string
+// @Router       /api/public/services [get]
+func (h *CartaHandler) ListAllServices(c *gin.Context) {
+	if h.unavailable(c) {
+		return
+	}
+	page, perPage := parseCartaPage(c)
+
+	raws, meta, err := h.store.ListAllServices(c.Request.Context(), page, perPage)
+	if err != nil {
+		h.storeError(c, err)
+		return
+	}
+	data, ok := unmarshalCartaServiceDetails(c, raws)
+	if !ok {
+		return
+	}
+	c.JSON(http.StatusOK, cartaServiceDetailsPagedJSON{Meta: meta, Data: data})
 }
 
 // GetService godoc
@@ -227,6 +335,20 @@ func (h *CartaHandler) storeError(c *gin.Context, err error) {
 	c.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao consultar carta de serviços"})
 }
 
+func unmarshalCartaServiceDetails(c *gin.Context, raws []json.RawMessage) ([]clients.CartaServiceDetail, bool) {
+	data := make([]clients.CartaServiceDetail, 0, len(raws))
+	for _, raw := range raws {
+		var detail clients.CartaServiceDetail
+		if err := json.Unmarshal(raw, &detail); err != nil {
+			log.Error().Err(err).Str("path", c.FullPath()).Msg("carta: source_data inválido")
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "falha ao consultar carta de serviços"})
+			return nil, false
+		}
+		data = append(data, detail)
+	}
+	return data, true
+}
+
 func parseCartaPage(c *gin.Context) (page, perPage int) {
 	page = 1
 	perPage = 100
@@ -240,5 +362,5 @@ func parseCartaPage(c *gin.Context) (page, perPage int) {
 			perPage = n
 		}
 	}
-	return page, perPage
+	return repository.ClampCartaPage(page, perPage)
 }

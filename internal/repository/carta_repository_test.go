@@ -16,6 +16,9 @@ func TestClampCartaPage(t *testing.T) {
 		{2, 50, 2, 50},
 		{1, 101, 1, 100},
 		{3, 1, 3, 1},
+		{1000, 10, 1000, 10},
+		{1001, 10, 1000, 10},
+		{99999, 200, 1000, 100},
 	}
 	for _, tc := range cases {
 		page, per := clampCartaPage(tc.page, tc.perPage)
@@ -55,6 +58,7 @@ func TestEnrichCartaServiceSummary(t *testing.T) {
 		"lastModifiedDate": "2024-02-01T00:00:00.000Z",
 		"lastPublishedDate": "2024-02-02T00:00:00.000Z",
 		"responsibleOrgUnitShortName": "SMFP",
+		"responsibleOrgUnitSiciCode": "1552",
 		"info": {"summary": "<p>Resumo</p>", "isFree": true}
 	}`))
 	if sum.ArticleStatus != "Online" {
@@ -71,6 +75,16 @@ func TestEnrichCartaServiceSummary(t *testing.T) {
 	}
 	if sum.ResponsibleOrgUnitShortName != "SMFP" {
 		t.Fatalf("org short=%s", sum.ResponsibleOrgUnitShortName)
+	}
+	if sum.ResponsibleOrgUnitSiciCode == nil || *sum.ResponsibleOrgUnitSiciCode != "1552" {
+		t.Fatalf("sici=%v", sum.ResponsibleOrgUnitSiciCode)
+	}
+
+	// JSON null leaves pointer nil
+	sumNull := models.CartaServiceSummary{Slug: "x"}
+	enrichCartaServiceSummary(&sumNull, []byte(`{"responsibleOrgUnitSiciCode":null}`))
+	if sumNull.ResponsibleOrgUnitSiciCode != nil {
+		t.Fatalf("null sici should stay nil, got %q", *sumNull.ResponsibleOrgUnitSiciCode)
 	}
 
 	// invalid JSON / nil: no panic, keeps prior values

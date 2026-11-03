@@ -108,6 +108,7 @@ type CartaServiceListItem struct {
 	LastPublishedDate           string   `json:"lastPublishedDate"`
 	ResponsibleOrgUnit          string   `json:"responsibleOrgUnit"`
 	ResponsibleOrgUnitShortName string   `json:"responsibleOrgUnitShortName"`
+	ResponsibleOrgUnitSiciCode  *string  `json:"responsibleOrgUnitSiciCode"`
 	Summary                     string   `json:"summary"`
 	ServiceDeadline             *string  `json:"serviceDeadline"`
 	ServiceDeadlineNotes        *string  `json:"serviceDeadlineNotes"`
@@ -142,6 +143,7 @@ type CartaServiceDetail struct {
 	SubthemeName                string             `json:"subthemeName"`
 	ResponsibleOrgUnit          string             `json:"responsibleOrgUnit"`
 	ResponsibleOrgUnitShortName string             `json:"responsibleOrgUnitShortName"`
+	ResponsibleOrgUnitSiciCode  *string            `json:"responsibleOrgUnitSiciCode"`
 	Flags                       CartaServiceFlags  `json:"flags"`
 	Info                        CartaServiceInfo   `json:"info"`
 	HowToRequest                CartaHowToRequest  `json:"howToRequest"`

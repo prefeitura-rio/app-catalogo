@@ -390,6 +390,72 @@ func TestMapCartaServiceDetail_PreservesActiveCategoryFlags(t *testing.T) {
 	}
 }
 
+func TestMapCartaServiceDetail_PreservesSiciCode(t *testing.T) {
+	code := "1552"
+	d := sampleDetail("reparo-de-luminaria", "Reparo de luminária")
+	d.ResponsibleOrgUnitSiciCode = &code
+
+	item := MapCartaServiceDetail(d, "https://prefeitura.rio")
+	if item == nil {
+		t.Fatal("nil item")
+	}
+	if item.SiciCode != "1552" {
+		t.Fatalf("SiciCode=%q", item.SiciCode)
+	}
+	var stored clients.CartaServiceDetail
+	if err := json.Unmarshal(item.SourceData, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.ResponsibleOrgUnitSiciCode == nil || *stored.ResponsibleOrgUnitSiciCode != "1552" {
+		t.Fatalf("source_data sici=%v", stored.ResponsibleOrgUnitSiciCode)
+	}
+}
+
+func TestMapCartaServiceDetail_NullSiciCodeStaysNull(t *testing.T) {
+	d := sampleDetail("sem-orgao", "Sem órgão")
+	d.ResponsibleOrgUnitSiciCode = nil
+
+	item := MapCartaServiceDetail(d, "https://prefeitura.rio")
+	if item == nil {
+		t.Fatal("nil item")
+	}
+	if item.SiciCode != "" {
+		t.Fatalf("SiciCode should be empty, got %q", item.SiciCode)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(item.SourceData, &raw); err != nil {
+		t.Fatal(err)
+	}
+	v, ok := raw["responsibleOrgUnitSiciCode"]
+	if !ok {
+		t.Fatal("responsibleOrgUnitSiciCode missing from source_data")
+	}
+	if v != nil {
+		t.Fatalf("expected JSON null, got %#v", v)
+	}
+	var stored clients.CartaServiceDetail
+	if err := json.Unmarshal(item.SourceData, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.ResponsibleOrgUnitSiciCode != nil {
+		t.Fatalf("null must not become empty string, got %q", *stored.ResponsibleOrgUnitSiciCode)
+	}
+}
+
+func TestMapCartaServiceDetail_BlankSiciCodeIsAbsence(t *testing.T) {
+	blank := "  "
+	d := sampleDetail("blank-sici", "Blank SICI")
+	d.ResponsibleOrgUnitSiciCode = &blank
+
+	item := MapCartaServiceDetail(d, "https://prefeitura.rio")
+	if item == nil {
+		t.Fatal("nil item")
+	}
+	if item.SiciCode != "" {
+		t.Fatalf("blank SiciCode should normalize to empty, got %q", item.SiciCode)
+	}
+}
+
 func TestMapCartaServiceDetail_DraftAndURLFallback(t *testing.T) {
 	d := sampleDetail("meu-servico", "Meu Serviço")
 	d.ArticleStatus = "Draft"

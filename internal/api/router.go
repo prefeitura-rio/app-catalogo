@@ -93,6 +93,9 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 		pub.GET("/themes", cartaHandler.ListThemes)
 		pub.GET("/themes/:slug/subthemes", cartaHandler.ListSubthemes)
 		pub.GET("/subthemes/:slug/services", cartaHandler.ListServicesBySubtheme)
+		pub.GET("/org-units", cartaHandler.ListOrgUnits)
+		pub.GET("/org-units/:siciCode/services", cartaHandler.ListServicesByOrgUnit)
+		pub.GET("/services", cartaHandler.ListAllServices)
 		pub.GET("/services/:slug", cartaHandler.GetService)
 	}
 

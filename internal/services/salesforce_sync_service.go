@@ -563,6 +563,11 @@ func MapCartaServiceDetail(detail *clients.CartaServiceDetail, baseServiceURL st
 		validFrom = t
 	}
 
+	siciCode := ""
+	if detail.ResponsibleOrgUnitSiciCode != nil {
+		siciCode = strings.TrimSpace(*detail.ResponsibleOrgUnitSiciCode)
+	}
+
 	return &models.CatalogItem{
 		ExternalID:      detail.Slug,
 		Source:          models.SourceSalesForce,
@@ -580,6 +585,7 @@ func MapCartaServiceDetail(detail *clients.CartaServiceDetail, baseServiceURL st
 		SourceData:      sourceData,
 		ThemeSlug:       detail.ThemeSlug,
 		SubthemeSlug:    detail.SubthemeSlug,
+		SiciCode:        siciCode,
 		ValidFrom:       validFrom,
 		SourceUpdatedAt: sourceUpdatedAt,
 	}
