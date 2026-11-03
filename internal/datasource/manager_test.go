@@ -97,10 +97,10 @@ func (s *fullStubSource) FullSync(_ context.Context) error {
 	return nil
 }
 
-func waitCount(t *testing.T, c *atomic.Int32, want int32) {
-	t.Helper()
+// waitCalled espera a primeira chamada registrada em c (ou 2 s).
+func waitCalled(c *atomic.Int32) {
 	deadline := time.Now().Add(2 * time.Second)
-	for c.Load() < want && time.Now().Before(deadline) {
+	for c.Load() == 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
@@ -130,7 +130,7 @@ func TestManager_TriggerSyncMode_FullCallsFullSync(t *testing.T) {
 	if !m.TriggerSyncMode(context.Background(), "salesforce", SyncModeFull) {
 		t.Fatal("TriggerSyncMode deveria encontrar 'salesforce'")
 	}
-	waitCount(t, &carta.fullCount, 1)
+	waitCalled(&carta.fullCount)
 	time.Sleep(50 * time.Millisecond)
 
 	if carta.fullCount.Load() != 1 {
@@ -152,8 +152,8 @@ func TestManager_TriggerAllMode_FullFallsBackToSync(t *testing.T) {
 	m.Register(other)
 
 	m.TriggerAllMode(context.Background(), SyncModeFull)
-	waitCount(t, &carta.fullCount, 1)
-	waitCount(t, &other.callCount, 1)
+	waitCalled(&carta.fullCount)
+	waitCalled(&other.callCount)
 
 	if carta.fullCount.Load() != 1 || carta.callCount.Load() != 0 {
 		t.Errorf("salesforce: full=%d sync=%d; esperado full=1 sync=0", carta.fullCount.Load(), carta.callCount.Load())
@@ -170,7 +170,7 @@ func TestManager_TriggerSync_DeltaKeepsSync(t *testing.T) {
 	m.Register(carta)
 
 	m.TriggerSync(context.Background(), "salesforce")
-	waitCount(t, &carta.callCount, 1)
+	waitCalled(&carta.callCount)
 	time.Sleep(50 * time.Millisecond)
 
 	if carta.callCount.Load() != 1 || carta.fullCount.Load() != 0 {
