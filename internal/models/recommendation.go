@@ -17,9 +17,21 @@ type RecommendationRequest struct {
 	ClusterHint string                `json:"cluster_hint"` // para anônimos: bairro ou faixa_etaria
 }
 
+const (
+	// RecommendationDefaultLimit é o limit quando ausente ou menor que 1.
+	RecommendationDefaultLimit = 10
+	// RecommendationMaxLimit é o teto de limit do contrato (openapi-v3.json: max 50).
+	RecommendationMaxLimit = 50
+)
+
+// Normalize aplica os limites do request: limit menor que 1 vira o default e
+// acima do máximo é limitado ao máximo; contexto vazio vira homepage.
 func (r *RecommendationRequest) Normalize() {
-	if r.Limit < 1 || r.Limit > 50 {
-		r.Limit = 10
+	if r.Limit < 1 {
+		r.Limit = RecommendationDefaultLimit
+	}
+	if r.Limit > RecommendationMaxLimit {
+		r.Limit = RecommendationMaxLimit
 	}
 	if r.Context == "" {
 		r.Context = ContextHomepage

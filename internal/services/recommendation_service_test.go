@@ -170,8 +170,8 @@ func TestRecommendationRequest_Normalize(t *testing.T) {
 
 	req2 := &models.RecommendationRequest{Limit: 999}
 	req2.Normalize()
-	if req2.Limit != 10 {
-		t.Errorf("limit > 50 deveria resetar para default 10, got %d", req2.Limit)
+	if req2.Limit != 50 {
+		t.Errorf("limit > 50 deveria ser limitado ao máximo 50 (DEV-166), got %d", req2.Limit)
 	}
 
 	req3 := &models.RecommendationRequest{}
