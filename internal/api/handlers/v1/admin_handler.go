@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -60,28 +61,39 @@ func (h *AdminHandler) SyncStatus(c *gin.Context) {
 
 // TriggerSync godoc
 // @Summary      Dispara sincronização manual
-// @Description  Dispara sync ad-hoc em background. Retorna imediatamente. Requer role admin ou go:admin.
+// @Description  Dispara sync ad-hoc em background. Retorna imediatamente. Com full=true, fontes que suportam (ex.: salesforce) ignoram o cursor e reprocessam tudo. Requer role admin ou go:admin.
 // @Tags         admin
 // @Security     BearerAuth
 // @Param        source  query  string  false  "Fonte: salesforce, app-go-api, typesense. Vazio = todas."
+// @Param        full    query  bool    false  "Se true, força full sync nas fontes que suportam (salesforce)"
 // @Produce      json
-// @Success      202  {object}  map[string]string
+// @Success      202  {object}  map[string]interface{}
 // @Failure      401  {object}  map[string]string
 // @Failure      403  {object}  map[string]string
 // @Router       /api/v1/admin/sync/trigger [post]
 func (h *AdminHandler) TriggerSync(c *gin.Context) {
 	source := c.Query("source")
+	full := parseBoolQuery(c.Query("full"))
 
 	go func() {
 		ctx := context.Background()
 		if source == "" {
-			h.manager.TriggerAll(ctx)
+			h.manager.TriggerAll(ctx, full)
 		} else {
-			_ = h.manager.TriggerSync(ctx, source)
+			_ = h.manager.TriggerSync(ctx, source, full)
 		}
 	}()
 
-	c.JSON(http.StatusAccepted, gin.H{"status": "triggered", "source": source})
+	c.JSON(http.StatusAccepted, gin.H{"status": "triggered", "source": source, "full": full})
+}
+
+func parseBoolQuery(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // GetCatalogItem godoc

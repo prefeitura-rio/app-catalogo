@@ -37,3 +37,9 @@ type DataSource interface {
 	// na primeira execução (sem cursor), deve executar full sync automaticamente.
 	Sync(ctx context.Context) error
 }
+
+// FullSyncer é implementado por fontes que aceitam full sync forçado
+// (ex.: POST /api/v1/admin/sync/trigger?full=true), independente do cursor.
+type FullSyncer interface {
+	FullSync(ctx context.Context) error
+}

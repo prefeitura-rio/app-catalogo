@@ -28,3 +28,8 @@ func (s *SalesForceDataSource) SyncInterval() time.Duration { return s.syncInter
 func (s *SalesForceDataSource) Sync(ctx context.Context) error {
 	return s.syncSvc.DeltaSync(ctx)
 }
+
+// FullSync força reprocessamento de todos os serviços, ignorando o cursor delta.
+func (s *SalesForceDataSource) FullSync(ctx context.Context) error {
+	return s.syncSvc.FullSync(ctx)
+}

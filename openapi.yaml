@@ -640,6 +640,8 @@ paths:
       description: |
         Dispara uma sincronização ad-hoc em background e retorna imediatamente.
         Se `source` for omitido, sincroniza todas as fontes registradas no worker.
+        Com `full=true`, fontes que suportam full sync (hoje: `salesforce`) ignoram o
+        cursor delta e reprocessam todos os serviços; as demais caem no sync normal.
         Fontes inválidas ou não registradas são ignoradas silenciosamente (sem erro na resposta).
       security:
         - adminAuth: []
@@ -651,6 +653,13 @@ paths:
             type: string
             enum: ["salesforce", "app-go-api", "typesense"]
           description: Nome da fonte. Omitir para sincronizar todas.
+        - name: full
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Se true, força full sync nas fontes que suportam (ex. salesforce).
       responses:
         "202":
           description: Sincronização disparada
@@ -668,15 +677,25 @@ paths:
                   source:
                     type: string
                     description: Fonte disparada. String vazia = todas as fontes.
+                  full:
+                    type: boolean
+                    description: Se a sincronização foi pedida em modo full.
               examples:
                 fonte_especifica:
                   value:
                     status: "triggered"
                     source: "salesforce"
+                    full: false
+                full_salesforce:
+                  value:
+                    status: "triggered"
+                    source: "salesforce"
+                    full: true
                 todas:
                   value:
                     status: "triggered"
                     source: ""
+                    full: false
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":

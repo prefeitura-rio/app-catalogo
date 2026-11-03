@@ -131,7 +131,9 @@ func (m *Manager) Start(ctx context.Context) {
 }
 
 // TriggerAll dispara sync imediata em todas as fontes registradas em paralelo.
-func (m *Manager) TriggerAll(ctx context.Context) {
+// Se full for true, fontes que implementam FullSyncer rodam FullSync; as demais
+// caem no Sync (delta) com aviso no log.
+func (m *Manager) TriggerAll(ctx context.Context, full bool) {
 	m.mu.RLock()
 	sources := make([]DataSource, len(m.sources))
 	copy(sources, m.sources)
@@ -139,24 +141,27 @@ func (m *Manager) TriggerAll(ctx context.Context) {
 
 	for _, src := range sources {
 		go func(s DataSource) {
-			if err := m.syncWithRetry(ctx, s, triggerManual); err != nil {
-				log.Error().Err(err).Str("source", s.Name()).Msg("datasource: sync manual (all) falhou")
+			if err := m.syncWithRetry(ctx, s, triggerManual, full); err != nil {
+				log.Error().Err(err).Str("source", s.Name()).Bool("full", full).
+					Msg("datasource: sync manual (all) falhou")
 			}
 		}(src)
 	}
 }
 
 // TriggerSync dispara uma sync imediata para uma fonte específica (por nome).
+// Se full for true e a fonte implementar FullSyncer, executa FullSync.
 // Retorna false se a fonte não foi encontrada.
-func (m *Manager) TriggerSync(ctx context.Context, sourceName string) bool {
+func (m *Manager) TriggerSync(ctx context.Context, sourceName string, full bool) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	for _, src := range m.sources {
 		if src.Name() == sourceName || string(src.Source()) == sourceName {
 			go func(s DataSource) {
-				if err := m.syncWithRetry(ctx, s, triggerManual); err != nil {
-					log.Error().Err(err).Str("source", s.Name()).Msg("datasource: sync manual falhou")
+				if err := m.syncWithRetry(ctx, s, triggerManual, full); err != nil {
+					log.Error().Err(err).Str("source", s.Name()).Bool("full", full).
+						Msg("datasource: sync manual falhou")
 				}
 			}(src)
 			return true
@@ -169,7 +174,7 @@ func (m *Manager) runSource(ctx context.Context, s DataSource) {
 	log.Info().Str("source", s.Name()).Msg("datasource: iniciando")
 
 	// Sync inicial na startup
-	if err := m.syncWithRetry(ctx, s, triggerInitial); err != nil {
+	if err := m.syncWithRetry(ctx, s, triggerInitial, false); err != nil {
 		log.Error().Err(err).Str("source", s.Name()).Msg("datasource: erro na sync inicial")
 	}
 
@@ -182,23 +187,32 @@ func (m *Manager) runSource(ctx context.Context, s DataSource) {
 			log.Info().Str("source", s.Name()).Msg("datasource: encerrado")
 			return
 		case <-ticker.C:
-			if err := m.syncWithRetry(ctx, s, triggerPeriodic); err != nil {
+			if err := m.syncWithRetry(ctx, s, triggerPeriodic, false); err != nil {
 				log.Error().Err(err).Str("source", s.Name()).Msg("datasource: erro no sync periódico")
 			}
 		}
 	}
 }
 
-// syncWithRetry executa s.Sync com novas tentativas (espera que dobra a cada falha) e
-// registra as métricas da execução. Para quando o context é cancelado.
-func (m *Manager) syncWithRetry(ctx context.Context, s DataSource, trigger string) error {
+// syncWithRetry executa Sync (ou FullSync se full=true e suportado) com novas
+// tentativas e registra as métricas da execução. Para quando o context é cancelado.
+func (m *Manager) syncWithRetry(ctx context.Context, s DataSource, trigger string, full bool) error {
 	policy := m.retry
 	name := s.Name()
+	syncFn := s.Sync
+	if full {
+		if fs, ok := s.(FullSyncer); ok {
+			syncFn = fs.FullSync
+			log.Info().Str("source", name).Str("trigger", trigger).Msg("datasource: full sync forçado")
+		} else {
+			log.Warn().Str("source", name).Msg("datasource: full sync não suportado; usando delta")
+		}
+	}
 
 	var err error
 	for attempt := 1; ; attempt++ {
 		started := time.Now()
-		err = s.Sync(ctx)
+		err = syncFn(ctx)
 		observability.SyncDuration.WithLabelValues(name, trigger).Observe(time.Since(started).Seconds())
 
 		if err == nil {
@@ -218,6 +232,7 @@ func (m *Manager) syncWithRetry(ctx context.Context, s DataSource, trigger strin
 		log.Warn().Err(err).
 			Str("source", name).
 			Str("trigger", trigger).
+			Bool("full", full).
 			Int("attempt", attempt).
 			Int("max_attempts", policy.MaxAttempts).
 			Dur("retry_in", wait).

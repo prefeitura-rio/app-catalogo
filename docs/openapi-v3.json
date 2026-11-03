@@ -1001,7 +1001,7 @@
             "BearerAuth": []
           }
         ],
-        "description": "Dispara sync ad-hoc em background. Retorna imediatamente. Requer role admin ou go:admin.",
+        "description": "Dispara sync ad-hoc em background. Retorna imediatamente. Com full=true, fontes que suportam (ex.: salesforce) ignoram o cursor e reprocessam tudo. Requer role admin ou go:admin.",
         "tags": [
           "admin"
         ],
@@ -1014,6 +1014,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "description": "Se true, força full sync nas fontes que suportam (salesforce)",
+            "name": "full",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -1023,9 +1031,7 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
+                  "additionalProperties": true
                 }
               }
             }

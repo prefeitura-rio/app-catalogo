@@ -21,8 +21,9 @@ import (
 )
 
 type stubSource struct {
-	name      string
-	callCount atomic.Int32
+	name          string
+	callCount     atomic.Int32
+	fullCallCount atomic.Int32
 }
 
 func (s *stubSource) Name() string                { return s.name }
@@ -30,6 +31,10 @@ func (s *stubSource) Source() models.ItemSource   { return models.ItemSource(s.n
 func (s *stubSource) SyncInterval() time.Duration { return time.Hour } // ticker longo: não dispara em teste
 func (s *stubSource) Sync(_ context.Context) error {
 	s.callCount.Add(1)
+	return nil
+}
+func (s *stubSource) FullSync(_ context.Context) error {
+	s.fullCallCount.Add(1)
 	return nil
 }
 
@@ -44,7 +49,7 @@ func TestManager_Register_And_TriggerAll(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	m.TriggerAll(ctx)
+	m.TriggerAll(ctx, false)
 
 	// Aguardar as goroutines concluírem
 	time.Sleep(100 * time.Millisecond)
@@ -67,12 +72,12 @@ func TestManager_TriggerSync_ByName(t *testing.T) {
 
 	ctx := context.Background()
 
-	found := m.TriggerSync(ctx, "salesforce")
+	found := m.TriggerSync(ctx, "salesforce", false)
 	if !found {
 		t.Fatal("TriggerSync deveria retornar true para 'salesforce'")
 	}
 
-	notFound := m.TriggerSync(ctx, "inexistente")
+	notFound := m.TriggerSync(ctx, "inexistente", false)
 	if notFound {
 		t.Fatal("TriggerSync deveria retornar false para fonte inexistente")
 	}
@@ -83,6 +88,54 @@ func TestManager_TriggerSync_ByName(t *testing.T) {
 	}
 	if s2.callCount.Load() != 0 {
 		t.Errorf("app-go-api: não deveria ter sido chamado, got %d", s2.callCount.Load())
+	}
+}
+
+func TestManager_TriggerSync_Full(t *testing.T) {
+	m := NewManager()
+	s1 := &stubSource{name: "salesforce"}
+	s2 := &stubSource{name: "app-go-api"}
+	m.Register(s1)
+	m.Register(s2)
+
+	ctx := context.Background()
+	if !m.TriggerSync(ctx, "salesforce", true) {
+		t.Fatal("TriggerSync salesforce full")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if s1.fullCallCount.Load() != 1 {
+		t.Fatalf("esperava FullSync=1, got %d (delta=%d)", s1.fullCallCount.Load(), s1.callCount.Load())
+	}
+	if s1.callCount.Load() != 0 {
+		t.Fatalf("delta não deveria rodar com full=true, got %d", s1.callCount.Load())
+	}
+}
+
+// deltaOnlySource implementa DataSource sem FullSyncer.
+type deltaOnlySource struct {
+	name      string
+	callCount atomic.Int32
+}
+
+func (s *deltaOnlySource) Name() string                { return s.name }
+func (s *deltaOnlySource) Source() models.ItemSource   { return models.ItemSource(s.name) }
+func (s *deltaOnlySource) SyncInterval() time.Duration { return time.Hour }
+func (s *deltaOnlySource) Sync(_ context.Context) error {
+	s.callCount.Add(1)
+	return nil
+}
+
+func TestManager_TriggerSync_FullFallsBackWhenUnsupported(t *testing.T) {
+	m := NewManager()
+	s := &deltaOnlySource{name: "typesense"}
+	m.Register(s)
+
+	if !m.TriggerSync(context.Background(), "typesense", true) {
+		t.Fatal("expected found")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if s.callCount.Load() != 1 {
+		t.Fatalf("fallback delta: got %d", s.callCount.Load())
 	}
 }
 
@@ -127,7 +180,7 @@ func TestManager_SyncWithRetry_RecoversAfterTransientFailures(t *testing.T) {
 	m := NewManager(WithRetryPolicy(fastRetry))
 
 	before := time.Now().Unix()
-	if err := m.syncWithRetry(context.Background(), src, triggerPeriodic); err != nil {
+	if err := m.syncWithRetry(context.Background(), src, triggerPeriodic, false); err != nil {
 		t.Fatalf("esperava sucesso após novas tentativas, got %v", err)
 	}
 
@@ -152,7 +205,7 @@ func TestManager_SyncWithRetry_GivesUpAfterMaxAttempts(t *testing.T) {
 	src := &flakySource{name: "flaky-gives-up", failures: 100}
 	m := NewManager(WithRetryPolicy(fastRetry))
 
-	if err := m.syncWithRetry(context.Background(), src, triggerManual); err == nil {
+	if err := m.syncWithRetry(context.Background(), src, triggerManual, false); err == nil {
 		t.Fatal("esperava erro depois de esgotar as tentativas")
 	}
 	if got := src.callCount.Load(); got != int32(fastRetry.MaxAttempts) {
@@ -174,7 +227,7 @@ func TestManager_SyncWithRetry_StopsWhenContextCanceled(t *testing.T) {
 	defer cancel()
 
 	started := time.Now()
-	err := m.syncWithRetry(ctx, src, triggerPeriodic)
+	err := m.syncWithRetry(ctx, src, triggerPeriodic, false)
 	if err == nil {
 		t.Fatal("esperava erro com context cancelado")
 	}
@@ -234,7 +287,7 @@ func TestRetryPolicy_BackoffIsExponentialAndCapped(t *testing.T) {
 func TestMetricsEndpoint_ExposesSyncMetrics(t *testing.T) {
 	src := &flakySource{name: "flaky-metrics", failures: 1}
 	m := NewManager(WithRetryPolicy(fastRetry))
-	if err := m.syncWithRetry(context.Background(), src, triggerPeriodic); err != nil {
+	if err := m.syncWithRetry(context.Background(), src, triggerPeriodic, false); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 
