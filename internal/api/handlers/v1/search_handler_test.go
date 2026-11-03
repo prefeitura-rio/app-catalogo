@@ -34,7 +34,10 @@ func TestParseSearchQuery_PerPageNormalizado(t *testing.T) {
 		c, _ := gin.CreateTestContext(w)
 		c.Request = httptest.NewRequest("GET", "/api/public/search?"+tc.query, nil)
 
-		req := parseSearchQuery(c)
+		req, err := parseSearchQuery(c)
+		if err != nil {
+			t.Fatalf("%s: erro inesperado: %v", tc.query, err)
+		}
 		req.Normalize()
 
 		if req.Page != tc.wantPage {

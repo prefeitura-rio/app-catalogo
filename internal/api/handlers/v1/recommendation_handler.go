@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -46,6 +45,7 @@ func NewRecommendationHandler(recomSvc *services.RecommendationService, citizenS
 // @Param        limit    query  int       false  "Máximo de itens, max 50 (default: 10)"
 // @Param        context  query  string    false  "Contexto: homepage, after_search, profile"
 // @Success      200  {object}  models.RecommendationResponse
+// @Failure      400  {object}  map[string]string
 // @Failure      401  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
 // @Router       /api/v1/recommendations [get]
@@ -56,12 +56,16 @@ func (h *RecommendationHandler) Authenticated(c *gin.Context) {
 		return
 	}
 
+	req, err := h.parseRequest(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	started := time.Now()
 	// personalized só vira true quando há perfil e a recomendação personalizada roda.
 	personalized := false
 	defer func() { observeRecommendation(started, personalized) }()
-
-	req := h.parseRequest(c)
 
 	profileCtx, cancelProfile := profileLookupContext(c.Request.Context())
 	profile, err := h.citizenSvc.GetOrSync(profileCtx, cpf)
@@ -98,13 +102,19 @@ func (h *RecommendationHandler) Authenticated(c *gin.Context) {
 // @Param        limit         query  int       false  "Máximo de itens, max 50 (default: 10)"
 // @Param        context       query  string    false  "Contexto: homepage, after_search, profile"
 // @Success      200  {object}  models.RecommendationResponse
+// @Failure      400  {object}  map[string]string
 // @Failure      500  {object}  map[string]string
 // @Router       /api/public/recommendations [get]
 func (h *RecommendationHandler) Anonymous(c *gin.Context) {
+	req, err := h.parseRequest(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	started := time.Now()
 	defer func() { observeRecommendation(started, false) }()
 
-	req := h.parseRequest(c)
 	req.ClusterHint = c.Query("cluster_hint")
 
 	resp, err := h.recomSvc.RecommendAnonymous(c.Request.Context(), req)
@@ -135,18 +145,14 @@ func profileLookupContext(ctx context.Context) (context.Context, context.CancelF
 	return context.WithTimeout(ctx, time.Until(deadline)/2)
 }
 
-func (h *RecommendationHandler) parseRequest(c *gin.Context) *models.RecommendationRequest {
+func (h *RecommendationHandler) parseRequest(c *gin.Context) (*models.RecommendationRequest, error) {
+	types, err := models.ParseItemTypes(c.QueryArray("types"))
+	if err != nil {
+		return nil, err
+	}
 	req := &models.RecommendationRequest{
 		Context: models.RecommendationContext(c.DefaultQuery("context", string(models.ContextHomepage))),
-	}
-
-	// Tipos
-	for _, raw := range c.QueryArray("types") {
-		for _, t := range strings.Split(raw, ",") {
-			if t = strings.TrimSpace(t); t != "" {
-				req.Types = append(req.Types, models.ItemType(t))
-			}
-		}
+		Types:   types,
 	}
 
 	// Limit
@@ -158,5 +164,5 @@ func (h *RecommendationHandler) parseRequest(c *gin.Context) *models.Recommendat
 	}
 
 	req.Normalize()
-	return req
+	return req, nil
 }
