@@ -101,7 +101,7 @@ GET  /ready                      readiness probe (pinga o banco)
 GET  /metrics                    métricas Prometheus
 ```
 
-> Rate limiting: 300 req/min por IP, em memória. Para múltiplas réplicas é necessário migrar para Redis. O IP é o do cliente real: o `X-Forwarded-For` só é lido quando a conexão vem de um proxy de `TRUSTED_PROXIES`, da direita para a esquerda, e o primeiro endereço que não é proxy é o cliente; o que o cliente escreve no cabeçalho (ou em `X-Real-IP`) não muda a chave.
+> Rate limiting: 300 req/min por IP, em memória. Para múltiplas réplicas é necessário migrar para Redis. O estado em memória é limitado: as entradas com a janela de 1 min vencida são removidas (varredura na própria requisição, no máximo uma por minuto) e o limiter acompanha no máximo 100 000 IPs; cheio, um IP qualquer dá lugar ao novo. O IP é o do cliente real: o `X-Forwarded-For` só é lido quando a conexão vem de um proxy de `TRUSTED_PROXIES`, da direita para a esquerda, e o primeiro endereço que não é proxy é o cliente; o que o cliente escreve no cabeçalho (ou em `X-Real-IP`) não muda a chave.
 
 ## Fontes de Dados
 
