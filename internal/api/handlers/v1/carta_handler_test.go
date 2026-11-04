@@ -14,24 +14,26 @@ import (
 )
 
 type stubCartaStore struct {
-	themes         []models.CartaTheme
-	themeMeta      models.CartaMeta
-	subthemes      map[string][]models.CartaSubtheme
-	services       map[string][]models.CartaServiceSummary
-	details        map[string]json.RawMessage
-	redirects      map[string]string
-	orgUnits       []models.CartaOrgUnit
-	orgUnitMeta    models.CartaMeta
-	bySici         map[string][]json.RawMessage
-	allServices    []json.RawMessage
-	allMeta        models.CartaMeta
-	err            error
-	lastPage       int
-	lastPerPage    int
-	lastIncludeEmp bool
-	lastThemeSlug  string
-	lastSubSlug    string
-	lastSiciCode   string
+	themes          []models.CartaTheme
+	themeMeta       models.CartaMeta
+	homeFeatured    []models.CartaHomeFeatured
+	homeFeaturedErr error
+	subthemes       map[string][]models.CartaSubtheme
+	services        map[string][]models.CartaServiceSummary
+	details         map[string]json.RawMessage
+	redirects       map[string]string
+	orgUnits        []models.CartaOrgUnit
+	orgUnitMeta     models.CartaMeta
+	bySici          map[string][]json.RawMessage
+	allServices     []json.RawMessage
+	allMeta         models.CartaMeta
+	err             error
+	lastPage        int
+	lastPerPage     int
+	lastIncludeEmp  bool
+	lastThemeSlug   string
+	lastSubSlug     string
+	lastSiciCode    string
 }
 
 func (s *stubCartaStore) ListThemes(ctx context.Context, page, perPage int, includeEmpty bool) ([]models.CartaTheme, models.CartaMeta, error) {
@@ -42,6 +44,16 @@ func (s *stubCartaStore) ListThemes(ctx context.Context, page, perPage int, incl
 		return nil, models.CartaMeta{}, s.err
 	}
 	return s.themes, s.themeMeta, nil
+}
+
+func (s *stubCartaStore) ListHomeFeatured(ctx context.Context) ([]models.CartaHomeFeatured, error) {
+	if s.homeFeaturedErr != nil {
+		return nil, s.homeFeaturedErr
+	}
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.homeFeatured, nil
 }
 
 func (s *stubCartaStore) ListSubthemes(ctx context.Context, themeSlug string, page, perPage int) ([]models.CartaSubtheme, models.CartaMeta, error) {
@@ -153,6 +165,59 @@ func TestCartaHandler_ListThemesLocal(t *testing.T) {
 	}
 	if len(body.Data) != 1 {
 		t.Fatalf("data=%v", body.Data)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["home_featured"]; ok {
+		t.Fatalf("home_featured must be omitted without include_featured, got %s", raw["home_featured"])
+	}
+}
+
+func TestCartaHandler_ListThemesWithFeatured(t *testing.T) {
+	store := &stubCartaStore{
+		themes:    []models.CartaTheme{{Slug: "tributos", Name: "Tributos", PublishedServices: 3}},
+		themeMeta: models.CartaMeta{Page: 1, PerPage: 100, Total: 1, TotalPages: 1},
+		homeFeatured: []models.CartaHomeFeatured{
+			{Slug: "iptu-2026", Name: "IPTU 2026", Position: 1, ThemeSlug: "tributos"},
+		},
+	}
+	h := newCartaHandler(store)
+	r := setupCartaRouter(h)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/public/themes?include_featured=true", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body cartaThemesPagedJSON
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if body.HomeFeatured == nil || len(*body.HomeFeatured) != 1 || (*body.HomeFeatured)[0].Slug != "iptu-2026" {
+		t.Fatalf("home_featured=%v", body.HomeFeatured)
+	}
+}
+
+func TestCartaHandler_ListThemesWithFeaturedEmpty(t *testing.T) {
+	store := &stubCartaStore{
+		themes:       []models.CartaTheme{},
+		themeMeta:    models.CartaMeta{Page: 1, PerPage: 100, Total: 0, TotalPages: 0},
+		homeFeatured: nil,
+	}
+	h := newCartaHandler(store)
+	r := setupCartaRouter(h)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/public/themes?include_featured=true", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if string(raw["home_featured"]) != "[]" {
+		t.Fatalf("expected explicit empty home_featured, got %s", raw["home_featured"])
 	}
 }
 

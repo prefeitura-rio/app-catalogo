@@ -17,15 +17,17 @@ import (
 // --- stubs ------------------------------------------------------------------
 
 type stubCartaClient struct {
-	themes    []clients.CartaTheme
-	subthemes map[string][]clients.CartaSubtheme
-	services  map[string][]clients.CartaServiceListItem
-	details   map[string]*clients.CartaServiceDetail
-	redirects map[string]string
-	listErr   error
-	detailErr error
-	getCalls  []string
-	mu        sync.Mutex
+	themes          []clients.CartaTheme
+	subthemes       map[string][]clients.CartaSubtheme
+	services        map[string][]clients.CartaServiceListItem
+	details         map[string]*clients.CartaServiceDetail
+	redirects       map[string]string
+	homeFeatured    []models.CartaHomeFeatured
+	homeFeaturedErr error
+	listErr         error
+	detailErr       error
+	getCalls        []string
+	mu              sync.Mutex
 }
 
 func (s *stubCartaClient) ListAllThemes(ctx context.Context, includeEmpty bool) ([]clients.CartaTheme, error) {
@@ -33,6 +35,16 @@ func (s *stubCartaClient) ListAllThemes(ctx context.Context, includeEmpty bool) 
 		return nil, s.listErr
 	}
 	return s.themes, nil
+}
+
+func (s *stubCartaClient) ListHomeFeatured(ctx context.Context) ([]models.CartaHomeFeatured, error) {
+	if s.homeFeaturedErr != nil {
+		return nil, s.homeFeaturedErr
+	}
+	if s.homeFeatured == nil {
+		return []models.CartaHomeFeatured{}, nil
+	}
+	return s.homeFeatured, nil
 }
 
 func (s *stubCartaClient) ListAllSubthemes(ctx context.Context, themeSlug string) ([]clients.CartaSubtheme, error) {
@@ -219,18 +231,21 @@ func sampleListItem(slug string, modified string) clients.CartaServiceListItem {
 }
 
 type stubHierarchyRepo struct {
-	mu             sync.Mutex
-	themes         []*models.CartaTheme
-	subthemes      []*models.CartaSubtheme
-	aliases        map[string]string
-	themeKeep      []string
-	subthemeKeep   []string
-	refreshCalls   int
-	upsertThemeErr error
-	upsertSubErr   error
-	softThemeErr   error
-	softSubErr     error
-	refreshErr     error
+	mu                   sync.Mutex
+	themes               []*models.CartaTheme
+	subthemes            []*models.CartaSubtheme
+	aliases              map[string]string
+	themeKeep            []string
+	subthemeKeep         []string
+	homeFeatured         []models.CartaHomeFeatured
+	replaceFeaturedCalls int
+	refreshCalls         int
+	upsertThemeErr       error
+	upsertSubErr         error
+	softThemeErr         error
+	softSubErr           error
+	refreshErr           error
+	replaceFeaturedErr   error
 }
 
 func (h *stubHierarchyRepo) UpsertTheme(ctx context.Context, theme *models.CartaTheme) error {
@@ -315,6 +330,17 @@ func (h *stubHierarchyRepo) DeleteSlugAlias(ctx context.Context, oldSlug string)
 	if h.aliases != nil {
 		delete(h.aliases, oldSlug)
 	}
+	return nil
+}
+
+func (h *stubHierarchyRepo) ReplaceHomeFeatured(ctx context.Context, items []models.CartaHomeFeatured) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.replaceFeaturedCalls++
+	if h.replaceFeaturedErr != nil {
+		return h.replaceFeaturedErr
+	}
+	h.homeFeatured = append([]models.CartaHomeFeatured{}, items...)
 	return nil
 }
 
@@ -957,6 +983,144 @@ func TestFullSync_PersistsHierarchy(t *testing.T) {
 	}
 	if len(repo.upserted) != 1 || repo.upserted[0].ThemeSlug != "tributos" {
 		t.Fatalf("catalog theme_slug=%v", repo.upserted)
+	}
+}
+
+func TestFullSync_ReplacesHomeFeatured(t *testing.T) {
+	client := &stubCartaClient{
+		themes:    []clients.CartaTheme{{Slug: "tributos", Name: "T"}},
+		subthemes: map[string][]clients.CartaSubtheme{"tributos": {{Slug: "iptu", Name: "I"}}},
+		services:  map[string][]clients.CartaServiceListItem{"iptu": {sampleListItem("svc-a", "2026-08-20T00:00:00.000Z")}},
+		details:   map[string]*clients.CartaServiceDetail{"svc-a": sampleDetail("svc-a", "A")},
+		homeFeatured: []models.CartaHomeFeatured{
+			{Slug: "iptu-2026", Name: "IPTU 2026", Position: 1, ThemeSlug: "tributos"},
+			{Slug: "", Name: "sem slug", Position: 2},
+			{Slug: "outra", Name: "Outra", Position: 3, ThemeSlug: "saude"},
+		},
+	}
+	repo := &stubSyncRepo{}
+	hier := &stubHierarchyRepo{
+		homeFeatured: []models.CartaHomeFeatured{{Slug: "old", Position: 9}},
+	}
+	svc := newTestSyncWithHierarchy(client, repo, hier)
+
+	if err := svc.FullSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if hier.replaceFeaturedCalls != 1 {
+		t.Fatalf("replaceFeaturedCalls=%d", hier.replaceFeaturedCalls)
+	}
+	if len(hier.homeFeatured) != 2 {
+		t.Fatalf("homeFeatured=%v", hier.homeFeatured)
+	}
+	if hier.homeFeatured[0].Slug != "iptu-2026" || hier.homeFeatured[1].Slug != "outra" {
+		t.Fatalf("order/slugs=%v", hier.homeFeatured)
+	}
+	if len(repo.upserted) != 1 {
+		t.Fatalf("hierarchy sync should continue, upserted=%d", len(repo.upserted))
+	}
+}
+
+func TestFullSync_HomeFeaturedFetchFailureKeepsPrevious(t *testing.T) {
+	client := &stubCartaClient{
+		themes:          []clients.CartaTheme{{Slug: "tributos", Name: "T"}},
+		subthemes:       map[string][]clients.CartaSubtheme{"tributos": {{Slug: "iptu", Name: "I"}}},
+		services:        map[string][]clients.CartaServiceListItem{"iptu": {sampleListItem("svc-a", "2026-08-20T00:00:00.000Z")}},
+		details:         map[string]*clients.CartaServiceDetail{"svc-a": sampleDetail("svc-a", "A")},
+		homeFeaturedErr: errors.New("cloudhub timeout"),
+	}
+	repo := &stubSyncRepo{}
+	hier := &stubHierarchyRepo{
+		homeFeatured: []models.CartaHomeFeatured{{Slug: "kept", Position: 1}},
+	}
+	svc := newTestSyncWithHierarchy(client, repo, hier)
+
+	if err := svc.FullSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if hier.replaceFeaturedCalls != 0 {
+		t.Fatalf("replace must not run on fetch failure, calls=%d", hier.replaceFeaturedCalls)
+	}
+	if len(hier.homeFeatured) != 1 || hier.homeFeatured[0].Slug != "kept" {
+		t.Fatalf("previous snapshot lost: %v", hier.homeFeatured)
+	}
+	if len(repo.upserted) != 1 {
+		t.Fatalf("hierarchy sync should continue, upserted=%d", len(repo.upserted))
+	}
+}
+
+func TestFullSync_HomeFeaturedEmptyClearsSnapshot(t *testing.T) {
+	client := &stubCartaClient{
+		themes:       []clients.CartaTheme{{Slug: "tributos", Name: "T"}},
+		subthemes:    map[string][]clients.CartaSubtheme{"tributos": {{Slug: "iptu", Name: "I"}}},
+		services:     map[string][]clients.CartaServiceListItem{"iptu": {sampleListItem("svc-a", "2026-08-20T00:00:00.000Z")}},
+		details:      map[string]*clients.CartaServiceDetail{"svc-a": sampleDetail("svc-a", "A")},
+		homeFeatured: []models.CartaHomeFeatured{},
+	}
+	repo := &stubSyncRepo{}
+	hier := &stubHierarchyRepo{
+		homeFeatured: []models.CartaHomeFeatured{{Slug: "old", Position: 1}},
+	}
+	svc := newTestSyncWithHierarchy(client, repo, hier)
+
+	if err := svc.FullSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if hier.replaceFeaturedCalls != 1 {
+		t.Fatalf("replaceFeaturedCalls=%d", hier.replaceFeaturedCalls)
+	}
+	if len(hier.homeFeatured) != 0 {
+		t.Fatalf("want cleared snapshot, got %v", hier.homeFeatured)
+	}
+}
+
+func TestFullSync_HomeFeaturedReplaceFailureKeepsPrevious(t *testing.T) {
+	client := &stubCartaClient{
+		themes:    []clients.CartaTheme{{Slug: "tributos", Name: "T"}},
+		subthemes: map[string][]clients.CartaSubtheme{"tributos": {{Slug: "iptu", Name: "I"}}},
+		services:  map[string][]clients.CartaServiceListItem{"iptu": {sampleListItem("svc-a", "2026-08-20T00:00:00.000Z")}},
+		details:   map[string]*clients.CartaServiceDetail{"svc-a": sampleDetail("svc-a", "A")},
+		homeFeatured: []models.CartaHomeFeatured{
+			{Slug: "novo", Name: "Novo", Position: 1},
+		},
+	}
+	repo := &stubSyncRepo{}
+	hier := &stubHierarchyRepo{
+		homeFeatured:       []models.CartaHomeFeatured{{Slug: "kept", Position: 1}},
+		replaceFeaturedErr: errors.New("db write failed"),
+	}
+	svc := newTestSyncWithHierarchy(client, repo, hier)
+
+	if err := svc.FullSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if hier.replaceFeaturedCalls != 1 {
+		t.Fatalf("replaceFeaturedCalls=%d", hier.replaceFeaturedCalls)
+	}
+	if len(hier.homeFeatured) != 1 || hier.homeFeatured[0].Slug != "kept" {
+		t.Fatalf("previous snapshot lost: %v", hier.homeFeatured)
+	}
+	if len(repo.upserted) != 1 {
+		t.Fatalf("hierarchy sync should continue, upserted=%d", len(repo.upserted))
+	}
+}
+
+func TestNormalizeHomeFeatured_DedupesSlugAndPosition(t *testing.T) {
+	got := normalizeHomeFeatured([]models.CartaHomeFeatured{
+		{Slug: "a", Position: 2, Name: "A2"},
+		{Slug: "a", Position: 1, Name: "A1"},
+		{Slug: "", Position: 9, Name: "skip"},
+		{Slug: "b", Position: 1, Name: "B-conflict-pos"},
+		{Slug: "c", Position: 3, Name: "C"},
+	})
+	if len(got) != 2 {
+		t.Fatalf("len=%d got=%v", len(got), got)
+	}
+	if got[0].Slug != "a" || got[0].Position != 1 || got[0].Name != "A1" {
+		t.Fatalf("want slug a @1 A1, got %+v", got[0])
+	}
+	if got[1].Slug != "c" || got[1].Position != 3 {
+		t.Fatalf("want slug c @3, got %+v", got[1])
 	}
 }
 

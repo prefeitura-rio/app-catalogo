@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -82,6 +83,74 @@ func (r *CartaRepository) UpsertSubtheme(ctx context.Context, st *models.CartaSu
 			deleted_at = NULL
 	`, st.Slug, st.ThemeSlug, st.Name, st.PublishedServices)
 	return err
+}
+
+// ReplaceHomeFeatured substitui o snapshot editorial da home numa transação (delete + copy).
+func (r *CartaRepository) ReplaceHomeFeatured(ctx context.Context, items []models.CartaHomeFeatured) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `DELETE FROM carta_home_featured`); err != nil {
+		return err
+	}
+
+	if len(items) > 0 {
+		syncedAt := time.Now().UTC()
+		rows := make([][]any, len(items))
+		for i, item := range items {
+			rows[i] = []any{
+				item.Slug, item.Position, item.Name, item.Summary,
+				item.ThemeSlug, item.ThemeName, item.SubthemeSlug, item.SubthemeName,
+				item.LastPublishedDate, item.AutoserviceCategory, syncedAt,
+			}
+		}
+		_, err = tx.CopyFrom(
+			ctx,
+			pgx.Identifier{"carta_home_featured"},
+			[]string{
+				"slug", "position", "name", "summary",
+				"theme_slug", "theme_name", "subtheme_slug", "subtheme_name",
+				"last_published_date", "autoservice_category", "synced_at",
+			},
+			pgx.CopyFromRows(rows),
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
+// ListHomeFeatured retorna os destaques editoriais ordenados por position (desempate por slug).
+func (r *CartaRepository) ListHomeFeatured(ctx context.Context) ([]models.CartaHomeFeatured, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT slug, position, name, summary,
+		       theme_slug, theme_name, subtheme_slug, subtheme_name,
+		       last_published_date, autoservice_category, synced_at
+		FROM carta_home_featured
+		ORDER BY position ASC, slug ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := make([]models.CartaHomeFeatured, 0)
+	for rows.Next() {
+		var item models.CartaHomeFeatured
+		if err := rows.Scan(
+			&item.Slug, &item.Position, &item.Name, &item.Summary,
+			&item.ThemeSlug, &item.ThemeName, &item.SubthemeSlug, &item.SubthemeName,
+			&item.LastPublishedDate, &item.AutoserviceCategory, &item.SyncedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
 }
 
 // SoftDeleteThemesNotIn marca temas fora da lista como deletados.
