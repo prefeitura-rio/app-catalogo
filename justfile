@@ -52,6 +52,12 @@ fmt:
 lint:
     golangci-lint run
 
+# Fail on Go vulnerabilities reachable from this module's code (same as PR gate).
+# Needs a Go toolchain matching go.mod (nix/direnv, or unset GOROOT if using GVM).
+govulncheck:
+    go install golang.org/x/vuln/cmd/govulncheck@latest
+    govulncheck ./...
+
 # Build all binaries
 build:
     go build -o bin/catalogo-api cmd/api/main.go

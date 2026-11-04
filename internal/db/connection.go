@@ -27,8 +27,14 @@ func Connect(ctx context.Context, cfg PoolConfig) error {
 		return fmt.Errorf("falha ao parsear configuração do banco: %w", err)
 	}
 
-	poolCfg.MaxConns = int32(cfg.MaxOpenConns)
-	poolCfg.MinConns = int32(cfg.MinConns)
+	if cfg.MaxOpenConns > int(^uint32(0)>>1) { // math.MaxInt32 without importing math
+		return fmt.Errorf("MaxOpenConns overflows int32: %d", cfg.MaxOpenConns)
+	}
+	if cfg.MinConns > int(^uint32(0)>>1) {
+		return fmt.Errorf("MinConns overflows int32: %d", cfg.MinConns)
+	}
+	poolCfg.MaxConns = int32(cfg.MaxOpenConns) //nolint:gosec // G115: validated against int32 max above
+	poolCfg.MinConns = int32(cfg.MinConns)     //nolint:gosec // G115: validated against int32 max above
 
 	wait := retryBaseWait
 	for attempt := 1; attempt <= maxRetries; attempt++ {
