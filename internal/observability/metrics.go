@@ -148,6 +148,9 @@ func RequestLogger() gin.HandlerFunc {
 	}
 }
 
+// rateLimitWindow é a janela fixa de contagem por IP.
+const rateLimitWindow = time.Minute
+
 // rateLimitMaxEntries limita quantos IPs o rate limiter acompanha ao mesmo
 // tempo, para que o estado em memória não cresça sem limite numa API pública.
 const rateLimitMaxEntries = 100_000
@@ -155,7 +158,7 @@ const rateLimitMaxEntries = 100_000
 // RateLimitMiddleware implementa rate limiting por IP com contador em memória.
 // Para múltiplas réplicas, substituir pela implementação Redis sliding window.
 func RateLimitMiddleware(requestsPerMinute int) gin.HandlerFunc {
-	return newRateLimiter(time.Minute, rateLimitMaxEntries, time.Now).middleware(requestsPerMinute)
+	return newRateLimiter(rateLimitMaxEntries, time.Now).middleware(requestsPerMinute)
 }
 
 type rateLimitEntry struct {
@@ -169,23 +172,21 @@ type rateLimitEntry struct {
 // teto: cheio, uma entrada arbitrária dá lugar ao IP novo, em O(1).
 type rateLimiter struct {
 	mu         sync.Mutex
-	window     time.Duration
 	maxEntries int
 	now        func() time.Time
 	counters   map[string]*rateLimitEntry
 	nextSweep  time.Time
 }
 
-func newRateLimiter(window time.Duration, maxEntries int, now func() time.Time) *rateLimiter {
+func newRateLimiter(maxEntries int, now func() time.Time) *rateLimiter {
 	if maxEntries < 1 {
 		maxEntries = 1
 	}
 	return &rateLimiter{
-		window:     window,
 		maxEntries: maxEntries,
 		now:        now,
 		counters:   make(map[string]*rateLimitEntry),
-		nextSweep:  now().Add(window),
+		nextSweep:  now().Add(rateLimitWindow),
 	}
 }
 
@@ -198,7 +199,7 @@ func (l *rateLimiter) hit(ip string) int {
 
 	if !now.Before(l.nextSweep) {
 		l.sweep(now)
-		l.nextSweep = now.Add(l.window)
+		l.nextSweep = now.Add(rateLimitWindow)
 	}
 
 	e, exists := l.counters[ip]
@@ -209,7 +210,7 @@ func (l *rateLimiter) hit(ip string) int {
 	if !exists && len(l.counters) >= l.maxEntries {
 		l.evictOne()
 	}
-	l.counters[ip] = &rateLimitEntry{count: 1, resetAt: now.Add(l.window)}
+	l.counters[ip] = &rateLimitEntry{count: 1, resetAt: now.Add(rateLimitWindow)}
 	return 1
 }
 

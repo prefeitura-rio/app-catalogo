@@ -92,7 +92,7 @@ func (f *fakeClock) advance(d time.Duration) { f.t = f.t.Add(d) }
 
 func TestRateLimiter_RemovesExpiredEntries(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}
-	l := newRateLimiter(time.Minute, 1000, clock.now)
+	l := newRateLimiter(1000, clock.now)
 
 	for i := 0; i < 50; i++ {
 		l.hit(fmt.Sprintf("2001:db8::%x", i))
@@ -114,7 +114,7 @@ func TestRateLimiter_RemovesExpiredEntries(t *testing.T) {
 
 func TestRateLimiter_KeepsLiveEntriesOnSweep(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}
-	l := newRateLimiter(time.Minute, 1000, clock.now)
+	l := newRateLimiter(1000, clock.now)
 
 	l.hit("192.0.2.1")
 	clock.advance(40 * time.Second)
@@ -133,7 +133,7 @@ func TestRateLimiter_KeepsLiveEntriesOnSweep(t *testing.T) {
 func TestRateLimiter_BoundedByMaxEntries(t *testing.T) {
 	clock := &fakeClock{t: time.Date(2026, 11, 4, 12, 0, 0, 0, time.UTC)}
 	const maxEntries = 100
-	l := newRateLimiter(time.Minute, maxEntries, clock.now)
+	l := newRateLimiter(maxEntries, clock.now)
 
 	// Rotação de IPs dentro da mesma janela, sem nenhuma entrada vencida.
 	for i := 0; i < 10*maxEntries; i++ {
@@ -150,7 +150,7 @@ func TestRateLimiter_BoundedByMaxEntries(t *testing.T) {
 }
 
 func TestRateLimiter_ConcurrentHits(t *testing.T) {
-	l := newRateLimiter(time.Minute, 1000, time.Now)
+	l := newRateLimiter(1000, time.Now)
 	var wg sync.WaitGroup
 	for g := 0; g < 8; g++ {
 		wg.Add(1)
