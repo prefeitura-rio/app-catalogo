@@ -1,0 +1,101 @@
+{
+  "success": true,
+  "data": {
+    "courses": [
+      {
+        "accessibility": "",
+        "acessibilidades": [],
+        "auto_approve_enrollments": false,
+        "carga_horaria": 12,
+        "categorias": [
+          {
+            "id": 1,
+            "nome": "Dados"
+          }
+        ],
+        "certificacao_oferecida": true,
+        "contato_duvidas": "",
+        "course_management_type": "OWN_ORG",
+        "cover_image": "https://storage.googleapis.com/rj-superapp-staging-prefrio/superapp/images/courses/09500ff7-633e-43b0-8677-bc2b623b333d.png",
+        "created_at": "2026-11-04T16:16:31.174987-03:00",
+        "custom_fields": null,
+        "data_inicio": null,
+        "data_limite_inscricoes": "2026-11-30T10:40:40-03:00",
+        "data_termino": null,
+        "description": "Curso introdutório de análise de dados com planilhas e visualização.",
+        "enrollment_end_date": "2026-11-30T10:40:40-03:00",
+        "enrollment_start_date": "2026-07-30T10:40:40.478-03:00",
+        "expected_results": "",
+        "external_partner_contact": "",
+        "external_partner_logo_url": "",
+        "external_partner_name": "",
+        "external_partner_url": "",
+        "facilitator": "",
+        "formacao_link": "",
+        "has_certificate": true,
+        "id": 2916,
+        "instituicao": null,
+        "instituicao_id": 5,
+        "institutional_logo": "https://storage.googleapis.com/rj-escritorio-dev-public/superapp/portal-do-admin/cursos/logo_pref%20ciclo%20cursos.webp",
+        "is_external_partner": null,
+        "is_visible": true,
+        "link_inscricao": "https://exemplo.rio/cursos/2916/inscricao",
+        "local_realizacao": "",
+        "locations": [
+          {
+            "address": "Rua Exemplo, 100 - Abolição",
+            "created_at": "2026-11-04T16:16:31.190359-03:00",
+            "curso_id": 2916,
+            "id": "544f83d3-9b86-46ce-9a3b-ae5475f5d8b2",
+            "neighborhood": "Abolição",
+            "neighborhood_zone": "Zona Norte",
+            "schedules": [
+              {
+                "accepting_enrollments": true,
+                "class_days": "Seg, Ter",
+                "class_end_date": "2026-12-05T10:40:40-03:00",
+                "class_start_date": "2026-12-01T23:59:59-03:00",
+                "class_time": "9h até 18h",
+                "created_at": "2026-11-04T16:16:31.19395-03:00",
+                "display_order": 1,
+                "enrollment_end_date": "2026-11-30T10:40:40-03:00",
+                "enrollment_start_date": "2026-07-30T10:40:40.478-03:00",
+                "id": "af05f887-edb5-46c2-b560-77f215bbd9c1",
+                "location_id": "544f83d3-9b86-46ce-9a3b-ae5475f5d8b2",
+                "remaining_vacancies": 1,
+                "updated_at": "2026-11-04T16:23:05.446445-03:00",
+                "vacancies": 1
+              }
+            ],
+            "updated_at": "2026-11-04T16:23:05.443114-03:00"
+          }
+        ],
+        "material_used": "",
+        "methodology": "",
+        "modalidade": "Presencial",
+        "numero_vagas": 0,
+        "objectives": "",
+        "organization": "Secretaria Municipal de Exemplo",
+        "orgao_id": "1",
+        "pre_requisitos": "",
+        "program_content": "",
+        "remote_class": null,
+        "resources_used": "",
+        "status": "accepting_enrollments",
+        "target_audience": "Pessoas a partir de 16 anos com ensino fundamental completo",
+        "teaching_material": "",
+        "theme": "Tecnologia",
+        "title": "Introdução à Análise de Dados",
+        "turno": "NOITE",
+        "updated_at": "2026-11-04T16:23:38.948462-03:00",
+        "workload": "12 horas"
+      }
+    ],
+    "pagination": {
+      "page": 1,
+      "limit": 100,
+      "total": 1,
+      "total_pages": 1
+    }
+  }
+}
