@@ -55,6 +55,12 @@ func newRouterFixture(t *testing.T) routerFixture {
 // newRouterFixtureWithProxies monta o router com TRUSTED_PROXIES = trustedProxies.
 func newRouterFixtureWithProxies(t *testing.T, trustedProxies []string) routerFixture {
 	t.Helper()
+	return newRouterFixtureWithServer(t, config.ServerSettings{RequestTimeout: 5, TrustedProxies: trustedProxies})
+}
+
+// newRouterFixtureWithServer monta o router com as configurações de servidor dadas.
+func newRouterFixtureWithServer(t *testing.T, server config.ServerSettings) routerFixture {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("rsa: %v", err)
@@ -79,7 +85,7 @@ func newRouterFixtureWithProxies(t *testing.T, trustedProxies []string) routerFi
 
 	cfg := &config.AppConfig{
 		App:     config.AppSettings{Environment: "test"},
-		Server:  config.ServerSettings{RequestTimeout: 5, TrustedProxies: trustedProxies},
+		Server:  server,
 		Tracing: config.TracingSettings{ServiceName: "app-catalogo-test"},
 	}
 	pool := unreachablePool(t)
