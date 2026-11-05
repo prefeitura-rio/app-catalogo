@@ -50,7 +50,7 @@ O Adminer (UI do banco) em `http://localhost:8083`.
 | `KEYCLOAK_URL` / `KEYCLOAK_REALM` / `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` | Auth para chamadas ao app-rmi e app-go-api |
 | `AUTH_JWT_ISSUER` / `AUTH_JWKS_URL` | Emissor e JWKS para verificar o JWT de `X-Auth-Request-Token` (padrão derivado de `KEYCLOAK_URL`/`KEYCLOAK_REALM`; ver [Autenticação](#autenticação)) |
 | `AUTH_JWT_AUTHORIZED_PARTIES` | Clients do Keycloak (claim `azp`) aceitos, separados por vírgula (padrão `superapp`; ver [Autenticação](#autenticação)) |
-| `TRUSTED_PROXIES` | IPs/CIDRs dos proxies cujo `X-Forwarded-For` define o IP do cliente (rate limiting e log), separados por vírgula. Padrão: loopback, redes privadas e proxies do LB do Google (`35.191.0.0/16`, `130.211.0.0/22`); os manifests acrescentam o IP do LB de cada ambiente. Lista vazia (`,`) = sempre o IP da conexão |
+| `TRUSTED_PROXIES` | IPs/CIDRs dos proxies cujo `X-Forwarded-For` define o IP do cliente no log de acesso, separados por vírgula. Padrão: loopback, redes privadas e proxies do LB do Google (`35.191.0.0/16`, `130.211.0.0/22`); os manifests acrescentam o IP do LB de cada ambiente. Lista vazia (`,`) = sempre o IP da conexão |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Endpoint SigNoz/OTel (opcional) |
 | `WORKER_METRICS_PORT` | Porta em que o worker expõe `GET /metrics` com as métricas de sync (padrão `9091`; `0` desativa) |
 
@@ -101,7 +101,7 @@ GET  /ready                      readiness probe (pinga o banco)
 GET  /metrics                    métricas Prometheus
 ```
 
-> Rate limiting: 300 req/min por IP, em memória. Para múltiplas réplicas é necessário migrar para Redis. O estado em memória é limitado: as entradas com a janela de 1 min vencida são removidas (varredura na própria requisição, no máximo uma por minuto) e o limiter acompanha no máximo 100 000 IPs; cheio, um IP qualquer dá lugar ao novo. O IP é o do cliente real: o `X-Forwarded-For` só é lido quando a conexão vem de um proxy de `TRUSTED_PROXIES`, da direita para a esquerda, e o primeiro endereço que não é proxy é o cliente; o que o cliente escreve no cabeçalho (ou em `X-Real-IP`) não muda a chave.
+> Rate limiting: aplicado na borda (Cloud Armor / Istio), não neste serviço. O IP do cliente no log de acesso continua resolvido via `TRUSTED_PROXIES`: o `X-Forwarded-For` só é lido quando a conexão vem de um proxy confiável, da direita para a esquerda, e o primeiro endereço que não é proxy é o cliente; o que o cliente escreve no cabeçalho (ou em `X-Real-IP`) não muda o valor.
 
 ## Fontes de Dados
 
@@ -166,7 +166,7 @@ internal/
   cache/               Redis TTL cache genérico
   db/                  pool pgx/v5
   config/              Viper singleton
-  observability/       OTel tracing + Prometheus metrics + rate limiting
+  observability/       OTel tracing + Prometheus metrics
 db/migrations/         goose SQL migrations (.up.sql / .down.sql)
 k8s/
   staging/             Deployment + KEDA + Service

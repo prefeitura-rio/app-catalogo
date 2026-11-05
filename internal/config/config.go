@@ -94,7 +94,7 @@ type ServerSettings struct {
 	Port           int
 	RequestTimeout int
 	// TrustedProxies são os IPs/CIDRs dos proxies cujo X-Forwarded-For é
-	// aceito para resolver o IP do cliente (rate limiting e log de acesso).
+	// aceito para resolver o IP do cliente no log de acesso.
 	// Vazia, o IP é sempre o da conexão.
 	TrustedProxies []string
 }

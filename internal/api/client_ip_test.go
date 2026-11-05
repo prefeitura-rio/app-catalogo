@@ -3,7 +3,6 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -50,10 +49,6 @@ func (f routerFixture) from(remoteAddr string, header http.Header) *httptest.Res
 	return w
 }
 
-func forgedIP(i int) string {
-	return fmt.Sprintf("203.0.%d.%d", (i/250)%250, i%250+1)
-}
-
 // loggedIP devolve o campo ip do log de acesso da requisição.
 func loggedIP(t *testing.T, f routerFixture, remoteAddr string, header http.Header) string {
 	t.Helper()
@@ -74,62 +69,6 @@ func loggedIP(t *testing.T, f routerFixture, remoteAddr string, header http.Head
 	}
 	t.Fatalf("log de acesso sem campo ip: %q", buf.String())
 	return ""
-}
-
-// Um X-Forwarded-For diferente a cada requisição não pode criar um contador novo.
-func TestSetupRouter_RateLimitIgnoresForgedForwardedFor(t *testing.T) {
-	cases := []struct {
-		name       string
-		remoteAddr string
-		header     func(i int) http.Header
-	}{
-		{
-			name:       "conexão direta da internet",
-			remoteAddr: "192.0.2.7:5000",
-			header: func(i int) http.Header {
-				return http.Header{"X-Forwarded-For": {forgedIP(i)}}
-			},
-		},
-		{
-			name:       "pelo load balancer e pelo Istio",
-			remoteAddr: sidecarIP,
-			header: func(i int) http.Header {
-				return http.Header{"X-Forwarded-For": {viaMesh(realClient, forgedIP(i))}}
-			},
-		},
-		{
-			name:       "X-Forwarded-For forjado em linha separada",
-			remoteAddr: sidecarIP,
-			header: func(i int) http.Header {
-				return http.Header{"X-Forwarded-For": {forgedIP(i), viaMesh(realClient, "")}}
-			},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newRouterFixtureWithProxies(t, meshProxies)
-			for i := 0; i < 300; i++ {
-				if w := f.from(tc.remoteAddr, tc.header(i)); w.Code != http.StatusOK {
-					t.Fatalf("requisição %d dentro do limite: esperado 200, obtido %d", i+1, w.Code)
-				}
-			}
-			if w := f.from(tc.remoteAddr, tc.header(300)); w.Code != http.StatusTooManyRequests {
-				t.Fatalf("301ª requisição com X-Forwarded-For novo: esperado 429, obtido %d", w.Code)
-			}
-		})
-	}
-
-	// Pela cadeia real, cada cliente continua com o próprio contador.
-	f := newRouterFixtureWithProxies(t, meshProxies)
-	for i := 0; i < 301; i++ {
-		f.from(sidecarIP, http.Header{"X-Forwarded-For": {viaMesh(realClient, "")}})
-	}
-	if w := f.from(sidecarIP, http.Header{"X-Forwarded-For": {viaMesh(realClient, "")}}); w.Code != http.StatusTooManyRequests {
-		t.Fatalf("cliente acima do limite: esperado 429, obtido %d", w.Code)
-	}
-	if w := f.from(sidecarIP, http.Header{"X-Forwarded-For": {viaMesh("198.51.100.21", "")}}); w.Code != http.StatusOK {
-		t.Fatalf("outro cliente atrás do mesmo LB: esperado 200, obtido %d", w.Code)
-	}
 }
 
 // O IP do log de acesso é o do cliente real, não o que ele escreveu nos cabeçalhos.

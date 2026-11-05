@@ -49,7 +49,6 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 	r.Use(middleware.CORS())
 	r.Use(middleware.ExtractUserContext(deps.TokenVerifier))
 	r.Use(middleware.Timeout(time.Duration(cfg.Server.RequestTimeout) * time.Second))
-	r.Use(observability.RateLimitMiddleware(300)) // 300 req/min por IP
 
 	healthHandler := handlers.NewHealthHandler(db)
 	r.GET("/health", healthHandler.Health)
@@ -102,14 +101,13 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 	return r
 }
 
-// configureClientIP define como c.ClientIP() resolve o IP do cliente, que é a
-// chave do rate limiting e o campo ip do log de acesso. Só o X-Forwarded-For é
-// lido, e só quando a conexão vem de um proxy confiável; ele é percorrido da
-// direita para a esquerda, pulando os proxies confiáveis, e o primeiro endereço
-// que não é proxy é o cliente. Assim o que o cliente escreve no cabeçalho, que
-// fica à esquerda do que os proxies acrescentam, não substitui o IP real.
-// Sem a chamada, o Gin confia em qualquer origem (0.0.0.0/0) e devolve o
-// endereço mais à esquerda, forjável.
+// configureClientIP define como c.ClientIP() resolve o IP do cliente no log de
+// acesso. Só o X-Forwarded-For é lido, e só quando a conexão vem de um proxy
+// confiável; ele é percorrido da direita para a esquerda, pulando os proxies
+// confiáveis, e o primeiro endereço que não é proxy é o cliente. Assim o que o
+// cliente escreve no cabeçalho, que fica à esquerda do que os proxies
+// acrescentam, não substitui o IP real. Sem a chamada, o Gin confia em qualquer
+// origem (0.0.0.0/0) e devolve o endereço mais à esquerda, forjável.
 func configureClientIP(r *gin.Engine, trustedProxies []string) {
 	r.ForwardedByClientIP = true
 	r.RemoteIPHeaders = []string{"X-Forwarded-For"}
