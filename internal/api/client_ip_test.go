@@ -10,6 +10,8 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+
+	"github.com/prefeitura-rio/app-catalogo/internal/config"
 )
 
 // Cadeia de staging/produção: load balancer HTTP(S) do Google →
@@ -158,5 +160,28 @@ func TestSetupRouter_ClientIP(t *testing.T) {
 		if got := loggedIP(t, tc.f, tc.remoteAddr, tc.header); got != tc.want {
 			t.Errorf("%s: ip esperado %s, obtido %s", tc.name, tc.want, got)
 		}
+	}
+}
+
+// RATE_LIMIT_ENABLED=false tira o limiter em memória: o limite passa à borda.
+func TestSetupRouter_RateLimitDisabled(t *testing.T) {
+	f := newRouterFixtureWithServer(t, config.ServerSettings{RequestTimeout: 5, RateLimitDisabled: true})
+	for i := 0; i < 400; i++ {
+		w := f.from("192.0.2.7:5000", nil)
+		if w.Code != http.StatusOK {
+			t.Fatalf("requisição %d com o limiter desligado: esperado 200, obtido %d", i+1, w.Code)
+		}
+		if got := w.Header().Get("X-RateLimit-Limit"); got != "" {
+			t.Fatalf("limiter desligado não pode enviar X-RateLimit-Limit, obtido %q", got)
+		}
+	}
+
+	// O valor zero da configuração mantém o limiter ligado.
+	on := newRouterFixtureWithServer(t, config.ServerSettings{RequestTimeout: 5})
+	for i := 0; i < 300; i++ {
+		on.from("192.0.2.7:5000", nil)
+	}
+	if w := on.from("192.0.2.7:5000", nil); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("limiter ligado, 301ª requisição: esperado 429, obtido %d", w.Code)
 	}
 }

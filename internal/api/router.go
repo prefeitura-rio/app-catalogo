@@ -49,7 +49,11 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 	r.Use(middleware.CORS())
 	r.Use(middleware.ExtractUserContext(deps.TokenVerifier))
 	r.Use(middleware.Timeout(time.Duration(cfg.Server.RequestTimeout) * time.Second))
-	r.Use(observability.RateLimitMiddleware(300)) // 300 req/min por IP
+	if cfg.Server.RateLimitDisabled {
+		log.Warn().Msg("RATE_LIMIT_ENABLED=false — rate limiting em memória desligado; o limite deve estar na borda")
+	} else {
+		r.Use(observability.RateLimitMiddleware(300)) // 300 req/min por IP
+	}
 
 	healthHandler := handlers.NewHealthHandler(db)
 	r.GET("/health", healthHandler.Health)
