@@ -28,8 +28,8 @@ var meshProxies = []string{
 	"35.191.0.0/16", "130.211.0.0/22", lbIP + "/32",
 }
 
-func viaMesh(client, forged string) string {
-	chain := client + ", " + lbIP + ", " + gfeIP
+func viaMesh(forged string) string {
+	chain := realClient + ", " + lbIP + ", " + gfeIP
 	if forged != "" {
 		chain = forged + ", " + chain
 	}
@@ -83,15 +83,15 @@ func TestSetupRouter_ClientIP(t *testing.T) {
 		header     http.Header
 		want       string
 	}{
-		{"cadeia real sem cabeçalho do cliente", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh(realClient, "")}}, realClient},
-		{"cadeia real com IP forjado", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh(realClient, "192.0.2.99")}}, realClient},
-		{"cadeia real com forjado privado", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh(realClient, "10.1.2.3")}}, realClient},
-		{"cadeia real com lixo à esquerda", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh(realClient, "nao-e-ip")}}, realClient},
-		{"forjado em linha separada", mesh, sidecarIP, http.Header{"X-Forwarded-For": {"192.0.2.99", viaMesh(realClient, "")}}, realClient},
+		{"cadeia real sem cabeçalho do cliente", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh("")}}, realClient},
+		{"cadeia real com IP forjado", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh("192.0.2.99")}}, realClient},
+		{"cadeia real com forjado privado", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh("10.1.2.3")}}, realClient},
+		{"cadeia real com lixo à esquerda", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh("nao-e-ip")}}, realClient},
+		{"forjado em linha separada", mesh, sidecarIP, http.Header{"X-Forwarded-For": {"192.0.2.99", viaMesh("")}}, realClient},
 		{"conexão direta da internet", mesh, "192.0.2.7:5000", http.Header{"X-Forwarded-For": {"192.0.2.99"}}, "192.0.2.7"},
 		{"X-Real-IP não é lido", mesh, sidecarIP, http.Header{"X-Real-Ip": {"192.0.2.99"}}, "127.0.0.6"},
 		{"chamada interna sem cabeçalho", mesh, sidecarIP, nil, "127.0.0.6"},
-		{"sem proxies confiáveis", none, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh(realClient, "192.0.2.99")}}, "127.0.0.6"},
+		{"sem proxies confiáveis", none, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh("192.0.2.99")}}, "127.0.0.6"},
 	}
 	for _, tc := range cases {
 		if got := loggedIP(t, tc.f, tc.remoteAddr, tc.header); got != tc.want {
