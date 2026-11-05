@@ -115,6 +115,26 @@ GET  /metrics                    métricas Prometheus
 | app-go-api | Cursos, Vagas, MEI | Full sync paginado (delta via `updated_since` ainda não ativado) |
 | app-rmi | Perfil do cidadão | Demand-driven: busca síncrona no primeiro acesso; refresh em background quando stale |
 
+### Testes de contrato (app-go-api e app-rmi)
+
+Os clientes `internal/clients/appgoapi_client.go` e `rmi_client.go` são testados contra o `docs/openapi-v3.json` publicado de cada serviço (`TestContrato_*` em `internal/clients/contract_test.go`, validação com [kin-openapi](https://github.com/getkin/kin-openapi)):
+
+- `internal/clients/testdata/contract/` tem uma resposta por endpoint consumido (`GET /api/public/courses`, `/api/public/empregabilidade/vagas`, `/api/public/oportunidades-mei` e, no RMI, `GET /v1/citizen/{cpf}`): respostas reais anonimizadas de staging; a do RMI é sintética, no formato real, sem dado pessoal.
+- O teste valida cada fixture pelo schema da resposta e do item, exige que todo campo usado pelo sync esteja declarado no schema e que o cliente o decodifique sem perda; um campo renomeado ou removido, ou um tipo trocado, faz o teste falhar. `null` conta como campo ausente (o swag não marca campos como nullable), e `categorias[].nome` dos cursos é usado mas não está declarado no OpenAPI do go-api.
+- `internal/clients/testdata/openapi/` guarda o snapshot dos OpenAPI usado no `just test` e no CI de PR (go-api `98dedf7`, RMI `56c9436`). Para atualizar o snapshot, baixe os arquivos de novo e rode os testes.
+
+O workflow **Contrato dos clientes** (`.github/workflows/contract.yml`) roda toda segunda às 08:00 (Brasília) e por `workflow_dispatch`: baixa o `openapi-v3.json` atual da `main` do app-go-api e do app-rmi e roda os testes de contrato contra eles. Se falhar, abre (ou comenta, se já houver uma aberta) a issue "Contrato quebrado: …" no repositório. Para reproduzir localmente:
+
+```bash
+mkdir -p /tmp/openapi
+for s in app-go-api app-rmi; do
+  curl -fsSL -o /tmp/openapi/$s.json https://raw.githubusercontent.com/prefeitura-rio/$s/main/docs/openapi-v3.json
+done
+CONTRACT_OPENAPI_APP_GO_API=/tmp/openapi/app-go-api.json \
+CONTRACT_OPENAPI_APP_RMI=/tmp/openapi/app-rmi.json \
+  go test ./internal/clients/ -run '^TestContrato_' -count=1 -v
+```
+
 ## Autenticação
 
 O JWT do cidadão chega no header `X-Auth-Request-Token`. O header pode vir direto do cliente, então o serviço não confia na borda: verifica o token antes de criar qualquer identidade ou papel (`internal/api/middleware`).

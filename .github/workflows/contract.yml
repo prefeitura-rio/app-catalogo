@@ -1,0 +1,64 @@
+name: Contrato dos clientes
+
+# Valida os clientes app-go-api e app-rmi da catalogo contra o
+# docs/openapi-v3.json atual de cada serviço (testes TestContrato_* em
+# internal/clients). Falhou: o serviço mudou o contrato de um endpoint que a
+# catalogo consome, e o job abre (ou comenta) uma issue no repositório.
+on:
+  schedule:
+    - cron: '0 11 * * 1' # segundas, 08:00 em Brasília
+  workflow_dispatch: {}
+
+concurrency:
+  group: contract-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: Contrato app-go-api e app-rmi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Baixa os OpenAPI publicados
+        run: |
+          mkdir -p "$RUNNER_TEMP/openapi"
+          for service in app-go-api app-rmi; do
+            curl -fsSL --retry 3 --retry-delay 5 \
+              -o "$RUNNER_TEMP/openapi/$service.json" \
+              "https://raw.githubusercontent.com/prefeitura-rio/$service/main/docs/openapi-v3.json"
+          done
+
+      - name: Valida os clientes contra o contrato atual
+        env:
+          CONTRACT_OPENAPI_APP_GO_API: ${{ runner.temp }}/openapi/app-go-api.json
+          CONTRACT_OPENAPI_APP_RMI: ${{ runner.temp }}/openapi/app-rmi.json
+        run: go test ./internal/clients/ -run '^TestContrato_' -count=1 -v
+
+      - name: Avisa o time
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Contrato quebrado: OpenAPI do app-go-api ou do app-rmi incompatível com a catalogo"
+          body="O job de contrato falhou em ${RUN_URL}.
+
+          O docs/openapi-v3.json publicado do app-go-api ou do app-rmi deixou de cobrir um campo usado pelo sync da catalogo (ou não pôde ser baixado). Veja o log do passo \"Valida os clientes contra o contrato atual\" e ajuste o cliente em internal/clients ou combine a correção com o time do serviço. Como reproduzir: seção \"Testes de contrato\" do README."
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"${title}\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

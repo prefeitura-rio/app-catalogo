@@ -34,22 +34,96 @@ func (c *RMIClient) CircuitState() CircuitState {
 	return c.resilience.breaker.State()
 }
 
-// CitizenData representa os dados do cidadão retornados pelo app-rmi.
+// CitizenData são os dados do cidadão que a catalogo usa, extraídos da resposta
+// do app-rmi (rmiCitizenResponse). Não é o formato de fio: veja toCitizenData.
 type CitizenData struct {
-	CPF           string `json:"cpf"`
-	DisplayName   string `json:"display_name"`
-	BirthDate     string `json:"birth_date"`
-	Escolaridade  string `json:"escolaridade"`
-	RendaFamiliar string `json:"renda_familiar"`
-	Deficiencia   string `json:"deficiencia"`
-	Etnia         string `json:"etnia"`
-	Genero        string `json:"genero"`
-	Address       struct {
-		Bairro string `json:"neighborhood"`
-		Cidade string `json:"city"`
-		Estado string `json:"state"`
-		CEP    string `json:"cep"`
-	} `json:"address"`
+	CPF           string
+	DisplayName   string
+	BirthDate     string // YYYY-MM-DD
+	Escolaridade  string
+	RendaFamiliar string
+	Deficiencia   string
+	Etnia         string
+	Genero        string
+	Address       CitizenAddress
+}
+
+// CitizenAddress é o endereço principal do cidadão.
+type CitizenAddress struct {
+	Bairro string
+	Cidade string
+	Estado string
+	CEP    string
+}
+
+// rmiCitizenResponse espelha o contrato publicado de GET /v1/citizen/{cpf}
+// (models.Citizen no docs/openapi-v3.json do app-rmi), só com os campos usados.
+// Campos ausentes ou null viram string vazia.
+type rmiCitizenResponse struct {
+	CPF           string  `json:"cpf"`
+	NomeExibicao  *string `json:"nome_exibicao"`
+	Escolaridade  *string `json:"escolaridade"`
+	RendaFamiliar *string `json:"renda_familiar"`
+	Deficiencia   *string `json:"deficiencia"`
+	Raca          *string `json:"raca"` // etnia autodeclarada (PUT /citizen/{cpf}/ethnicity)
+	Genero        *string `json:"genero"`
+	Nascimento    *struct {
+		Data *string `json:"data"`
+	} `json:"nascimento"`
+	Endereco *struct {
+		Principal *struct {
+			Bairro    *string `json:"bairro"`
+			Municipio *string `json:"municipio"`
+			Estado    *string `json:"estado"`
+			CEP       *string `json:"cep"`
+		} `json:"principal"`
+	} `json:"endereco"`
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+// birthDateFromRMI reduz nascimento.data (timestamp RFC 3339) a YYYY-MM-DD.
+// Valor que não começa por uma data válida vira string vazia.
+func birthDateFromRMI(value *string) string {
+	raw := stringValue(value)
+	if len(raw) < len(time.DateOnly) {
+		return ""
+	}
+	date := raw[:len(time.DateOnly)]
+	if _, err := time.Parse(time.DateOnly, date); err != nil {
+		return ""
+	}
+	return date
+}
+
+func (r *rmiCitizenResponse) toCitizenData() *CitizenData {
+	citizen := &CitizenData{
+		CPF:           r.CPF,
+		DisplayName:   stringValue(r.NomeExibicao),
+		Escolaridade:  stringValue(r.Escolaridade),
+		RendaFamiliar: stringValue(r.RendaFamiliar),
+		Deficiencia:   stringValue(r.Deficiencia),
+		Etnia:         stringValue(r.Raca),
+		Genero:        stringValue(r.Genero),
+	}
+	if r.Nascimento != nil {
+		citizen.BirthDate = birthDateFromRMI(r.Nascimento.Data)
+	}
+	if r.Endereco != nil && r.Endereco.Principal != nil {
+		principal := r.Endereco.Principal
+		citizen.Address = CitizenAddress{
+			Bairro: stringValue(principal.Bairro),
+			Cidade: stringValue(principal.Municipio),
+			Estado: stringValue(principal.Estado),
+			CEP:    stringValue(principal.CEP),
+		}
+	}
+	return citizen
 }
 
 func isCanonicalCPF(cpf string) bool {
@@ -137,10 +211,10 @@ func (c *RMIClient) fetchCitizen(ctx context.Context, requestURL, authHeader str
 		return nil, statusErr
 	}
 
-	var citizen CitizenData
+	var citizen rmiCitizenResponse
 	if err := json.Unmarshal(body, &citizen); err != nil {
 		return nil, fmt.Errorf("rmi: falha ao decodificar cidadão: %w", err)
 	}
 
-	return &citizen, nil
+	return citizen.toCitizenData(), nil
 }

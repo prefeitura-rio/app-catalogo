@@ -1,0 +1,69 @@
+{
+  "_id": "00000000191",
+  "cpf": "00000000191",
+  "nome": "Pessoa Ficticia de Teste",
+  "nome_social": null,
+  "nome_exibicao": "Pessoa Teste",
+  "sexo": "feminino",
+  "nascimento": {
+    "data": "1995-03-15T00:00:00Z",
+    "municipio_id": "3304557",
+    "municipio": "Rio de Janeiro",
+    "uf": "RJ",
+    "pais_id": "105",
+    "pais": "Brasil"
+  },
+  "mae": {
+    "nome": "Mae Ficticia de Teste",
+    "cpf": null
+  },
+  "menor_idade": false,
+  "raca": "parda",
+  "genero": "mulher_cis",
+  "renda_familiar": "1_a_2_salarios",
+  "escolaridade": "medio_completo",
+  "deficiencia": "nenhuma",
+  "obito": {
+    "indicador": false,
+    "ano": null
+  },
+  "endereco": {
+    "indicador": true,
+    "principal": {
+      "origem": "self-declared",
+      "sistema": "rmi",
+      "cep": "20000000",
+      "estado": "RJ",
+      "municipio": "Rio de Janeiro",
+      "tipo_logradouro": "Rua",
+      "logradouro": "Rua Exemplo",
+      "numero": "100",
+      "complemento": "Apto 101",
+      "bairro": "Centro",
+      "updated_at": "2026-10-01T12:00:00Z"
+    },
+    "alternativo": []
+  },
+  "email": {
+    "indicador": true,
+    "principal": {
+      "origem": "self-declared",
+      "sistema": "rmi",
+      "valor": "pessoa.teste@example.com",
+      "updated_at": "2026-10-01T12:00:00Z"
+    },
+    "alternativo": []
+  },
+  "telefone": {
+    "indicador": true,
+    "principal": {
+      "origem": "self-declared",
+      "sistema": "rmi",
+      "ddi": "55",
+      "ddd": "21",
+      "valor": "900000000",
+      "updated_at": "2026-10-01T12:00:00Z"
+    },
+    "alternativo": []
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "data": [
+    {
+      "id": "45a1378e-9452-44ac-abbe-337e42eae217",
+      "titulo": "Agente de Campo",
+      "descricao": "Aplicação de questionários em campo nas regiões da cidade.",
+      "id_contratante": "00000000000191",
+      "id_regime_contratacao": "50296642-35ef-4653-82e0-bffefceaa6a2",
+      "id_modelo_trabalho": "2205ec86-1256-46a3-a6f6-f3d3d4d84680",
+      "valor_vaga": 3000,
+      "quantidade_estimada_contratacoes": 20,
+      "bairro": "Laranjeiras",
+      "data_limite": "2026-11-30T23:59:59-03:00",
+      "requisitos": "Ensino médio completo",
+      "diferenciais": "Experiência com pesquisa de campo",
+      "responsabilidades": "Aplicar questionários",
+      "beneficios": "",
+      "id_orgao_parceiro": "1135",
+      "status": "publicado_ativo",
+      "slug": "agente-de-campo-45a1378e9452",
+      "deleted_at": null,
+      "created_at": "2026-10-21T16:08:36.432162Z",
+      "updated_at": "2026-11-04T18:00:06.130012Z",
+      "contratante": {
+        "cnpj": "00000000000191",
+        "razao_social": "EMPRESA EXEMPLO LTDA",
+        "nome_fantasia": "Empresa Exemplo",
+        "descricao": "Empresa fictícia usada em fixture de contrato.",
+        "url_logo": "https://exemplo.rio/logos/empresa-exemplo.jpg",
+        "website": "https://exemplo.rio/",
+        "setor": "Tecnologia",
+        "porte": "Grande",
+        "created_at": "2026-02-04T20:41:51.020741Z",
+        "updated_at": "2026-10-13T15:04:44.811345Z"
+      },
+      "regime_contratacao": {
+        "id": "50296642-35ef-4653-82e0-bffefceaa6a2",
+        "descricao": "Temporário",
+        "created_at": "2026-01-28T16:15:11.535636Z",
+        "updated_at": "2026-01-28T16:15:11.535636Z"
+      },
+      "modelo_trabalho": {
+        "id": "2205ec86-1256-46a3-a6f6-f3d3d4d84680",
+        "descricao": "Presencial",
+        "created_at": "2026-01-28T16:15:11.535636Z",
+        "updated_at": "2026-01-28T16:15:11.535636Z"
+      },
+      "acessibilidade_pcd": "preferencial_pcd",
+      "orgao_parceiro": {
+        "id": 1135,
+        "orgao_id": "1135",
+        "cd_ua": "1135",
+        "name": "Secretaria Municipal de Exemplo",
+        "sigla": "SMEX",
+        "sync_status": "synced",
+        "created_at": "2026-01-28T16:15:11.535636Z",
+        "updated_at": "2026-10-01T12:00:00Z",
+        "last_synced_at": "2026-10-01T12:00:00Z"
+      }
+    }
+  ],
+  "meta": {
+    "page": 1,
+    "page_size": 100,
+    "total": 1
+  }
+}
