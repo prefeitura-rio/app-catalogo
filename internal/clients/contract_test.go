@@ -18,7 +18,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3"
 )
 
-// Testes de contrato dos clientes app-go-api e app-rmi (DEV-331).
+// Testes de contrato das integrações com o app-go-api e o app-rmi (DEV-331).
 //
 // Cada fixture em testdata/contract é uma resposta real anonimizada (ou, no RMI,
 // sintética no formato real) de um endpoint consumido pela catalogo. O teste
