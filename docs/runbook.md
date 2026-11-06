@@ -127,7 +127,7 @@ Não há dashboard do app-catalogo versionado, nem no SigNoz (os dashboards do `
 
 ## Sinais e alertas: o que significam e o primeiro passo
 
-Não há regras de alerta do app-catalogo configuradas (nem no repositório nem no `prefeitura-rio/infra`). Os avisos que chegam hoje são as notificações de deploy no Discord (staging e release) e a análise automática do canary de produção. A tabela cobre esses avisos e os sinais que valem um alerta quando ele for criado, com o primeiro passo de cada um.
+Não há regras de alerta do app-catalogo configuradas (nem no repositório nem no `prefeitura-rio/infra`; pedidas na OPS-149, sobre as métricas que o Prometheus do `istio-system` já coleta da API e do worker). Os avisos que chegam hoje são as notificações de deploy no Discord (staging e release) e a análise automática do canary de produção. A tabela cobre esses avisos e os sinais que valem um alerta quando ele for criado, com o primeiro passo de cada um.
 
 | Sinal | O que significa | Primeiro passo |
 |-------|-----------------|----------------|
