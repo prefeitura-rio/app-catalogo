@@ -645,8 +645,10 @@ paths:
       summary: Dispara sincronização manual
       description: |
         Dispara uma sincronização ad-hoc em background e retorna imediatamente.
-        Se `source` for omitido, sincroniza todas as fontes registradas no worker.
-        Fontes inválidas ou não registradas são ignoradas silenciosamente (sem erro na resposta).
+        Se `source` for omitido, sincroniza todas as fontes registradas na API.
+        A API registra só `salesforce` e `app-go-api`, e cada uma só quando configurada; o Typesense
+        sincroniza apenas no worker. Fonte desconhecida ou não registrada na API responde 400 com
+        `available_sources` (as fontes que a API dispara) e nada é disparado.
         Com `mode=full`, as fontes que têm sincronização completa (Carta de Serviços) reprocessam
         todos os itens, ignorando o cursor incremental; as demais executam a sync normal.
       security:
@@ -657,8 +659,8 @@ paths:
           required: false
           schema:
             type: string
-            enum: ["salesforce", "app-go-api", "typesense"]
-          description: Nome da fonte. Omitir para sincronizar todas.
+            enum: ["salesforce", "app-go-api"]
+          description: Nome da fonte registrada na API. Omitir para sincronizar todas.
         - name: mode
           in: query
           required: false
@@ -705,7 +707,31 @@ paths:
                     source: "salesforce"
                     mode: "full"
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: "`mode` inválido, ou `source` desconhecida ou não registrada na API"
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/X-Request-ID"
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: string
+                  available_sources:
+                    type: array
+                    items:
+                      type: string
+                    description: Fontes que a API dispara (só quando o erro é de `source`).
+              examples:
+                fonte_indisponivel:
+                  value:
+                    error: 'source "typesense" não está disponível na API; fontes disponíveis: [salesforce, app-go-api]'
+                    available_sources: ["salesforce", "app-go-api"]
+                modo_invalido:
+                  value:
+                    error: "mode inválido: use delta ou full"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":

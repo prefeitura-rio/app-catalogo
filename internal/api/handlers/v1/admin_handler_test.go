@@ -210,3 +210,58 @@ func TestTriggerSync_InvalidModeIs400AndTriggersNothing(t *testing.T) {
 		})
 	}
 }
+
+func TestTriggerSync_UnregisteredSourceIs400AndTriggersNothing(t *testing.T) {
+	// typesense só existe no worker; a API não a registra e não pode dispará-la.
+	for _, source := range []string{"typesense", "inexistente", "SALESFORCE"} {
+		t.Run(source, func(t *testing.T) {
+			src := &cartaStubSource{}
+			r := triggerRouter(src)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/admin/sync/trigger?source="+source, nil))
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("esperado 400, obtido %d (%s)", w.Code, w.Body.String())
+			}
+			var body struct {
+				Error            string   `json:"error"`
+				AvailableSources []string `json:"available_sources"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("corpo não é JSON: %v", err)
+			}
+			if !strings.Contains(body.Error, source) || !strings.Contains(body.Error, "salesforce") {
+				t.Fatalf("erro deveria citar a fonte pedida e as disponíveis: %q", body.Error)
+			}
+			if len(body.AvailableSources) != 1 || body.AvailableSources[0] != "salesforce" {
+				t.Fatalf("available_sources inesperado: %v", body.AvailableSources)
+			}
+			time.Sleep(50 * time.Millisecond)
+			if src.fullCalls.Load() != 0 || src.syncCalls.Load() != 0 {
+				t.Fatalf("fonte não registrada não deveria disparar sync: full=%d sync=%d", src.fullCalls.Load(), src.syncCalls.Load())
+			}
+		})
+	}
+}
+
+func TestTriggerSync_NoSourcesRegisteredListsNone(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := NewAdminHandler(nil, datasource.NewManager())
+	r := gin.New()
+	r.POST("/api/v1/admin/sync/trigger", h.TriggerSync)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/v1/admin/sync/trigger?source=salesforce", nil))
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("esperado 400, obtido %d (%s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		AvailableSources []string `json:"available_sources"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("corpo não é JSON: %v", err)
+	}
+	if body.AvailableSources == nil || len(body.AvailableSources) != 0 {
+		t.Fatalf("available_sources deveria ser lista vazia, obtido %s", w.Body.String())
+	}
+}

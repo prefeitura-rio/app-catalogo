@@ -128,6 +128,18 @@ func (m *Manager) Register(source DataSource) {
 		Msg("datasource: fonte registrada")
 }
 
+// SourceNames devolve o nome de cada fonte registrada, na ordem de registro.
+// Sem fontes, devolve uma lista vazia (nunca nil).
+func (m *Manager) SourceNames() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	names := make([]string, 0, len(m.sources))
+	for _, src := range m.sources {
+		names = append(names, src.Name())
+	}
+	return names
+}
+
 // Start inicia todas as fontes registradas. Bloqueia até o context ser cancelado.
 func (m *Manager) Start(ctx context.Context) {
 	m.mu.RLock()
