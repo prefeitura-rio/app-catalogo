@@ -185,8 +185,12 @@ func TestSetupRouter_Authorization(t *testing.T) {
 	}
 
 	// Admin passa da autorização e chega ao handler.
-	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger?source=inexistente", admin); w.Code != http.StatusAccepted {
+	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger", admin); w.Code != http.StatusAccepted {
 		t.Errorf("trigger admin: esperado 202, obtido %d", w.Code)
+	}
+	// Fonte que a API não registrou é 400 do handler, não 202 sem disparar nada.
+	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger?source=inexistente", admin); w.Code != http.StatusBadRequest {
+		t.Errorf("trigger admin com fonte desconhecida: esperado 400, obtido %d", w.Code)
 	}
 	// O modo full continua só para admin: sem token 401, usuário comum 403.
 	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger?mode=full", ""); w.Code != http.StatusUnauthorized {
@@ -195,7 +199,7 @@ func TestSetupRouter_Authorization(t *testing.T) {
 	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger?mode=full", user); w.Code != http.StatusForbidden {
 		t.Errorf("trigger full usuário comum: esperado 403, obtido %d", w.Code)
 	}
-	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger?source=inexistente&mode=full", admin); w.Code != http.StatusAccepted {
+	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger?mode=full", admin); w.Code != http.StatusAccepted {
 		t.Errorf("trigger full admin: esperado 202, obtido %d", w.Code)
 	}
 	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger?mode=tudo", admin); w.Code != http.StatusBadRequest {

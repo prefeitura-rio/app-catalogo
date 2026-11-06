@@ -415,3 +415,16 @@ func TestWorkerMetricsServer_ExposesScheduledSyncMetrics(t *testing.T) {
 		}
 	}
 }
+
+func TestManager_SourceNames(t *testing.T) {
+	m := NewManager()
+	if got := m.SourceNames(); got == nil || len(got) != 0 {
+		t.Fatalf("sem fontes: esperado lista vazia, obtido %v", got)
+	}
+	m.Register(&stubSource{name: "salesforce"})
+	m.Register(&stubSource{name: "app-go-api"})
+	got := m.SourceNames()
+	if len(got) != 2 || got[0] != "salesforce" || got[1] != "app-go-api" {
+		t.Fatalf("esperado [salesforce app-go-api] na ordem de registro, obtido %v", got)
+	}
+}

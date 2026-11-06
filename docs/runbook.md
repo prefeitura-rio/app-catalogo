@@ -193,7 +193,7 @@ O GitHub só reexecuta runs de até 30 dias. Alternativa equivalente, e a única
 
 | Parâmetro | Valores | Efeito |
 |-----------|---------|--------|
-| `source` | `salesforce`, `app-go-api`; vazio = todas | fonte a sincronizar |
+| `source` | `salesforce`, `app-go-api`; vazio = todas | fonte a sincronizar; fonte que a API não registrou responde 400 com `available_sources` |
 | `mode` | `delta` (padrão), `full` | `full` reprocessa a Carta inteira no SalesForce (lista, hierarquia, órgãos SICI e detalhe de todos os serviços); no app-go-api, que já é sync completo, é igual ao `delta`; outro valor responde 400 |
 
 ```bash
@@ -207,7 +207,7 @@ curl -sS -H "X-Auth-Request-Token: Bearer $TOKEN" \
 Pontos de atenção:
 
 - A sync manual roda **no pod da API** que recebeu a chamada, com as mesmas novas tentativas da agendada. O resultado aparece nos logs desse pod (`datasource: sync manual falhou`), em `catalogo_sync_runs_total{trigger="manual"}` do `/metrics` da API e, para o SalesForce, em `/admin/sync/status`.
-- A API só conhece as fontes `salesforce` e `app-go-api`, e só quando configuradas (`SALESFORCE_INSTANCE_URL` com `SALESFORCE_SYNC_ENABLED`; `APP_GO_API_BASE_URL` com `APP_GO_API_SYNC_ENABLED`). Para `source=typesense` ou uma fonte desconhecida a resposta também é 202, mas nada roda.
+- A API só conhece as fontes `salesforce` e `app-go-api`, e só quando configuradas (`SALESFORCE_INSTANCE_URL` com `SALESFORCE_SYNC_ENABLED`; `APP_GO_API_BASE_URL` com `APP_GO_API_SYNC_ENABLED`). Para `source=typesense`, uma fonte desconhecida ou uma não configurada a resposta é 400 e nada roda; `available_sources` lista as fontes que aquele pod dispara.
 - O **Typesense** sincroniza só no worker: o worker faz uma sync ao subir, então reiniciá-lo (`kubectl -n catalogo rollout restart deploy/catalogo-worker`, ação de quem tem escrita no cluster) força a sync. Ela é delta desde o último evento `completed` do `typesense` em `sync_events`; vira full quando o evento mais recente do `typesense` não é `completed` (ou não existe).
 
 ### Fila do webhook SalesForce

@@ -1009,14 +1009,14 @@
             "BearerAuth": []
           }
         ],
-        "description": "Dispara sync ad-hoc em background. Retorna imediatamente. Requer role admin ou go:admin.",
+        "description": "Dispara sync ad-hoc em background. Retorna imediatamente. Requer role admin ou go:admin. Fonte não registrada na API (typesense, que só sincroniza no worker, ou desconhecida) responde 400 com available_sources.",
         "tags": [
           "admin"
         ],
         "summary": "Dispara sincronização manual",
         "parameters": [
           {
-            "description": "Fonte: salesforce, app-go-api, typesense. Vazio = todas.",
+            "description": "Fonte registrada na API: salesforce, app-go-api (cada uma só quando configurada). Vazio = todas.",
             "name": "source",
             "in": "query",
             "schema": {
@@ -1051,14 +1051,12 @@
             }
           },
           "400": {
-            "description": "Bad Request",
+            "description": "mode inválido, ou source não registrada na API (error e available_sources)",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "additionalProperties": {
-                    "type": "string"
-                  }
+                  "additionalProperties": true
                 }
               }
             }
