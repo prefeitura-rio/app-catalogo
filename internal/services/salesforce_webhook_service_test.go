@@ -9,7 +9,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
+	"github.com/prefeitura-rio/app-catalogo/internal/observability"
 )
 
 // memWebhookStore reproduz em memória as regras da fila do repositório
@@ -115,6 +119,31 @@ func (m *memWebhookStore) Fail(_ context.Context, ev *models.SalesForceWebhookEv
 
 func (m *memWebhookStore) DeleteCompletedBefore(context.Context, time.Time) (int64, error) {
 	return 0, nil
+}
+
+func (m *memWebhookStore) QueueStats(context.Context) (models.WebhookQueueStats, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var (
+		stats  models.WebhookQueueStats
+		oldest time.Time
+	)
+	for _, e := range m.events {
+		if e.ev.Status != models.WebhookEventPending {
+			continue
+		}
+		stats.Pending++
+		if e.lastError != "" {
+			stats.Failing++
+		}
+		if oldest.IsZero() || e.ev.ReceivedAt.Before(oldest) {
+			oldest = e.ev.ReceivedAt
+		}
+	}
+	if !oldest.IsZero() {
+		stats.OldestPendingAge = m.now.Sub(oldest)
+	}
+	return stats, nil
 }
 
 // scriptedSyncer falha nas primeiras failures chamadas e conta as chamadas por slug.
@@ -393,5 +422,85 @@ func TestWebhookEventKey_IsStableSHA256(t *testing.T) {
 	}
 	if WebhookEventKey([]byte("abd")) == a {
 		t.Fatal("bodies diferentes devem ter chaves diferentes")
+	}
+}
+
+func gaugeValue(g prometheus.Gauge) float64 {
+	var metric dto.Metric
+	if err := g.Write(&metric); err != nil {
+		panic(err)
+	}
+	return metric.GetGauge().GetValue()
+}
+
+func queueGauges() (pending, failing, oldestAge float64) {
+	return gaugeValue(observability.SalesForceWebhookPendingEvents),
+		gaugeValue(observability.SalesForceWebhookFailingEvents),
+		gaugeValue(observability.SalesForceWebhookOldestPendingAge)
+}
+
+func TestWebhookService_QueueMetricsReflectBacklogAndDrain(t *testing.T) {
+	ctx := context.Background()
+	store := newMemWebhookStore()
+	syncer := &scriptedSyncer{failures: 1}
+	svc := NewSalesForceWebhookService(store, syncer, testWebhookConfig)
+
+	failing, _, err := svc.Enqueue(ctx, []byte(`{"id":"a"}`), "servico-a", "updated", "2026-10-28T12:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Process(ctx, failing); err == nil {
+		t.Fatal("esperava falha da 1ª tentativa")
+	}
+	store.advance(10 * time.Minute)
+	if _, _, err := svc.Enqueue(ctx, []byte(`{"id":"b"}`), "servico-b", "updated", "2026-10-28T12:10:00Z"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.RefreshQueueMetrics(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p, f, age := queueGauges(); p != 2 || f != 1 || age != 600 {
+		t.Fatalf("fila acumulada: esperava pending=2 failing=1 age=600, got pending=%v failing=%v age=%v", p, f, age)
+	}
+
+	// O reprocessador drena a fila: os gauges voltam a zero.
+	store.advance(5 * time.Minute)
+	if n, err := svc.ProcessDue(ctx); err != nil || n != 2 {
+		t.Fatalf("esperava reprocessar 2 eventos, got n=%d err=%v", n, err)
+	}
+	if err := svc.RefreshQueueMetrics(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p, f, age := queueGauges(); p != 0 || f != 0 || age != 0 {
+		t.Fatalf("fila vazia: esperava gauges em 0, got pending=%v failing=%v age=%v", p, f, age)
+	}
+}
+
+// statsErrStore é a fila em memória cuja leitura de estado falha.
+type statsErrStore struct{ *memWebhookStore }
+
+func (statsErrStore) QueueStats(context.Context) (models.WebhookQueueStats, error) {
+	return models.WebhookQueueStats{}, errors.New("banco indisponível")
+}
+
+func TestWebhookService_QueueMetricsKeepLastReadingWhenStatsFail(t *testing.T) {
+	ctx := context.Background()
+	mem := newMemWebhookStore()
+	if _, _, err := NewSalesForceWebhookService(mem, &scriptedSyncer{}, testWebhookConfig).
+		Enqueue(ctx, []byte(`{"id":"c"}`), "servico-c", "updated", "2026-10-28T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	mem.advance(time.Minute)
+	if err := NewSalesForceWebhookService(mem, &scriptedSyncer{}, testWebhookConfig).RefreshQueueMetrics(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewSalesForceWebhookService(statsErrStore{mem}, &scriptedSyncer{}, testWebhookConfig)
+	if err := svc.RefreshQueueMetrics(ctx); err == nil {
+		t.Fatal("esperava o erro da leitura do estado da fila")
+	}
+	if p, f, age := queueGauges(); p != 1 || f != 0 || age != 60 {
+		t.Fatalf("falha de leitura não deveria zerar os gauges: got pending=%v failing=%v age=%v", p, f, age)
 	}
 }

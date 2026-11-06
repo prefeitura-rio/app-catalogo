@@ -264,3 +264,67 @@ func TestWebhookRepo_CompleteCoversEarlierPendingOfSameSlugOnce(t *testing.T) {
 		t.Fatalf("esperava só o pendente de outro slug após a retenção, got %d", left)
 	}
 }
+
+func TestWebhookRepo_QueueStatsCountsPendingFailingAndOldestAge(t *testing.T) {
+	repo, pool, prefix := testWebhookRepo(t)
+	ctx := context.Background()
+
+	before, err := repo.QueueStats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fresh, _, err := repo.Enqueue(ctx, eventKey(prefix, "s1"), prefix+"-novo", "updated", 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failing, _, err := repo.Enqueue(ctx, eventKey(prefix, "s2"), prefix+"-falha", "updated", 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done, _, err := repo.Enqueue(ctx, eventKey(prefix, "s3"), prefix+"-ok", "updated", 2*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Fail(ctx, failing, "carta indisponível", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Complete(ctx, done); err != nil {
+		t.Fatal(err)
+	}
+	// O evento que falha foi recebido há 1h: é o pendente mais antigo.
+	if _, err := pool.Exec(ctx, `
+		UPDATE salesforce_webhook_events SET received_at = NOW() - INTERVAL '1 hour' WHERE id = $1
+	`, failing.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := repo.QueueStats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := after.Pending - before.Pending; got != 2 {
+		t.Errorf("pendentes: esperava +2 (novo e com falha; o concluído não conta), got %+d", got)
+	}
+	if got := after.Failing - before.Failing; got != 1 {
+		t.Errorf("com falha: esperava +1, got %+d", got)
+	}
+	if after.OldestPendingAge < 59*time.Minute {
+		t.Errorf("idade do pendente mais antigo: esperava >= 59min, got %v", after.OldestPendingAge)
+	}
+
+	// Concluídos, os dois saem da contagem.
+	if _, err := repo.Complete(ctx, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.Complete(ctx, failing); err != nil {
+		t.Fatal(err)
+	}
+	final, err := repo.QueueStats(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Pending != before.Pending || final.Failing != before.Failing {
+		t.Errorf("após concluir: esperava voltar a %+v, got %+v", before, final)
+	}
+}
