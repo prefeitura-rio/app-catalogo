@@ -38,10 +38,11 @@ k8s/
 
 | Fonte | Entidades | Estratégia |
 |-------|-----------|-----------|
-| Typesense | Carta de Serviços (**temporário**) | Delta sync por `last_update` 30min; full sync na 1ª execução |
-| SalesForce | Carta de Serviços (**futuro**) | Polling 15min + webhooks HMAC — em migração a partir do Typesense |
+| SalesForce | Carta de Serviços | Polling 15min + webhooks HMAC |
 | app-go-api | Cursos, Vagas, MEI | Polling HTTP 30min |
 | app-rmi | Perfil do cidadão | Demand-driven + background refresh |
+
+O Typesense (fonte temporária da Carta) foi desligado e removido; as linhas `source = 'typesense'` antigas ficam no banco, inativas e fora da busca.
 
 ## Autenticação
 

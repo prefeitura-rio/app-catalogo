@@ -212,7 +212,7 @@ func TestTriggerSync_InvalidModeIs400AndTriggersNothing(t *testing.T) {
 }
 
 func TestTriggerSync_UnregisteredSourceIs400AndTriggersNothing(t *testing.T) {
-	// typesense só existe no worker; a API não a registra e não pode dispará-la.
+	// typesense é fonte legada desligada; nem a API nem o worker a registram.
 	for _, source := range []string{"typesense", "inexistente", "SALESFORCE"} {
 		t.Run(source, func(t *testing.T) {
 			src := &cartaStubSource{}

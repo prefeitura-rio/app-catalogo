@@ -62,7 +62,7 @@ func (h *AdminHandler) SyncStatus(c *gin.Context) {
 
 // TriggerSync godoc
 // @Summary      Dispara sincronização manual
-// @Description  Dispara sync ad-hoc em background. Retorna imediatamente. Requer role admin ou go:admin. Fonte não registrada na API (typesense, que só sincroniza no worker, ou desconhecida) responde 400 com available_sources.
+// @Description  Dispara sync ad-hoc em background. Retorna imediatamente. Requer role admin ou go:admin. Fonte não registrada na API (typesense, fonte legada desligada, ou desconhecida) responde 400 com available_sources.
 // @Tags         admin
 // @Security     BearerAuth
 // @Param        source  query  string  false  "Fonte registrada na API: salesforce, app-go-api (cada uma só quando configurada). Vazio = todas."
