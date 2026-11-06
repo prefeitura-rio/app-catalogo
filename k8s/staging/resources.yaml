@@ -77,6 +77,12 @@ spec:
         sidecar.istio.io/proxyCPULimit: "500m"
         sidecar.istio.io/proxyMemory: "256Mi"
         sidecar.istio.io/proxyMemoryLimit: "512Mi"
+        # Scrape das métricas da API (busca, recomendação, webhook, RMI, syncs manuais)
+        # pelo Prometheus do istio-system (job kubernetes-pods); o Istio as serve mescladas
+        # no 15020. A porta 9092 não está em nenhum Service, então não sai pelo gateway.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9092"
+        prometheus.io/path: "/metrics"
     spec:
       automountServiceAccountToken: false
       securityContext:
@@ -90,6 +96,8 @@ spec:
           command: ["/docker-entrypoint.sh", "./api"]
           ports:
             - containerPort: 8080
+            - name: metrics
+              containerPort: 9092
           env:
             - name: CORS_ALLOWED_ORIGINS
               value: "https://staging.app.dados.rio,https://admin.staging.app.dados.rio,http://localhost:3000"

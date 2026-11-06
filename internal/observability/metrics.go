@@ -27,12 +27,6 @@ var (
 		Buckets:   []float64{.025, .05, .1, .25, .5, 1},
 	}, []string{"personalized"})
 
-	SyncItemsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "catalogo",
-		Name:      "sync_items_total",
-		Help:      "Total de itens processados por fonte de dados",
-	}, []string{"source", "status"})
-
 	SyncDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "catalogo",
 		Name:      "sync_duration_seconds",
@@ -64,12 +58,6 @@ var (
 		Help:      "Eventos do webhook SalesForce por resultado (enqueued|duplicate|processed|failed)",
 	}, []string{"result"})
 
-	CatalogItemsGauge = prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: "catalogo",
-		Name:      "items_total",
-		Help:      "Total de itens ativos no catálogo por tipo",
-	}, []string{"type", "source"})
-
 	HTTPClientCircuitState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "catalogo",
 		Name:      "http_client_circuit_state",
@@ -87,28 +75,20 @@ func init() {
 	prometheus.MustRegister(
 		SearchDuration,
 		RecommendationsDuration,
-		SyncItemsTotal,
 		SyncDuration,
 		SyncRunsTotal,
 		SyncRetriesTotal,
 		SyncLastSuccessTimestamp,
 		SalesForceWebhookEventsTotal,
-		CatalogItemsGauge,
 		HTTPClientCircuitState,
 		HTTPClientRetriesTotal,
 	)
 }
 
-// MetricsHandler expõe as métricas no formato Prometheus.
-func MetricsHandler() gin.HandlerFunc {
-	h := promhttp.Handler()
-	return func(c *gin.Context) {
-		h.ServeHTTP(c.Writer, c.Request)
-	}
-}
-
-// NewMetricsServer devolve um servidor HTTP que expõe só GET /metrics, para o
-// worker, que não sobe a API HTTP e é onde rodam as syncs agendadas.
+// NewMetricsServer devolve um servidor HTTP que expõe só GET /metrics, numa
+// porta própria: a do worker (syncs agendadas) e a da API (busca, recomendação,
+// webhook, circuit breakers HTTP e syncs manuais). Na API, ele fica fora da porta
+// pública do router, que o Service e o gateway levam para fora do cluster.
 func NewMetricsServer(addr string) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", promhttp.Handler())

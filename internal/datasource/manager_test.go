@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 
@@ -330,11 +329,8 @@ func TestMetricsEndpoint_ExposesSyncMetrics(t *testing.T) {
 		t.Fatalf("sync: %v", err)
 	}
 
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	r.GET("/metrics", observability.MetricsHandler())
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	observability.NewMetricsServer("").Handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("/metrics: status %d", w.Code)
 	}

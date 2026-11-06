@@ -60,7 +60,8 @@ GET  /api/v1/catalog/:id
 GET  /api/public/catalog/:id
 GET  /api/v1/admin/sync/status
 POST /api/webhooks/salesforce ← HMAC-SHA256 auth própria
-GET  /health | /ready | /metrics
+GET  /health | /ready
+GET  /metrics                 ← porta própria (API: METRICS_PORT 9092; worker: WORKER_METRICS_PORT 9091), fora do gateway
 ```
 
 ## Comandos
