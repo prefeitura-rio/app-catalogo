@@ -118,6 +118,9 @@ func main() {
 		cfg.Keycloak.ClientSecret,
 	)
 	rmiClient := clients.NewRMIClient(cfg.RMI.BaseURL, tokenManager)
+	if !rmiClient.Configured() {
+		log.Warn().Msg("RMI_BASE_URL vazio — perfil do cidadão não é buscado no app-rmi (recomendação sem personalização)")
+	}
 
 	cartaClient, err := clients.NewCartaServicosClient(cfg.SalesForce.InstanceURL)
 	if err != nil {

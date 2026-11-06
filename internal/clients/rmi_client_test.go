@@ -97,6 +97,61 @@ func TestRMIClient_4xxE404NaoRepetem(t *testing.T) {
 	}
 }
 
+// Sem RMI_BASE_URL o cliente não chama ninguém: nem o Keycloak, nem o RMI. O erro
+// não é transitório (não repete com backoff) e não conta para o circuit breaker.
+func TestRMIClient_SemURLBaseFalhaNaHoraSemRepetirNemAbrirCircuito(t *testing.T) {
+	t.Parallel()
+
+	for _, baseURL := range []string{"", "   "} {
+		var keycloakCalls atomic.Int32
+		keycloak := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			keycloakCalls.Add(1)
+			withKeycloakToken(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusTeapot)
+			}).ServeHTTP(w, r)
+		}))
+		t.Cleanup(keycloak.Close)
+
+		client := NewRMIClient(baseURL, NewKeycloakTokenManager(keycloak.URL, "test-realm", "client", "secret"))
+		client.resilience = newResilientCaller(uniqueClientName(t)+"-"+strings.TrimSpace(baseURL), fastResilience(1))
+		retriesBefore := retriesMetric(client.resilience.client)
+
+		for i := 0; i < 3; i++ {
+			citizen, err := client.GetCitizen(context.Background(), syntheticCPF)
+			if !errors.Is(err, ErrRMINotConfigured) {
+				t.Fatalf("base %q: esperava ErrRMINotConfigured, got %v", baseURL, err)
+			}
+			if citizen != nil {
+				t.Fatalf("base %q: esperava cidadão nil, got %+v", baseURL, citizen)
+			}
+			if strings.Contains(err.Error(), syntheticCPF) {
+				t.Fatalf("base %q: o erro não pode conter o CPF: %v", baseURL, err)
+			}
+		}
+		if keycloakCalls.Load() != 0 {
+			t.Fatalf("base %q: sem URL do RMI não deve pedir token, got %d chamadas", baseURL, keycloakCalls.Load())
+		}
+		if got := retriesMetric(client.resilience.client) - retriesBefore; got != 0 {
+			t.Fatalf("base %q: sem URL do RMI não deve repetir, retries aumentou %v", baseURL, got)
+		}
+		if client.CircuitState() != CircuitClosed {
+			t.Fatalf("base %q: sem URL do RMI o circuito não deve abrir, got %s", baseURL, client.CircuitState())
+		}
+		if client.Configured() {
+			t.Fatalf("base %q: Configured() deveria ser false", baseURL)
+		}
+	}
+}
+
+func TestRMIClient_ConfiguredComURLBase(t *testing.T) {
+	t.Parallel()
+
+	client := NewRMIClient("https://services.staging.app.dados.rio/rmi", nil)
+	if !client.Configured() {
+		t.Fatal("Configured() deveria ser true com URL base")
+	}
+}
+
 func TestRMIClient_CircuitoAbreERecusaSemChamarORMI(t *testing.T) {
 	t.Parallel()
 
