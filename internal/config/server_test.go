@@ -114,4 +114,3 @@ func TestLoadMetricsPort(t *testing.T) {
 		t.Fatal("METRICS_PORT igual a SERVER_PORT deve falhar o startup")
 	}
 }
-
