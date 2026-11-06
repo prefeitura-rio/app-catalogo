@@ -226,7 +226,7 @@ func main() {
 		}
 	}()
 
-	// Métricas da API (busca, recomendação, webhook, clientes HTTP, syncs
+	// Métricas da API (busca, recomendação, webhook, circuit breakers HTTP, syncs
 	// manuais) numa porta própria, fora do Service que o gateway expõe.
 	var metricsSrv *http.Server
 	if cfg.Server.MetricsPort > 0 {

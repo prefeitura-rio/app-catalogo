@@ -87,7 +87,7 @@ func init() {
 
 // NewMetricsServer devolve um servidor HTTP que expõe só GET /metrics, numa
 // porta própria: a do worker (syncs agendadas) e a da API (busca, recomendação,
-// webhook, clientes HTTP e syncs manuais). Na API, ele fica fora da porta
+// webhook, circuit breakers HTTP e syncs manuais). Na API, ele fica fora da porta
 // pública do router, que o Service e o gateway levam para fora do cluster.
 func NewMetricsServer(addr string) *http.Server {
 	mux := http.NewServeMux()
