@@ -41,18 +41,21 @@ O Adminer (UI do banco) em `http://localhost:8083`.
 | Variável | Descrição |
 |----------|-----------|
 | `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | Conexão PostgreSQL |
-| `REDIS_ADDR` | Endereço Redis (ex: `localhost:6380`) |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | Conexão Redis (ex: `localhost` / `6380`) |
 | `CPF_HASH_SALT` | Salt para SHA-256 do CPF — **obrigatório** |
-| `SALESFORCE_INSTANCE_URL` / `SALESFORCE_CLIENT_ID` / `SALESFORCE_CLIENT_SECRET` | Credenciais Carta de Serviços |
+| `SALESFORCE_INSTANCE_URL` / `SALESFORCE_SYNC_ENABLED` | URL base da API CloudHub da Carta de Serviços e flag de sync |
 | `SALESFORCE_WEBHOOK_SECRET` | Segredo HMAC-SHA256 para validar webhooks |
-| `APPGOAPI_BASE_URL` / `APPGOAPI_SYNC_ENABLED` | URL base e flag de sync do app-go-api |
-| `APP_RMI_URL` | URL base do app-rmi (perfil do cidadão) |
+| `APP_GO_API_BASE_URL` / `APP_GO_API_SYNC_ENABLED` | URL base e flag de sync do app-go-api |
+| `RMI_BASE_URL` | URL base do app-rmi (perfil do cidadão) |
 | `KEYCLOAK_URL` / `KEYCLOAK_REALM` / `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` | Auth para chamadas ao app-rmi e app-go-api |
 | `AUTH_JWT_ISSUER` / `AUTH_JWKS_URL` | Emissor e JWKS para verificar o JWT de `X-Auth-Request-Token` (padrão derivado de `KEYCLOAK_URL`/`KEYCLOAK_REALM`; ver [Autenticação](#autenticação)) |
 | `AUTH_JWT_AUTHORIZED_PARTIES` | Clients do Keycloak (claim `azp`) aceitos, separados por vírgula (padrão `superapp`; ver [Autenticação](#autenticação)) |
 | `TRUSTED_PROXIES` | IPs/CIDRs dos proxies cujo `X-Forwarded-For` define o IP do cliente no log de acesso, separados por vírgula. Padrão: loopback, redes privadas e proxies do LB do Google (`35.191.0.0/16`, `130.211.0.0/22`); os manifests acrescentam o IP do LB de cada ambiente. Lista vazia (`,`) = sempre o IP da conexão |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | Endpoint SigNoz/OTel (opcional) |
+| `TRACING_ENABLED` / `TRACING_ENDPOINT` | Liga o envio de traces e o endpoint OTLP gRPC do SigNoz/OTel (opcional) |
+| `METRICS_PORT` | Porta em que a API expõe `GET /metrics`, separada da porta pública (padrão `9092`; `0` desativa; igual a `SERVER_PORT` impede o startup) |
 | `WORKER_METRICS_PORT` | Porta em que o worker expõe `GET /metrics` com as métricas de sync (padrão `9091`; `0` desativa) |
+
+A lista completa, com padrões e o efeito de cada flag em produção, está no [runbook](docs/runbook.md#variáveis-críticas).
 
 ## Comandos
 
@@ -98,8 +101,9 @@ POST /api/v1/admin/sync/trigger       dispara sync ad-hoc; ?source= para fonte e
 POST /api/webhooks/salesforce    recebe atualizações da Carta de Serviços (HMAC-SHA256)
 GET  /health                     liveness probe
 GET  /ready                      readiness probe (pinga o banco)
-GET  /metrics                    métricas Prometheus
 ```
+
+As métricas Prometheus não ficam na porta pública: a API serve `GET /metrics` na porta `METRICS_PORT` (9092) e o worker na `WORKER_METRICS_PORT` (9091), sem Service que as leve ao gateway; o Prometheus do `istio-system` as coleta pelas anotações `prometheus.io/*` dos pods.
 
 > Rate limiting: aplicado na borda (Cloud Armor / Istio), não neste serviço. O IP do cliente no log de acesso continua resolvido via `TRUSTED_PROXIES`: o `X-Forwarded-For` só é lido quando a conexão vem de um proxy confiável, da direita para a esquerda, e o primeiro endereço que não é proxy é o cliente; o que o cliente escreve no cabeçalho (ou em `X-Real-IP`) não muda o valor.
 
@@ -111,6 +115,26 @@ GET  /metrics                    métricas Prometheus
 | SalesForce | Carta de Serviços (**futuro**) | Delta sync por `LastModifiedDate` + webhooks HMAC-SHA256; em migração a partir do Typesense |
 | app-go-api | Cursos, Vagas, MEI | Full sync paginado (delta via `updated_since` ainda não ativado) |
 | app-rmi | Perfil do cidadão | Demand-driven: busca síncrona no primeiro acesso; refresh em background quando stale |
+
+### Testes de contrato (app-go-api e app-rmi)
+
+Os clientes `internal/clients/appgoapi_client.go` e `rmi_client.go` são testados contra o `docs/openapi-v3.json` publicado de cada serviço (`TestContrato_*` em `internal/clients/contract_test.go`, validação com [kin-openapi](https://github.com/getkin/kin-openapi)):
+
+- `internal/clients/testdata/contract/` tem uma resposta por endpoint consumido (`GET /api/public/courses`, `/api/public/empregabilidade/vagas`, `/api/public/oportunidades-mei` e, no RMI, `GET /v1/citizen/{cpf}`): respostas reais anonimizadas de staging; a do RMI é sintética, no formato real, sem dado pessoal.
+- O teste valida cada fixture pelo schema da resposta e do item, exige que todo campo usado pelo sync esteja declarado no schema e que o cliente o decodifique sem perda; um campo renomeado ou removido, ou um tipo trocado, faz o teste falhar. `null` conta como campo ausente (o swag não marca campos como nullable), e `categorias[].nome` dos cursos é usado mas não está declarado no OpenAPI do go-api.
+- `internal/clients/testdata/openapi/` guarda o snapshot dos OpenAPI usado no `just test` e no CI de PR (go-api `98dedf7`, RMI `56c9436`). Para atualizar o snapshot, baixe os arquivos de novo e rode os testes.
+
+O workflow **Contrato dos clientes** (`.github/workflows/contract.yml`) roda toda segunda às 08:00 (Brasília) e por `workflow_dispatch`: baixa o `openapi-v3.json` atual da `main` do app-go-api e do app-rmi e roda os testes de contrato contra eles. Se falhar, abre (ou comenta, se já houver uma aberta) a issue "Contrato quebrado: …" no repositório. Para reproduzir localmente:
+
+```bash
+mkdir -p /tmp/openapi
+for s in app-go-api app-rmi; do
+  curl -fsSL -o /tmp/openapi/$s.json https://raw.githubusercontent.com/prefeitura-rio/$s/main/docs/openapi-v3.json
+done
+CONTRACT_OPENAPI_APP_GO_API=/tmp/openapi/app-go-api.json \
+CONTRACT_OPENAPI_APP_RMI=/tmp/openapi/app-rmi.json \
+  go test ./internal/clients/ -run '^TestContrato_' -count=1 -v
+```
 
 ## Autenticação
 
@@ -186,6 +210,10 @@ just migrate
 Migrations ficam em `db/migrations/NNNNNN_nome.{up,down}.sql` (goose).
 
 O `search_vector` é uma coluna `TSVECTOR GENERATED ALWAYS AS STORED` — calculada automaticamente pelo PostgreSQL a partir de `title`, `short_desc`, `description` e `tags` usando `unaccent` + dicionário `portuguese`.
+
+## Operação
+
+O [runbook operacional](docs/runbook.md) cobre dependências, onde olhar (SigNoz, `/metrics`, logs), o que cada sinal significa, rollback, sync manual, reprocessamento da fila do webhook e como rodar e reverter migrations.
 
 ## Deploy
 

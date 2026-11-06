@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 
@@ -330,11 +329,8 @@ func TestMetricsEndpoint_ExposesSyncMetrics(t *testing.T) {
 		t.Fatalf("sync: %v", err)
 	}
 
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	r.GET("/metrics", observability.MetricsHandler())
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	observability.NewMetricsServer("").Handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("/metrics: status %d", w.Code)
 	}
@@ -413,5 +409,18 @@ func TestWorkerMetricsServer_ExposesScheduledSyncMetrics(t *testing.T) {
 		if r.StatusCode != http.StatusNotFound {
 			t.Errorf("/health no servidor de métricas: esperava 404, got %d", r.StatusCode)
 		}
+	}
+}
+
+func TestManager_SourceNames(t *testing.T) {
+	m := NewManager()
+	if got := m.SourceNames(); got == nil || len(got) != 0 {
+		t.Fatalf("sem fontes: esperado lista vazia, obtido %v", got)
+	}
+	m.Register(&stubSource{name: "salesforce"})
+	m.Register(&stubSource{name: "app-go-api"})
+	got := m.SourceNames()
+	if len(got) != 2 || got[0] != "salesforce" || got[1] != "app-go-api" {
+		t.Fatalf("esperado [salesforce app-go-api] na ordem de registro, obtido %v", got)
 	}
 }

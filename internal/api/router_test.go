@@ -55,6 +55,12 @@ func newRouterFixture(t *testing.T) routerFixture {
 // newRouterFixtureWithProxies monta o router com TRUSTED_PROXIES = trustedProxies.
 func newRouterFixtureWithProxies(t *testing.T, trustedProxies []string) routerFixture {
 	t.Helper()
+	return newRouterFixtureWithServer(t, config.ServerSettings{RequestTimeout: 5, TrustedProxies: trustedProxies})
+}
+
+// newRouterFixtureWithServer monta o router com as configurações de servidor dadas.
+func newRouterFixtureWithServer(t *testing.T, server config.ServerSettings) routerFixture {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("rsa: %v", err)
@@ -79,7 +85,7 @@ func newRouterFixtureWithProxies(t *testing.T, trustedProxies []string) routerFi
 
 	cfg := &config.AppConfig{
 		App:     config.AppSettings{Environment: "test"},
-		Server:  config.ServerSettings{RequestTimeout: 5, TrustedProxies: trustedProxies},
+		Server:  server,
 		Tracing: config.TracingSettings{ServiceName: "app-catalogo-test"},
 	}
 	pool := unreachablePool(t)
@@ -146,8 +152,10 @@ func TestSetupRouter_Infra(t *testing.T) {
 	if w := f.do(http.MethodGet, "/ready", ""); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("/ready com banco fora: esperado 503, obtido %d", w.Code)
 	}
-	if w := f.do(http.MethodGet, "/metrics", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "go_goroutines") {
-		t.Fatalf("/metrics: esperado 200 com métricas, obtido %d", w.Code)
+	// /metrics fica fora do router público (o gateway leva /catalogo/* a ele):
+	// as métricas saem pelo servidor próprio da porta METRICS_PORT.
+	if w := f.do(http.MethodGet, "/metrics", ""); w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "go_goroutines") {
+		t.Fatalf("/metrics no router público: esperado 404 sem métricas, obtido %d", w.Code)
 	}
 }
 
@@ -179,8 +187,12 @@ func TestSetupRouter_Authorization(t *testing.T) {
 	}
 
 	// Admin passa da autorização e chega ao handler.
-	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger?source=inexistente", admin); w.Code != http.StatusAccepted {
+	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger", admin); w.Code != http.StatusAccepted {
 		t.Errorf("trigger admin: esperado 202, obtido %d", w.Code)
+	}
+	// Fonte que a API não registrou é 400 do handler, não 202 sem disparar nada.
+	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger?source=inexistente", admin); w.Code != http.StatusBadRequest {
+		t.Errorf("trigger admin com fonte desconhecida: esperado 400, obtido %d", w.Code)
 	}
 	// O modo full continua só para admin: sem token 401, usuário comum 403.
 	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger?mode=full", ""); w.Code != http.StatusUnauthorized {
@@ -189,7 +201,7 @@ func TestSetupRouter_Authorization(t *testing.T) {
 	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger?mode=full", user); w.Code != http.StatusForbidden {
 		t.Errorf("trigger full usuário comum: esperado 403, obtido %d", w.Code)
 	}
-	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger?source=inexistente&mode=full", admin); w.Code != http.StatusAccepted {
+	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger?mode=full", admin); w.Code != http.StatusAccepted {
 		t.Errorf("trigger full admin: esperado 202, obtido %d", w.Code)
 	}
 	if w := f.do(http.MethodPost, "/api/v1/admin/sync/trigger?mode=tudo", admin); w.Code != http.StatusBadRequest {

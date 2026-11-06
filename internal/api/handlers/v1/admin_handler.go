@@ -3,7 +3,9 @@ package v1
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -60,14 +62,14 @@ func (h *AdminHandler) SyncStatus(c *gin.Context) {
 
 // TriggerSync godoc
 // @Summary      Dispara sincronização manual
-// @Description  Dispara sync ad-hoc em background. Retorna imediatamente. Requer role admin ou go:admin.
+// @Description  Dispara sync ad-hoc em background. Retorna imediatamente. Requer role admin ou go:admin. Fonte não registrada na API (typesense, que só sincroniza no worker, ou desconhecida) responde 400 com available_sources.
 // @Tags         admin
 // @Security     BearerAuth
-// @Param        source  query  string  false  "Fonte: salesforce, app-go-api, typesense. Vazio = todas."
+// @Param        source  query  string  false  "Fonte registrada na API: salesforce, app-go-api (cada uma só quando configurada). Vazio = todas."
 // @Param        mode    query  string  false  "delta (padrão) ou full. full reprocessa todos os itens nas fontes com sync completa (Carta)."  Enums(delta, full)
 // @Produce      json
 // @Success      202  {object}  map[string]string
-// @Failure      400  {object}  map[string]string
+// @Failure      400  {object}  map[string]interface{}  "mode inválido, ou source não registrada na API (error e available_sources)"
 // @Failure      401  {object}  map[string]string
 // @Failure      403  {object}  map[string]string
 // @Router       /api/v1/admin/sync/trigger [post]
@@ -79,14 +81,19 @@ func (h *AdminHandler) TriggerSync(c *gin.Context) {
 		return
 	}
 
-	go func() {
-		ctx := context.Background()
-		if source == "" {
-			h.manager.TriggerAllMode(ctx, mode)
-		} else {
-			_ = h.manager.TriggerSyncMode(ctx, source, mode)
-		}
-	}()
+	// TriggerAllMode e TriggerSyncMode não bloqueiam: a sync roda em goroutine
+	// própria, com context desligado da requisição.
+	ctx := context.Background()
+	if source == "" {
+		h.manager.TriggerAllMode(ctx, mode)
+	} else if !h.manager.TriggerSyncMode(ctx, source, mode) {
+		available := h.manager.SourceNames()
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":             fmt.Sprintf("source %q não está disponível na API; fontes disponíveis: [%s]", source, strings.Join(available, ", ")),
+			"available_sources": available,
+		})
+		return
+	}
 
 	c.JSON(http.StatusAccepted, gin.H{"status": "triggered", "source": source, "mode": string(mode)})
 }

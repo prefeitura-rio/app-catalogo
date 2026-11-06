@@ -99,3 +99,4 @@ func TestSetupRouter_ClientIP(t *testing.T) {
 		}
 	}
 }
+

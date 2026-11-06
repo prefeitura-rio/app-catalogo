@@ -97,6 +97,10 @@ type ServerSettings struct {
 	// aceito para resolver o IP do cliente no log de acesso.
 	// Vazia, o IP é sempre o da conexão.
 	TrustedProxies []string
+	// MetricsPort é a porta em que a API expõe GET /metrics (METRICS_PORT;
+	// 0 desativa). Fica separada de Port porque o Service e o gateway levam
+	// Port para fora do cluster.
+	MetricsPort int
 }
 
 func (s *ServerSettings) Validate() error {
@@ -105,6 +109,12 @@ func (s *ServerSettings) Validate() error {
 	}
 	if s.Port <= 0 {
 		return errors.New("SERVER_PORT deve ser maior que zero")
+	}
+	if s.MetricsPort < 0 || s.MetricsPort > 65535 {
+		return fmt.Errorf("METRICS_PORT: %d fora da faixa (0 desativa, 1-65535)", s.MetricsPort)
+	}
+	if s.MetricsPort == s.Port {
+		return errors.New("METRICS_PORT deve ser diferente de SERVER_PORT: /metrics não pode ficar na porta pública da API")
 	}
 	for _, p := range s.TrustedProxies {
 		if !validProxyAddress(p) {
@@ -340,6 +350,7 @@ func Load() (*AppConfig, error) {
 			Port:           getInt(v, "SERVER_PORT", 8080),
 			RequestTimeout: getInt(v, "SERVER_REQUEST_TIMEOUT", 30),
 			TrustedProxies: parseCSV(getEnv(v, "TRUSTED_PROXIES", defaultTrustedProxies)),
+			MetricsPort:    getInt(v, "METRICS_PORT", 9092),
 		},
 		Worker: WorkerSettings{
 			MetricsPort: getInt(v, "WORKER_METRICS_PORT", 9091),

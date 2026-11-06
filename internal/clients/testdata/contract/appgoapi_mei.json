@@ -1,0 +1,32 @@
+{
+  "data": [
+    {
+      "id": 42,
+      "titulo": "Manutenção de jardins da praça",
+      "descricao_servico": "Serviço de poda, jardinagem e manutenção das áreas verdes da praça.",
+      "outras_informacoes": "Trabalho a ser realizado nos finais de semana",
+      "orgao_id": "SMEX",
+      "cnae_ids": ["8130300", "8121400"],
+      "logradouro": "Praça Exemplo",
+      "numero": "S/N",
+      "complemento": "Próximo ao coreto",
+      "bairro": "Centro",
+      "cidade": "Rio de Janeiro",
+      "estado": "RJ",
+      "forma_pagamento": "PIX",
+      "prazo_pagamento": "30 dias após a conclusão",
+      "data_limite_execucao": "2026-12-15T23:59:59-03:00",
+      "data_expiracao": "2026-11-30T23:59:59-03:00",
+      "cover_image": "https://exemplo.rio/mei/42/capa.jpg",
+      "gallery_images": ["https://exemplo.rio/mei/42/1.jpg"],
+      "status": "active",
+      "created_at": "2026-10-20T10:00:00-03:00",
+      "updated_at": "2026-11-04T09:30:00-03:00"
+    }
+  ],
+  "meta": {
+    "page": 1,
+    "page_size": 100,
+    "total": 1
+  }
+}
