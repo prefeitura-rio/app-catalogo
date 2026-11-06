@@ -7,10 +7,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
 const maximumRMIResponseBytes int64 = 1 << 20
+
+var ErrRMINotConfigured = errors.New("rmi: URL base não configurada (RMI_BASE_URL)")
 
 // RMIClient consome a API do app-rmi para dados do cidadão.
 type RMIClient struct {
@@ -27,6 +30,11 @@ func NewRMIClient(baseURL string, tokenManager *KeycloakTokenManager) *RMIClient
 		httpClient:   &http.Client{Timeout: 10 * time.Second},
 		resilience:   newResilientCaller("rmi", defaultRMIResilience),
 	}
+}
+
+// Configured informa se há URL base para chamar o app-rmi.
+func (c *RMIClient) Configured() bool {
+	return strings.TrimSpace(c.baseURL) != ""
 }
 
 // CircuitState retorna o estado atual do circuit breaker do cliente.
@@ -143,6 +151,9 @@ func isCanonicalCPF(cpf string) bool {
 func (c *RMIClient) GetCitizen(ctx context.Context, cpf string) (*CitizenData, error) {
 	if !isCanonicalCPF(cpf) {
 		return nil, fmt.Errorf("rmi: CPF inválido")
+	}
+	if !c.Configured() {
+		return nil, ErrRMINotConfigured
 	}
 
 	authHeader, err := c.tokenManager.BearerToken(ctx)
