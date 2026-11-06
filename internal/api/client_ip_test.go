@@ -3,15 +3,12 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-
-	"github.com/prefeitura-rio/app-catalogo/internal/config"
 )
 
 // Cadeia de staging/produção: load balancer HTTP(S) do Google →
@@ -31,8 +28,8 @@ var meshProxies = []string{
 	"35.191.0.0/16", "130.211.0.0/22", lbIP + "/32",
 }
 
-func viaMesh(client, forged string) string {
-	chain := client + ", " + lbIP + ", " + gfeIP
+func viaMesh(forged string) string {
+	chain := realClient + ", " + lbIP + ", " + gfeIP
 	if forged != "" {
 		chain = forged + ", " + chain
 	}
@@ -50,10 +47,6 @@ func (f routerFixture) from(remoteAddr string, header http.Header) *httptest.Res
 	w := httptest.NewRecorder()
 	f.router.ServeHTTP(w, req)
 	return w
-}
-
-func forgedIP(i int) string {
-	return fmt.Sprintf("203.0.%d.%d", (i/250)%250, i%250+1)
 }
 
 // loggedIP devolve o campo ip do log de acesso da requisição.
@@ -78,62 +71,6 @@ func loggedIP(t *testing.T, f routerFixture, remoteAddr string, header http.Head
 	return ""
 }
 
-// Um X-Forwarded-For diferente a cada requisição não pode criar um contador novo.
-func TestSetupRouter_RateLimitIgnoresForgedForwardedFor(t *testing.T) {
-	cases := []struct {
-		name       string
-		remoteAddr string
-		header     func(i int) http.Header
-	}{
-		{
-			name:       "conexão direta da internet",
-			remoteAddr: "192.0.2.7:5000",
-			header: func(i int) http.Header {
-				return http.Header{"X-Forwarded-For": {forgedIP(i)}}
-			},
-		},
-		{
-			name:       "pelo load balancer e pelo Istio",
-			remoteAddr: sidecarIP,
-			header: func(i int) http.Header {
-				return http.Header{"X-Forwarded-For": {viaMesh(realClient, forgedIP(i))}}
-			},
-		},
-		{
-			name:       "X-Forwarded-For forjado em linha separada",
-			remoteAddr: sidecarIP,
-			header: func(i int) http.Header {
-				return http.Header{"X-Forwarded-For": {forgedIP(i), viaMesh(realClient, "")}}
-			},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newRouterFixtureWithProxies(t, meshProxies)
-			for i := 0; i < 300; i++ {
-				if w := f.from(tc.remoteAddr, tc.header(i)); w.Code != http.StatusOK {
-					t.Fatalf("requisição %d dentro do limite: esperado 200, obtido %d", i+1, w.Code)
-				}
-			}
-			if w := f.from(tc.remoteAddr, tc.header(300)); w.Code != http.StatusTooManyRequests {
-				t.Fatalf("301ª requisição com X-Forwarded-For novo: esperado 429, obtido %d", w.Code)
-			}
-		})
-	}
-
-	// Pela cadeia real, cada cliente continua com o próprio contador.
-	f := newRouterFixtureWithProxies(t, meshProxies)
-	for i := 0; i < 301; i++ {
-		f.from(sidecarIP, http.Header{"X-Forwarded-For": {viaMesh(realClient, "")}})
-	}
-	if w := f.from(sidecarIP, http.Header{"X-Forwarded-For": {viaMesh(realClient, "")}}); w.Code != http.StatusTooManyRequests {
-		t.Fatalf("cliente acima do limite: esperado 429, obtido %d", w.Code)
-	}
-	if w := f.from(sidecarIP, http.Header{"X-Forwarded-For": {viaMesh("198.51.100.21", "")}}); w.Code != http.StatusOK {
-		t.Fatalf("outro cliente atrás do mesmo LB: esperado 200, obtido %d", w.Code)
-	}
-}
-
 // O IP do log de acesso é o do cliente real, não o que ele escreveu nos cabeçalhos.
 func TestSetupRouter_ClientIP(t *testing.T) {
 	mesh := newRouterFixtureWithProxies(t, meshProxies)
@@ -146,42 +83,19 @@ func TestSetupRouter_ClientIP(t *testing.T) {
 		header     http.Header
 		want       string
 	}{
-		{"cadeia real sem cabeçalho do cliente", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh(realClient, "")}}, realClient},
-		{"cadeia real com IP forjado", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh(realClient, "192.0.2.99")}}, realClient},
-		{"cadeia real com forjado privado", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh(realClient, "10.1.2.3")}}, realClient},
-		{"cadeia real com lixo à esquerda", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh(realClient, "nao-e-ip")}}, realClient},
-		{"forjado em linha separada", mesh, sidecarIP, http.Header{"X-Forwarded-For": {"192.0.2.99", viaMesh(realClient, "")}}, realClient},
+		{"cadeia real sem cabeçalho do cliente", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh("")}}, realClient},
+		{"cadeia real com IP forjado", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh("192.0.2.99")}}, realClient},
+		{"cadeia real com forjado privado", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh("10.1.2.3")}}, realClient},
+		{"cadeia real com lixo à esquerda", mesh, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh("nao-e-ip")}}, realClient},
+		{"forjado em linha separada", mesh, sidecarIP, http.Header{"X-Forwarded-For": {"192.0.2.99", viaMesh("")}}, realClient},
 		{"conexão direta da internet", mesh, "192.0.2.7:5000", http.Header{"X-Forwarded-For": {"192.0.2.99"}}, "192.0.2.7"},
 		{"X-Real-IP não é lido", mesh, sidecarIP, http.Header{"X-Real-Ip": {"192.0.2.99"}}, "127.0.0.6"},
 		{"chamada interna sem cabeçalho", mesh, sidecarIP, nil, "127.0.0.6"},
-		{"sem proxies confiáveis", none, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh(realClient, "192.0.2.99")}}, "127.0.0.6"},
+		{"sem proxies confiáveis", none, sidecarIP, http.Header{"X-Forwarded-For": {viaMesh("192.0.2.99")}}, "127.0.0.6"},
 	}
 	for _, tc := range cases {
 		if got := loggedIP(t, tc.f, tc.remoteAddr, tc.header); got != tc.want {
 			t.Errorf("%s: ip esperado %s, obtido %s", tc.name, tc.want, got)
 		}
-	}
-}
-
-// RATE_LIMIT_ENABLED=false tira o limiter em memória: o limite passa à borda.
-func TestSetupRouter_RateLimitDisabled(t *testing.T) {
-	f := newRouterFixtureWithServer(t, config.ServerSettings{RequestTimeout: 5, RateLimitDisabled: true})
-	for i := 0; i < 400; i++ {
-		w := f.from("192.0.2.7:5000", nil)
-		if w.Code != http.StatusOK {
-			t.Fatalf("requisição %d com o limiter desligado: esperado 200, obtido %d", i+1, w.Code)
-		}
-		if got := w.Header().Get("X-RateLimit-Limit"); got != "" {
-			t.Fatalf("limiter desligado não pode enviar X-RateLimit-Limit, obtido %q", got)
-		}
-	}
-
-	// O valor zero da configuração mantém o limiter ligado.
-	on := newRouterFixtureWithServer(t, config.ServerSettings{RequestTimeout: 5})
-	for i := 0; i < 300; i++ {
-		on.from("192.0.2.7:5000", nil)
-	}
-	if w := on.from("192.0.2.7:5000", nil); w.Code != http.StatusTooManyRequests {
-		t.Fatalf("limiter ligado, 301ª requisição: esperado 429, obtido %d", w.Code)
 	}
 }

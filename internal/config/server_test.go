@@ -63,38 +63,6 @@ func TestParseCSVTrustedProxies(t *testing.T) {
 	}
 }
 
-func TestParseRateLimitEnabled(t *testing.T) {
-	cases := []struct {
-		raw  string
-		want bool
-	}{
-		{"", true},
-		{"  ", true},
-		{"true", true},
-		{"TRUE", true},
-		{"1", true},
-		{"false", false},
-		{" False ", false},
-		{"0", false},
-	}
-	for _, tc := range cases {
-		got, err := parseRateLimitEnabled(tc.raw)
-		if err != nil {
-			t.Errorf("RATE_LIMIT_ENABLED=%q: erro inesperado %v", tc.raw, err)
-			continue
-		}
-		if got != tc.want {
-			t.Errorf("RATE_LIMIT_ENABLED=%q: esperado %v, obtido %v", tc.raw, tc.want, got)
-		}
-	}
-	// Um erro de digitação não pode desligar o limite em silêncio.
-	for _, raw := range []string{"nao", "off", "disabled", "flase"} {
-		if _, err := parseRateLimitEnabled(raw); err == nil {
-			t.Errorf("RATE_LIMIT_ENABLED=%q: esperado erro", raw)
-		}
-	}
-}
-
 func TestServerSettingsValidateMetricsPort(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -144,39 +112,5 @@ func TestLoadMetricsPort(t *testing.T) {
 	t.Setenv("METRICS_PORT", "8080")
 	if _, err := Load(); err == nil {
 		t.Fatal("METRICS_PORT igual a SERVER_PORT deve falhar o startup")
-	}
-}
-
-func TestLoadRateLimitEnabled(t *testing.T) {
-	t.Setenv("CPF_HASH_SALT", strings.Repeat("s", 64))
-
-	cases := []struct {
-		name         string
-		value        string
-		wantDisabled bool
-		wantErr      bool
-	}{
-		{name: "ausente mantém ligado", value: "", wantDisabled: false},
-		{name: "true mantém ligado", value: "true", wantDisabled: false},
-		{name: "false desliga", value: "false", wantDisabled: true},
-		{name: "inválido falha o startup", value: "desligado", wantErr: true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("RATE_LIMIT_ENABLED", tc.value)
-			cfg, err := Load()
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("esperado erro de configuração")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("Load: %v", err)
-			}
-			if cfg.Server.RateLimitDisabled != tc.wantDisabled {
-				t.Fatalf("RateLimitDisabled esperado %v, obtido %v", tc.wantDisabled, cfg.Server.RateLimitDisabled)
-			}
-		})
 	}
 }

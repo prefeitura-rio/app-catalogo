@@ -2,8 +2,6 @@ package observability
 
 import (
 	"net/http"
-	"strconv"
-	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -125,119 +123,5 @@ func RequestLogger() gin.HandlerFunc {
 			Str("request_id", c.GetString("request_id")).
 			Str("ip", c.ClientIP()).
 			Msg("request")
-	}
-}
-
-// rateLimitWindow é a janela fixa de contagem por IP.
-const rateLimitWindow = time.Minute
-
-// rateLimitMaxEntries limita quantos IPs o rate limiter acompanha ao mesmo
-// tempo, para que o estado em memória não cresça sem limite numa API pública.
-const rateLimitMaxEntries = 100_000
-
-// RateLimitMiddleware implementa rate limiting por IP com contador em memória.
-// Para múltiplas réplicas, substituir pela implementação Redis sliding window.
-func RateLimitMiddleware(requestsPerMinute int) gin.HandlerFunc {
-	return newRateLimiter(rateLimitMaxEntries, time.Now).middleware(requestsPerMinute)
-}
-
-type rateLimitEntry struct {
-	count   int
-	resetAt time.Time
-}
-
-// rateLimiter guarda um contador por IP numa janela fixa. As entradas com a
-// janela vencida são removidas por uma varredura feita na própria requisição,
-// no máximo uma vez por janela (sem goroutine), e o número de entradas tem um
-// teto: cheio, uma entrada arbitrária dá lugar ao IP novo, em O(1).
-type rateLimiter struct {
-	mu         sync.Mutex
-	maxEntries int
-	now        func() time.Time
-	counters   map[string]*rateLimitEntry
-	nextSweep  time.Time
-}
-
-func newRateLimiter(maxEntries int, now func() time.Time) *rateLimiter {
-	if maxEntries < 1 {
-		maxEntries = 1
-	}
-	return &rateLimiter{
-		maxEntries: maxEntries,
-		now:        now,
-		counters:   make(map[string]*rateLimitEntry),
-		nextSweep:  now().Add(rateLimitWindow),
-	}
-}
-
-// hit conta uma requisição do IP e devolve o total na janela atual.
-func (l *rateLimiter) hit(ip string) int {
-	now := l.now()
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if !now.Before(l.nextSweep) {
-		l.sweep(now)
-		l.nextSweep = now.Add(rateLimitWindow)
-	}
-
-	e, exists := l.counters[ip]
-	if exists && !now.After(e.resetAt) {
-		e.count++
-		return e.count
-	}
-	if !exists && len(l.counters) >= l.maxEntries {
-		l.evictOne()
-	}
-	l.counters[ip] = &rateLimitEntry{count: 1, resetAt: now.Add(rateLimitWindow)}
-	return 1
-}
-
-// sweep remove as entradas cuja janela já venceu. Chamada com mu travado.
-func (l *rateLimiter) sweep(now time.Time) {
-	for ip, e := range l.counters {
-		if now.After(e.resetAt) {
-			delete(l.counters, ip)
-		}
-	}
-}
-
-// evictOne remove uma entrada qualquer do mapa. Chamada com mu travado.
-func (l *rateLimiter) evictOne() {
-	for ip := range l.counters {
-		delete(l.counters, ip)
-		return
-	}
-}
-
-func (l *rateLimiter) size() int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.counters)
-}
-
-func (l *rateLimiter) middleware(requestsPerMinute int) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		count := l.hit(c.ClientIP())
-		if count == 1 {
-			c.Next()
-			return
-		}
-
-		c.Header("X-RateLimit-Limit", strconv.Itoa(requestsPerMinute))
-		remaining := requestsPerMinute - count
-		if remaining < 0 {
-			remaining = 0
-		}
-		c.Header("X-RateLimit-Remaining", strconv.Itoa(remaining))
-
-		if count > requestsPerMinute {
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": "rate limit excedido"})
-			c.Abort()
-			return
-		}
-
-		c.Next()
 	}
 }

@@ -114,7 +114,7 @@ time() - catalogo_sync_last_success_timestamp_seconds                           
   - acesso da API: mensagem `request`, com `method`, `path`, `status`, `latency`, `request_id`, `ip` (nível `error` para 5xx, `warn` para 4xx);
   - syncs: `source`, `trigger`, `mode`, `attempt`, `retry_in`; mensagens `datasource: sync falhou, nova tentativa agendada`, `datasource: erro no sync periódico`, `datasource: sync manual falhou`;
   - webhook: `event_id`, `slug`, `attempt`, `retry_in`; mensagens `webhook: falha ao sincronizar registro; evento mantido pendente`, `webhook: assinatura inválida`, `webhook: falha ao gravar evento`;
-  - startup: `verificação de JWT via JWKS ativada` (ou o erro de `AUTH_JWT_ISSUER/AUTH_JWKS_URL ... endpoints autenticados responderão 401`), `RATE_LIMIT_ENABLED=false — rate limiting em memória desligado`, `worker: <fonte> não configurado ou desabilitado, fonte ignorada`.
+  - startup: `verificação de JWT via JWKS ativada` (ou o erro de `AUTH_JWT_ISSUER/AUTH_JWKS_URL ... endpoints autenticados responderão 401`), `worker: <fonte> não configurado ou desabilitado, fonte ignorada`.
 
 ```bash
 kubectl -n catalogo logs deploy/catalogo-worker --since=1h | grep -E 'datasource|typesense|webhook'
@@ -135,10 +135,10 @@ Não há regras de alerta do app-catalogo configuradas (nem no repositório nem 
 | Discord `❌ Production Release Failed — app-catalogo` | o `release.yaml` falhou: operação do Argo CD `Failed` (normalmente a migration do hook `PreSync`), Rollout `Degraded`/`Aborted` ou worker fora da imagem nova | ver o passo que falhou no run; migration: logs do `catalogo-migrate` (o workflow imprime); Rollout: `kubectl argo rollouts get rollout catalogo -n catalogo` e o último `AnalysisRun` |
 | AnalysisRun `catalogo-success-rate` falhou (produção) | o canary teve taxa de sucesso abaixo de 95% ou de 5xx acima de 5% em mais de 5 medições; o Argo Rollouts aborta e volta o tráfego ao estável | conferir que o tráfego voltou ao estável (`kubectl argo rollouts get rollout catalogo -n catalogo`); investigar os logs do ReplicaSet canary; não promover à mão |
 | `/ready` 503, pods `NotReady` | a API não alcança o PostgreSQL | checar o Cloud SQL (instância e conexões) e `DB_*`; `kubectl -n catalogo describe pod` |
-| Pods em `CrashLoopBackOff` logo no startup | configuração inválida: `CPF_HASH_SALT` com menos de 32 bytes, `TRUSTED_PROXIES` com item que não é IP/CIDR, `RATE_LIMIT_ENABLED` não booleano, `SALESFORCE_INSTANCE_URL` inválida, banco inacessível | `kubectl -n catalogo logs <pod> --previous`: a primeira linha diz qual variável; corrigir no Infisical (ou no manifest, para as variáveis em `env`) |
+| Pods em `CrashLoopBackOff` logo no startup | configuração inválida: `CPF_HASH_SALT` com menos de 32 bytes, `TRUSTED_PROXIES` com item que não é IP/CIDR, `SALESFORCE_INSTANCE_URL` inválida, banco inacessível | `kubectl -n catalogo logs <pod> --previous`: a primeira linha diz qual variável; corrigir no Infisical (ou no manifest, para as variáveis em `env`) |
 | Taxa de 5xx da API alta (`istio_requests_total`) | erro do banco, timeout de requisição (`SERVER_REQUEST_TIMEOUT`, 30 s) ou regressão de código | logs `"level":"error"` e traces no SigNoz; se começou com um deploy, [rollback](#rollback) |
 | Muitos 401 em `/api/v1/*` | token inválido ou expirado, `azp` fora de `AUTH_JWT_AUTHORIZED_PARTIES`, token sem CPF válido em `preferred_username` (rotas não admin), ou verificador sem emissor/JWKS | conferir no log de startup se o JWKS está ativado; conferir `AUTH_JWT_*`/`KEYCLOAK_*` e se o Keycloak responde |
-| Muitos 429 | rate limit em memória (300 req/min por IP, por pod) | conferir `TRUSTED_PROXIES` (IP de proxy contado como cliente) e o tráfego por IP; `RATE_LIMIT_ENABLED=false` só com limite na borda |
+| Muitos 429 | rate limit na borda (Cloud Armor / Istio) | conferir as regras da borda e o tráfego por IP; este serviço não aplica limite em memória |
 | `catalogo_sync_runs_total{result="failure"}` subindo, ou `time() - catalogo_sync_last_success_timestamp_seconds` acima de 2× o intervalo da fonte | a fonte falhou nas 4 tentativas | logs do worker com o `source`; checar a dependência (SalesForce, Typesense, app-go-api, Keycloak); depois de corrigir, [sync manual](#sync-manual) |
 | `catalogo_sync_retries_total` subindo, sem falha final | falhas transitórias absorvidas pelas novas tentativas | só acompanhar; vira incidente se virar `failure` |
 | `catalogo_http_client_circuit_state{client="rmi"} == 2` | o app-rmi está fora ou lento; recomendações autenticadas caem na genérica | checar o app-rmi e o Keycloak (`client_credentials`); o circuito tenta de novo sozinho depois de 30 s |
@@ -269,7 +269,6 @@ Os valores vêm do Secret `catalogo-secrets` (sincronizado do Infisical pelo ope
 | `SALESFORCE_SYNC_ENABLED` | `true` | sync da Carta pelo SalesForce (exige `SALESFORCE_INSTANCE_URL`); `false` tira a fonte do worker e da sync manual |
 | `TYPESENSE_SYNC_ENABLED` | `true` | sync da Carta pelo Typesense (exige `TYPESENSE_URL` e `TYPESENSE_API_KEY`) |
 | `APP_GO_API_SYNC_ENABLED` | `true` | sync de cursos, vagas e MEI (exige `APP_GO_API_BASE_URL`) |
-| `RATE_LIMIT_ENABLED` | `true` | rate limit em memória (300 req/min por IP); `false` só com limite na borda; valor não booleano impede o startup |
 | `TRACING_ENABLED` | `false` (`true` nos manifests) | envio de traces ao SigNoz |
 | `GOOGLE_API_KEY` | vazio | presente, liga a busca semântica e o backfill de embeddings |
 | `RERANKER_URL` | vazio | presente, liga o rerank da busca (`RERANKER_TIMEOUT`, padrão 2 s) |
@@ -285,7 +284,7 @@ Os valores vêm do Secret `catalogo-secrets` (sincronizado do Infisical pelo ope
 | `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET` | emissor padrão do JWT e `client_credentials` para app-rmi e app-go-api |
 | `AUTH_JWT_ISSUER`, `AUTH_JWKS_URL` | verificação do JWT (padrão derivado do Keycloak); sem eles, todo `/api/v1/*` responde 401 |
 | `AUTH_JWT_AUTHORIZED_PARTIES` | clients (`azp`) aceitos, padrão `superapp`; lista vazia = nenhum token aceito |
-| `TRUSTED_PROXIES` | proxies cujo `X-Forwarded-For` define o IP do cliente (rate limit e log); os manifests acrescentam o IP do load balancer de cada ambiente; item inválido impede o startup |
+| `TRUSTED_PROXIES` | proxies cujo `X-Forwarded-For` define o IP do cliente no log de acesso; os manifests acrescentam o IP do load balancer de cada ambiente; item inválido impede o startup |
 | `CORS_ALLOWED_ORIGINS` | origens do navegador aceitas (no `env` dos manifests) |
 
 **Endereços e ritmo das fontes:**
