@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -225,6 +226,19 @@ func main() {
 		}
 	}()
 
+	// Métricas da API (busca, recomendação, webhook, clientes HTTP, syncs
+	// manuais) numa porta própria, fora do Service que o gateway expõe.
+	var metricsSrv *http.Server
+	if cfg.Server.MetricsPort > 0 {
+		metricsSrv = observability.NewMetricsServer(fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.MetricsPort))
+		go func() {
+			log.Info().Str("addr", metricsSrv.Addr).Msg("métricas em /metrics")
+			if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error().Err(err).Msg("falha no servidor de métricas")
+			}
+		}()
+	}
+
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -234,6 +248,11 @@ func main() {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	if metricsSrv != nil {
+		if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+			log.Warn().Err(err).Msg("erro ao encerrar servidor de métricas")
+		}
+	}
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatal().Err(err).Msg("encerramento forçado")
 	}

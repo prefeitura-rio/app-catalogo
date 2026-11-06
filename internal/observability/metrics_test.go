@@ -226,16 +226,13 @@ func TestRequestLogger(t *testing.T) {
 	}
 }
 
-func TestMetricsHandler(t *testing.T) {
-	SyncItemsTotal.WithLabelValues("teste", "ok").Inc()
+func TestMetricsServer(t *testing.T) {
 	HTTPClientRetriesTotal.WithLabelValues("teste").Inc()
-	CatalogItemsGauge.WithLabelValues("service", "teste").Set(3)
 	HTTPClientCircuitState.WithLabelValues("teste").Set(2)
 
-	r := gin.New()
-	r.GET("/metrics", MetricsHandler())
+	h := NewMetricsServer("").Handler
 
-	w := request(r, "/metrics", "")
+	w := request(h, "/metrics", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("esperado 200, obtido %d", w.Code)
 	}
@@ -244,13 +241,22 @@ func TestMetricsHandler(t *testing.T) {
 		t.Fatalf("corpo: %v", err)
 	}
 	for _, want := range []string{
-		`catalogo_sync_items_total{source="teste",status="ok"}`,
 		`catalogo_http_client_retries_total{client="teste"}`,
-		`catalogo_items_total{source="teste",type="service"} 3`,
 		`catalogo_http_client_circuit_state{client="teste"} 2`,
+		"go_goroutines",
 	} {
 		if !strings.Contains(string(body), want) {
 			t.Errorf("métrica %q ausente em /metrics", want)
 		}
+	}
+	// Métricas registradas que nada alimentava foram removidas (DEV-369).
+	for _, gone := range []string{"catalogo_items_total", "catalogo_sync_items_total"} {
+		if strings.Contains(string(body), gone) {
+			t.Errorf("/metrics ainda expõe %q", gone)
+		}
+	}
+
+	if w := request(h, "/health", ""); w.Code != http.StatusNotFound {
+		t.Errorf("/health no servidor de métricas: esperado 404, obtido %d", w.Code)
 	}
 }

@@ -796,20 +796,6 @@ paths:
                 status: "not ready"
                 error: "banco de dados indisponível"
 
-  /metrics:
-    get:
-      tags: [Infra]
-      summary: Métricas Prometheus
-      description: Endpoint de métricas no formato Prometheus text exposition.
-      security: []
-      responses:
-        "200":
-          description: Métricas no formato Prometheus
-          content:
-            text/plain:
-              schema:
-                type: string
-
   /api/webhooks/salesforce:
     post:
       tags: [Infra]

@@ -152,8 +152,10 @@ func TestSetupRouter_Infra(t *testing.T) {
 	if w := f.do(http.MethodGet, "/ready", ""); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("/ready com banco fora: esperado 503, obtido %d", w.Code)
 	}
-	if w := f.do(http.MethodGet, "/metrics", ""); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "go_goroutines") {
-		t.Fatalf("/metrics: esperado 200 com métricas, obtido %d", w.Code)
+	// /metrics fica fora do router público (o gateway leva /catalogo/* a ele):
+	// as métricas saem pelo servidor próprio da porta METRICS_PORT.
+	if w := f.do(http.MethodGet, "/metrics", ""); w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "go_goroutines") {
+		t.Fatalf("/metrics no router público: esperado 404 sem métricas, obtido %d", w.Code)
 	}
 }
 

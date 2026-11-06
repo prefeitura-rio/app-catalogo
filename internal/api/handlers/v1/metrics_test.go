@@ -49,10 +49,8 @@ func (okRecommender) RecommendAnonymous(_ context.Context, req *models.Recommend
 // série ausente conta como 0.
 func metricsCount(t *testing.T, name, labels string) int {
 	t.Helper()
-	engine := gin.New()
-	engine.GET("/metrics", observability.MetricsHandler())
 	w := httptest.NewRecorder()
-	engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	observability.NewMetricsServer("").Handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if w.Code != http.StatusOK {
 		t.Fatalf("/metrics: status %d", w.Code)
 	}
@@ -124,9 +122,7 @@ func TestSearch_RotulosNaoUsamEntradaDoCliente(t *testing.T) {
 	}
 
 	mw := httptest.NewRecorder()
-	metrics := gin.New()
-	metrics.GET("/metrics", observability.MetricsHandler())
-	metrics.ServeHTTP(mw, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	observability.NewMetricsServer("").Handler.ServeHTTP(mw, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if body := mw.Body.String(); strings.Contains(body, "hostil-xyz") {
 		t.Fatalf("/metrics expõe valor enviado pelo cliente")
 	}

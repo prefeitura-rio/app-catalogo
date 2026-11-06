@@ -76,13 +76,14 @@ kubectl -n argocd get application catalogo -o jsonpath='{.status.sync.status} {.
 
 ### Métricas (`/metrics`, Prometheus)
 
-Cada processo expõe as próprias métricas: a API em `GET /metrics` (porta 8080) e o worker em `GET /metrics` na porta 9091 (`WORKER_METRICS_PORT`; Service `catalogo-worker-metrics`). Só o worker tem anotação de scrape (`prometheus.io/scrape`) nos manifests; as métricas da API se leem por port-forward:
+Cada processo expõe as próprias métricas numa porta só delas, fora da porta pública: a API em `GET /metrics` na porta 9092 (`METRICS_PORT`) e o worker na porta 9091 (`WORKER_METRICS_PORT`; Service `catalogo-worker-metrics`). A porta 8080 da API (a que o gateway expõe em `/catalogo/*`) não serve `/metrics`. Os dois pods têm as anotações `prometheus.io/scrape|port|path`, então o Prometheus do `istio-system` (job `kubernetes-pods`) coleta as duas; para ler direto:
 
 ```bash
 kubectl -n catalogo port-forward svc/catalogo-worker-metrics 9091:9091   # syncs agendadas
-kubectl -n catalogo port-forward svc/catalogo 8080:80                    # API (busca, webhook, RMI, syncs manuais)
+kubectl -n catalogo get pods -l app=catalogo                             # escolha um pod da API
+kubectl -n catalogo port-forward pod/<pod-da-api> 9092:9092              # API (busca, webhook, RMI, syncs manuais)
 curl -s localhost:9091/metrics | grep '^catalogo_'
-curl -s localhost:8080/metrics | grep '^catalogo_'
+curl -s localhost:9092/metrics | grep '^catalogo_'
 ```
 
 | Métrica | Processo | Labels | Leitura |
@@ -96,8 +97,6 @@ curl -s localhost:8080/metrics | grep '^catalogo_'
 | `catalogo_http_client_retries_total` | idem | `client` | novas tentativas dos clientes HTTP |
 | `catalogo_search_duration_seconds` | API | `has_query`, `type_filter` | latência da busca |
 | `catalogo_recommendations_duration_seconds` | API | `personalized` | latência da recomendação |
-
-`catalogo_items_total` e `catalogo_sync_items_total` estão registradas, mas o código ainda não as alimenta.
 
 O tráfego HTTP visto pelo Istio (taxa, 5xx, latência) fica no Prometheus do `istio-system` (`istio_requests_total`, `istio_request_duration_milliseconds`), o mesmo que o KEDA e a análise do canary consultam:
 
@@ -303,5 +302,5 @@ Os valores vêm do Secret `catalogo-secrets` (sincronizado do Infisical pelo ope
 | `EMBEDDING_BACKFILL_INTERVAL` | `5m` |
 | `CACHE_SEARCH_TTL`, `CACHE_SEARCH_VECTORS_TTL` | `60s`, `1h` |
 | `CACHE_RECOMMENDATION_AUTHENTICATED_TTL`, `CACHE_RECOMMENDATION_CLUSTER_TTL` | `5m`, `15m` |
-| `SERVER_PORT`, `SERVER_REQUEST_TIMEOUT`, `WORKER_METRICS_PORT` | `8080`, `30` (segundos), `9091` (`0` desliga) |
+| `SERVER_PORT`, `SERVER_REQUEST_TIMEOUT`, `METRICS_PORT`, `WORKER_METRICS_PORT` | `8080`, `30` (segundos), `9092` e `9091` (`0` desliga; `METRICS_PORT` igual a `SERVER_PORT` impede o startup) |
 | `APP_ENV`, `LOG_LEVEL` | `development`, `info` |

@@ -95,6 +95,58 @@ func TestParseRateLimitEnabled(t *testing.T) {
 	}
 }
 
+func TestServerSettingsValidateMetricsPort(t *testing.T) {
+	cases := []struct {
+		name    string
+		port    int
+		wantErr bool
+	}{
+		{name: "porta própria", port: 9092},
+		{name: "0 desativa", port: 0},
+		{name: "igual à porta pública", port: 8080, wantErr: true},
+		{name: "negativa", port: -1, wantErr: true},
+		{name: "acima de 65535", port: 70000, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := ServerSettings{Host: "0.0.0.0", Port: 8080, MetricsPort: tc.port}
+			err := s.Validate()
+			if tc.wantErr && err == nil {
+				t.Fatal("esperado erro de validação")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadMetricsPort(t *testing.T) {
+	t.Setenv("CPF_HASH_SALT", strings.Repeat("s", 64))
+
+	t.Setenv("METRICS_PORT", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Server.MetricsPort != 9092 {
+		t.Fatalf("METRICS_PORT padrão: esperado 9092, obtido %d", cfg.Server.MetricsPort)
+	}
+
+	t.Setenv("METRICS_PORT", "0")
+	if cfg, err = Load(); err != nil {
+		t.Fatalf("METRICS_PORT=0: Load: %v", err)
+	}
+	if cfg.Server.MetricsPort != 0 {
+		t.Fatalf("METRICS_PORT=0: esperado 0, obtido %d", cfg.Server.MetricsPort)
+	}
+
+	t.Setenv("METRICS_PORT", "8080")
+	if _, err := Load(); err == nil {
+		t.Fatal("METRICS_PORT igual a SERVER_PORT deve falhar o startup")
+	}
+}
+
 func TestLoadRateLimitEnabled(t *testing.T) {
 	t.Setenv("CPF_HASH_SALT", strings.Repeat("s", 64))
 

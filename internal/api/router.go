@@ -58,7 +58,8 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 	healthHandler := handlers.NewHealthHandler(db)
 	r.GET("/health", healthHandler.Health)
 	r.GET("/ready", healthHandler.Ready)
-	r.GET("/metrics", observability.MetricsHandler())
+	// /metrics não fica aqui: o gateway leva /catalogo/* à porta deste router,
+	// então as métricas saem por um servidor próprio (METRICS_PORT, cmd/api).
 
 	// Webhook (auth própria por HMAC — fora da verificação do JWT)
 	var webhookHandler *v1.WebhookHandler
