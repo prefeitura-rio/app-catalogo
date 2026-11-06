@@ -9,6 +9,7 @@ Este documento não traz segredos. Valores sensíveis vivem no Infisical (Secret
 - [Visão rápida](#visão-rápida)
 - [Onde olhar](#onde-olhar)
 - [Sinais e alertas: o que significam e o primeiro passo](#sinais-e-alertas-o-que-significam-e-o-primeiro-passo)
+  - [Regras de alerta propostas](#regras-de-alerta-propostas)
 - [Rotina de incidente](#rotina-de-incidente)
   - [Triagem em 5 minutos](#triagem-em-5-minutos)
   - [Rollback](#rollback)
@@ -93,6 +94,9 @@ curl -s localhost:9092/metrics | grep '^catalogo_'
 | `catalogo_sync_duration_seconds` | idem | `source`, `type` (= trigger) | duração de cada tentativa |
 | `catalogo_sync_last_success_timestamp_seconds` | idem | `source` | horário Unix do último sucesso; só existe depois do primeiro sucesso do processo |
 | `catalogo_salesforce_webhook_events_total` | API | `result` (`enqueued`, `duplicate`, `processed`, `failed`) | eventos do webhook; `failed` conta tentativas que falharam (o evento continua pendente) |
+| `catalogo_salesforce_webhook_pending_events` | API (com `SALESFORCE_WEBHOOK_SECRET`) | — | eventos `pending` na fila, lidos do banco pelo reprocessador a cada 30 s (todas as réplicas leem a mesma fila: use `max`) |
+| `catalogo_salesforce_webhook_failing_events` | idem | — | pendentes que já falharam ao menos uma vez (`last_error` preenchido): o equivalente a uma DLQ nesta fila, que não desiste |
+| `catalogo_salesforce_webhook_oldest_pending_age_seconds` | idem | — | idade do pendente mais antigo (0 sem pendentes); um evento novo é processado na hora, então idade alta é fila parada |
 | `catalogo_http_client_circuit_state` | API (`rmi`), API e worker (`appgoapi`) | `client` | 0 fechado, 1 meio-aberto, 2 aberto |
 | `catalogo_http_client_retries_total` | idem | `client` | novas tentativas dos clientes HTTP |
 | `catalogo_search_duration_seconds` | API | `has_query`, `type_filter` | latência da busca |
@@ -105,6 +109,7 @@ sum(rate(istio_requests_total{destination_workload="catalogo"}[5m]))            
 sum(rate(istio_requests_total{destination_workload="catalogo",response_code=~"5.."}[5m]))
   / sum(rate(istio_requests_total{destination_workload="catalogo"}[5m]))                                                  # taxa de 5xx
 time() - catalogo_sync_last_success_timestamp_seconds                                                                    # segundos desde o último sucesso, por fonte
+max(catalogo_salesforce_webhook_oldest_pending_age_seconds)                                                              # idade do evento pendente mais antigo do webhook
 ```
 
 ### Traces e logs (SigNoz)
@@ -127,7 +132,7 @@ Não há dashboard do app-catalogo versionado, nem no SigNoz (os dashboards do `
 
 ## Sinais e alertas: o que significam e o primeiro passo
 
-Não há regras de alerta do app-catalogo configuradas (nem no repositório nem no `prefeitura-rio/infra`; pedidas na OPS-149, sobre as métricas que o Prometheus do `istio-system` já coleta da API e do worker). Os avisos que chegam hoje são as notificações de deploy no Discord (staging e release) e a análise automática do canary de produção. A tabela cobre esses avisos e os sinais que valem um alerta quando ele for criado, com o primeiro passo de cada um.
+Não há regras de alerta do app-catalogo configuradas (nem no repositório nem no `prefeitura-rio/infra`; pedidas na OPS-149, sobre as métricas que o Prometheus do `istio-system` já coleta da API e do worker; as expressões estão em [Regras de alerta propostas](#regras-de-alerta-propostas)). Os avisos que chegam hoje são as notificações de deploy no Discord (staging e release) e a análise automática do canary de produção. A tabela cobre esses avisos e os sinais que valem um alerta quando ele for criado, com o primeiro passo de cada um.
 
 | Sinal | O que significa | Primeiro passo |
 |-------|-----------------|----------------|
@@ -144,10 +149,27 @@ Não há regras de alerta do app-catalogo configuradas (nem no repositório nem 
 | `catalogo_http_client_circuit_state{client="rmi"} == 2` | o app-rmi está fora ou lento; recomendações autenticadas caem na genérica | checar o app-rmi e o Keycloak (`client_credentials`); o circuito tenta de novo sozinho depois de 30 s |
 | `catalogo_http_client_circuit_state{client="appgoapi"} == 2` | o app-go-api está fora; o sync de cursos, vagas e MEI falha | checar o app-go-api; o circuito tenta de novo depois de 60 s; o próximo ciclo (30 min) ou um sync manual recupera |
 | `catalogo_salesforce_webhook_events_total{result="failed"}` subindo | o detalhe do serviço na Carta não pôde ser lido; os eventos ficam pendentes e voltam com espera que dobra (30 s até 1 h) | ver `last_error` na fila ([consulta](#fila-do-webhook-salesforce)); checar a API CloudHub |
+| `catalogo_salesforce_webhook_oldest_pending_age_seconds` alto ou `catalogo_salesforce_webhook_failing_events` > 0 por muito tempo | a fila do webhook não está escoando: o reprocessador falha em todas as tentativas (CloudHub, banco) ou não está rodando | ver `last_error` na fila ([consulta](#fila-do-webhook-salesforce)) e os logs `webhook:` da API; depois de corrigir, [reprocessar](#fila-do-webhook-salesforce) |
 | Webhook respondendo 401 (`webhook: assinatura inválida`) ou `webhook não configurado` | HMAC não confere com `SALESFORCE_WEBHOOK_SECRET`, ou o segredo não está definido | conferir com o time da Carta qual segredo assina; o segredo novo entra pelo Infisical |
 | Webhook respondendo 503 | o evento não pôde ser gravado no banco; o remetente deve reenviar | checar o PostgreSQL; nada se perde se o remetente reenviar |
 | Busca com resultados de outra época, ou serviços faltando | Carta desatualizada (Typesense ou SalesForce) ou cache antigo (TTL de 60 s) | `GET /api/v1/admin/sync/status`; [sync manual](#sync-manual); full da Carta se a hierarquia ou os órgãos estão vazios |
 | KEDA no `fallback` (réplicas fixas) | o Prometheus do `istio-system` não responde à query do ScaledObject | `kubectl -n catalogo describe scaledobject catalogo-scaled-object`; o serviço segue com 1 (staging) ou 2 (produção) réplicas |
+
+### Regras de alerta propostas
+
+Regras mínimas de produção (DEV-390, Jira PREF-605), para o Prometheus do `istio-system`; quem as versiona e escolhe o canal de notificação é a OPS-149, na raia Infra (Terraform). Os limiares são os sugeridos; o de 5xx é o mesmo da análise do canary.
+
+| Alerta | Expressão | Por |
+|--------|-----------|-----|
+| 5xx acima de 5% | `sum(rate(istio_requests_total{destination_workload="catalogo",reporter="destination",response_code=~"5.."}[5m])) / sum(rate(istio_requests_total{destination_workload="catalogo",reporter="destination"}[5m])) > 0.05` | 5 min |
+| Latência p95 da API acima de 1 s | `histogram_quantile(0.95, sum by (le) (rate(istio_request_duration_milliseconds_bucket{destination_workload="catalogo",reporter="destination"}[5m]))) > 1000` | 10 min |
+| Latência p95 da busca acima de 1 s | `histogram_quantile(0.95, sum by (le) (rate(catalogo_search_duration_seconds_bucket[5m]))) > 1` | 10 min |
+| Latência p95 da recomendação acima de 0,5 s | `histogram_quantile(0.95, sum by (le) (rate(catalogo_recommendations_duration_seconds_bucket[5m]))) > 0.5` (o último bucket é 1 s) | 10 min |
+| Sync atrasado (cursos, vagas e MEI; Carta) | `time() - max by (source) (catalogo_sync_last_success_timestamp_seconds) > 3600` (2× o intervalo de 30 min; o `max` junta worker e syncs manuais da API) | 10 min |
+| Sync falhando | `increase(catalogo_sync_runs_total{result="failure"}[1h]) > 0` | — |
+| Fila do webhook parada | `max(catalogo_salesforce_webhook_oldest_pending_age_seconds) > 900` (com a espera dobrando a partir de 30 s, 15 min são umas 5 falhas seguidas) | 5 min |
+| Eventos do webhook falhando | `max(catalogo_salesforce_webhook_failing_events) > 0` | 30 min |
+| Fila do webhook acumulando | `max(catalogo_salesforce_webhook_pending_events) > 100` | 10 min |
 
 ## Rotina de incidente
 
