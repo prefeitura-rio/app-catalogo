@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/observability"
+	"github.com/prefeitura-rio/app-catalogo/internal/safego"
 )
 
 // Origens de uma sincronização, usadas no label trigger das métricas.
@@ -180,6 +181,7 @@ func (m *Manager) TriggerAllMode(ctx context.Context, mode SyncMode) {
 
 	for _, src := range sources {
 		go func(s DataSource) {
+			defer safego.Recover("datasource_manual_sync_all", nil)
 			if err := m.syncWithRetryMode(ctx, s, triggerManual, mode); err != nil {
 				log.Error().Err(err).Str("source", s.Name()).Msg("datasource: sync manual (all) falhou")
 			}
@@ -202,6 +204,7 @@ func (m *Manager) TriggerSyncMode(ctx context.Context, sourceName string, mode S
 	for _, src := range m.sources {
 		if src.Name() == sourceName || string(src.Source()) == sourceName {
 			go func(s DataSource) {
+				defer safego.Recover("datasource_manual_sync", nil)
 				if err := m.syncWithRetryMode(ctx, s, triggerManual, mode); err != nil {
 					log.Error().Err(err).Str("source", s.Name()).Msg("datasource: sync manual falhou")
 				}

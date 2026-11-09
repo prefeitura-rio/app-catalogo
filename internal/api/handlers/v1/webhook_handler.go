@@ -17,6 +17,7 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
+	"github.com/prefeitura-rio/app-catalogo/internal/safego"
 )
 
 const (
@@ -138,10 +139,12 @@ func (h *WebhookHandler) SalesForce(c *gin.Context) {
 	}
 
 	processCtx := context.WithoutCancel(c.Request.Context())
-	go func() {
-		// Process registra a falha e agenda a próxima tentativa; o erro já foi logado.
+	// Process registra a falha e agenda a próxima tentativa; o erro já foi logado.
+	// Um panic no processamento não derruba a API: o evento continua pendente e
+	// o reprocessador o retoma.
+	safego.Go("salesforce_webhook_process", func() {
 		_ = h.events.Process(processCtx, ev)
-	}()
+	})
 
 	c.JSON(http.StatusOK, gin.H{"status": "queued"})
 }
