@@ -181,7 +181,9 @@ func (m *Manager) TriggerAllMode(ctx context.Context, mode SyncMode) {
 
 	for _, src := range sources {
 		go func(s DataSource) {
-			defer safego.Recover("datasource_manual_sync_all", nil)
+			defer safego.Recover("datasource_manual_sync_all", func(error) {
+				observability.SyncRunsTotal.WithLabelValues(s.Name(), triggerManual, "failure").Inc()
+			})
 			if err := m.syncWithRetryMode(ctx, s, triggerManual, mode); err != nil {
 				log.Error().Err(err).Str("source", s.Name()).Msg("datasource: sync manual (all) falhou")
 			}
@@ -204,7 +206,9 @@ func (m *Manager) TriggerSyncMode(ctx context.Context, sourceName string, mode S
 	for _, src := range m.sources {
 		if src.Name() == sourceName || string(src.Source()) == sourceName {
 			go func(s DataSource) {
-				defer safego.Recover("datasource_manual_sync", nil)
+				defer safego.Recover("datasource_manual_sync", func(error) {
+					observability.SyncRunsTotal.WithLabelValues(s.Name(), triggerManual, "failure").Inc()
+				})
 				if err := m.syncWithRetryMode(ctx, s, triggerManual, mode); err != nil {
 					log.Error().Err(err).Str("source", s.Name()).Msg("datasource: sync manual falhou")
 				}
