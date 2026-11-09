@@ -23,6 +23,8 @@ type appGoAPIFetcher interface {
 type appGoAPIItemRepo interface {
 	UpsertBatch(ctx context.Context, items []*models.CatalogItem) (int, error)
 	SoftDeleteActiveNotIn(ctx context.Context, source models.ItemSource, keepExternalIDs []string) (int64, error)
+	RecordSyncEvent(ctx context.Context, event *models.SyncEvent) (int64, error)
+	UpdateSyncEvent(ctx context.Context, id int64, status models.SyncEventStatus, processed, failed int, errMsg string, durationMs int) error
 }
 
 // AppGoAPIDataSource sincroniza cursos, vagas e MEI do app-go-api.
@@ -50,26 +52,63 @@ func (s *AppGoAPIDataSource) SyncInterval() time.Duration {
 	return s.syncInterval
 }
 
-// Sync sincroniza cursos, vagas e MEI. Sempre busca desde o início (sem cursor por ora).
+// Sync sincroniza cursos, vagas e MEI. Sempre busca desde o início (sem cursor por ora),
+// por isso o evento gravado em sync_events é um full_sync da fonte composta app-go-api,
+// com os totais processados/falhados somados das três sub-syncs.
 func (s *AppGoAPIDataSource) Sync(ctx context.Context) error {
 	startedAt := time.Now()
+	eventID, recordErr := s.repo.RecordSyncEvent(ctx, &models.SyncEvent{
+		Source:    models.SourceAppGoAPI,
+		EventType: models.SyncTypeFullSync,
+		Status:    models.SyncStatusStarted,
+		StartedAt: startedAt,
+	})
+	if recordErr != nil {
+		log.Warn().Err(recordErr).Msg("appgoapi datasource: falha ao registrar evento de sync")
+	}
 
 	var errs []error
-	if err := s.syncCourses(ctx); err != nil {
-		log.Error().Err(err).Msg("appgoapi datasource: erro ao sincronizar cursos")
-		errs = append(errs, fmt.Errorf("cursos: %w", err))
+	processed, failed := 0, 0
+	subSyncs := []struct {
+		label  string
+		logMsg string
+		run    func(context.Context) (int, int, error)
+	}{
+		{"cursos", "appgoapi datasource: erro ao sincronizar cursos", s.syncCourses},
+		{"vagas", "appgoapi datasource: erro ao sincronizar vagas", s.syncJobs},
+		{"mei", "appgoapi datasource: erro ao sincronizar MEI", s.syncMEI},
 	}
-	if err := s.syncJobs(ctx); err != nil {
-		log.Error().Err(err).Msg("appgoapi datasource: erro ao sincronizar vagas")
-		errs = append(errs, fmt.Errorf("vagas: %w", err))
-	}
-	if err := s.syncMEI(ctx); err != nil {
-		log.Error().Err(err).Msg("appgoapi datasource: erro ao sincronizar MEI")
-		errs = append(errs, fmt.Errorf("mei: %w", err))
+	for _, sub := range subSyncs {
+		p, f, err := sub.run(ctx)
+		processed += p
+		failed += f
+		if err != nil {
+			log.Error().Err(err).Msg(sub.logMsg)
+			errs = append(errs, fmt.Errorf("%s: %w", sub.label, err))
+		}
 	}
 
-	log.Info().Dur("duration", time.Since(startedAt)).Msg("appgoapi datasource: sync concluído")
-	return joinSyncErrors(errs)
+	syncErr := joinSyncErrors(errs)
+	finalStatus := models.SyncStatusCompleted
+	errMsg := ""
+	if syncErr != nil {
+		finalStatus = models.SyncStatusFailed
+		errMsg = syncErr.Error()
+	}
+
+	durationMs := int(time.Since(startedAt).Milliseconds())
+	if recordErr == nil {
+		if err := s.repo.UpdateSyncEvent(ctx, eventID, finalStatus, processed, failed, errMsg, durationMs); err != nil {
+			log.Warn().Err(err).Int64("event_id", eventID).Msg("appgoapi datasource: falha ao atualizar evento de sync")
+		}
+	}
+
+	log.Info().
+		Int("processed", processed).
+		Int("failed", failed).
+		Int("duration_ms", durationMs).
+		Msg("appgoapi datasource: sync concluído")
+	return syncErr
 }
 
 func joinSyncErrors(errs []error) error {
@@ -86,10 +125,11 @@ func joinSyncErrors(errs []error) error {
 	return fmt.Errorf("appgoapi sync: %s", msg)
 }
 
-func (s *AppGoAPIDataSource) syncCourses(ctx context.Context) error {
+// syncCourses retorna os itens gravados, os que falharam ao gravar e o erro da sub-sync.
+func (s *AppGoAPIDataSource) syncCourses(ctx context.Context) (processed, failed int, err error) {
 	allCourses, err := s.fetchAllCourses(ctx)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 
 	items := make([]*models.CatalogItem, 0, len(allCourses))
@@ -104,9 +144,9 @@ func (s *AppGoAPIDataSource) syncCourses(ctx context.Context) error {
 		items = append(items, mapCourse(c))
 	}
 
-	processed, err := s.repo.UpsertBatch(ctx, items)
+	processed, err = s.repo.UpsertBatch(ctx, items)
 	if err != nil {
-		return err
+		return 0, len(items), err
 	}
 
 	var orphans int64
@@ -118,7 +158,7 @@ func (s *AppGoAPIDataSource) syncCourses(ctx context.Context) error {
 	} else {
 		orphans, err = s.repo.SoftDeleteActiveNotIn(ctx, models.SourceCourses, keepIDs)
 		if err != nil {
-			return err
+			return processed, 0, err
 		}
 	}
 
@@ -127,13 +167,14 @@ func (s *AppGoAPIDataSource) syncCourses(ctx context.Context) error {
 		Int("skipped_non_indexable", skipped).
 		Int64("deactivated_orphans", orphans).
 		Msg("appgoapi: cursos sincronizados")
-	return nil
+	return processed, 0, nil
 }
 
-func (s *AppGoAPIDataSource) syncJobs(ctx context.Context) error {
+// syncJobs retorna os itens gravados, os que falharam ao gravar e o erro da sub-sync.
+func (s *AppGoAPIDataSource) syncJobs(ctx context.Context) (processed, failed int, err error) {
 	allJobs, err := s.fetchAllJobs(ctx)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 
 	items := make([]*models.CatalogItem, 0, len(allJobs))
@@ -148,9 +189,9 @@ func (s *AppGoAPIDataSource) syncJobs(ctx context.Context) error {
 		items = append(items, mapJob(j))
 	}
 
-	processed, err := s.repo.UpsertBatch(ctx, items)
+	processed, err = s.repo.UpsertBatch(ctx, items)
 	if err != nil {
-		return err
+		return 0, len(items), err
 	}
 
 	var orphans int64
@@ -162,7 +203,7 @@ func (s *AppGoAPIDataSource) syncJobs(ctx context.Context) error {
 	} else {
 		orphans, err = s.repo.SoftDeleteActiveNotIn(ctx, models.SourceJobs, keepIDs)
 		if err != nil {
-			return err
+			return processed, 0, err
 		}
 	}
 
@@ -171,13 +212,14 @@ func (s *AppGoAPIDataSource) syncJobs(ctx context.Context) error {
 		Int("skipped_non_indexable", skipped).
 		Int64("deactivated_orphans", orphans).
 		Msg("appgoapi: vagas sincronizadas")
-	return nil
+	return processed, 0, nil
 }
 
-func (s *AppGoAPIDataSource) syncMEI(ctx context.Context) error {
+// syncMEI retorna os itens gravados, os que falharam ao gravar e o erro da sub-sync.
+func (s *AppGoAPIDataSource) syncMEI(ctx context.Context) (processed, failed int, err error) {
 	allMEI, err := s.fetchAllMEI(ctx)
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 
 	items := make([]*models.CatalogItem, 0, len(allMEI))
@@ -192,9 +234,9 @@ func (s *AppGoAPIDataSource) syncMEI(ctx context.Context) error {
 		items = append(items, mapMEI(m))
 	}
 
-	processed, err := s.repo.UpsertBatch(ctx, items)
+	processed, err = s.repo.UpsertBatch(ctx, items)
 	if err != nil {
-		return err
+		return 0, len(items), err
 	}
 
 	var orphans int64
@@ -206,7 +248,7 @@ func (s *AppGoAPIDataSource) syncMEI(ctx context.Context) error {
 	} else {
 		orphans, err = s.repo.SoftDeleteActiveNotIn(ctx, models.SourceMEI, keepIDs)
 		if err != nil {
-			return err
+			return processed, 0, err
 		}
 	}
 
@@ -215,7 +257,7 @@ func (s *AppGoAPIDataSource) syncMEI(ctx context.Context) error {
 		Int("skipped_non_indexable", skipped).
 		Int64("deactivated_orphans", orphans).
 		Msg("appgoapi: MEI sincronizado")
-	return nil
+	return processed, 0, nil
 }
 
 func (s *AppGoAPIDataSource) fetchAllCourses(ctx context.Context) ([]clients.Course, error) {
