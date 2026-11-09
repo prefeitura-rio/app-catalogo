@@ -53,8 +53,7 @@ func TestRecover_DeliversPanicAsError(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() {
 		defer Recover("teste_recover_erro", func(err error) { errCh <- err })
-		var m map[string]int
-		m["x"] = 1 // panic: escrita em map nil
+		panic(errors.New("falha simulada"))
 	}()
 
 	select {
