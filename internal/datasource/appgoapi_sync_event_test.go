@@ -2,6 +2,7 @@ package datasource
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -19,6 +20,7 @@ type syncEventUpdate struct {
 	failed     int
 	errMsg     string
 	durationMs int
+	ctxErr     error
 }
 
 // syncEventRecordingRepo grava em memória os eventos de sync de app-go-api,
@@ -40,8 +42,8 @@ func (r *syncEventRecordingRepo) RecordSyncEvent(_ context.Context, event *model
 	return int64(41 + len(r.recorded)), nil
 }
 
-func (r *syncEventRecordingRepo) UpdateSyncEvent(_ context.Context, id int64, status models.SyncEventStatus, processed, failed int, errMsg string, durationMs int) error {
-	r.updates = append(r.updates, syncEventUpdate{id, status, processed, failed, errMsg, durationMs})
+func (r *syncEventRecordingRepo) UpdateSyncEvent(ctx context.Context, id int64, status models.SyncEventStatus, processed, failed int, errMsg string, durationMs int) error {
+	r.updates = append(r.updates, syncEventUpdate{id, status, processed, failed, errMsg, durationMs, ctx.Err()})
 	return r.updateErr
 }
 
@@ -86,6 +88,11 @@ func TestSync_RecordsCompletedSyncEventForAppGoAPI(t *testing.T) {
 	}
 	if ev.StartedAt.Before(before) {
 		t.Fatalf("event started_at=%v before sync start %v", ev.StartedAt, before)
+	}
+	// sync_events.metadata é JSONB NOT NULL: metadata nil viraria NULL no pgx e o INSERT falharia.
+	var meta map[string]any
+	if len(ev.Metadata) == 0 || json.Unmarshal(ev.Metadata, &meta) != nil {
+		t.Fatalf("event metadata=%q must be a JSON object", ev.Metadata)
 	}
 
 	if len(repo.updates) != 1 {
@@ -215,4 +222,38 @@ func TestSync_EventUpdateFailureDoesNotBreakSync(t *testing.T) {
 	if len(repo.updates) != 1 {
 		t.Fatalf("UpdateSyncEvent calls=%d want 1", len(repo.updates))
 	}
+}
+
+func TestSync_UpdatesEventEvenWhenContextIsCanceled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	fetcher := &cancelingFetcher{stubAppGoAPIFetcher: &stubAppGoAPIFetcher{}, cancel: cancel}
+	repo := newSyncEventRepo()
+	ds := NewAppGoAPIDataSource(fetcher, repo, time.Hour)
+
+	_ = ds.Sync(ctx)
+
+	if len(repo.updates) != 1 {
+		t.Fatalf("UpdateSyncEvent calls=%d want 1", len(repo.updates))
+	}
+	up := repo.updates[0]
+	if up.ctxErr != nil {
+		t.Fatalf("UpdateSyncEvent got a canceled context (%v): the event would stay 'started'", up.ctxErr)
+	}
+	if up.status != models.SyncStatusFailed {
+		t.Fatalf("final status=%q want %q", up.status, models.SyncStatusFailed)
+	}
+}
+
+// cancelingFetcher cancela o contexto da sync durante a listagem de MEI (a última
+// sub-sync) e devolve o erro de contexto, como o cliente HTTP faria.
+type cancelingFetcher struct {
+	*stubAppGoAPIFetcher
+	cancel context.CancelFunc
+}
+
+func (f *cancelingFetcher) GetMEIOpportunities(ctx context.Context, _ int, _ time.Time) ([]clients.MEIOpportunity, int, error) {
+	f.cancel()
+	return nil, 0, ctx.Err()
 }

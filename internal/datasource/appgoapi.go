@@ -52,6 +52,10 @@ func (s *AppGoAPIDataSource) SyncInterval() time.Duration {
 	return s.syncInterval
 }
 
+// syncEventUpdateTimeout limita a gravação do desfecho do evento de sync, que roda
+// mesmo com o contexto da sync já cancelado (para o evento não ficar em "started").
+const syncEventUpdateTimeout = 5 * time.Second
+
 // Sync sincroniza cursos, vagas e MEI. Sempre busca desde o início (sem cursor por ora),
 // por isso o evento gravado em sync_events é um full_sync da fonte composta app-go-api,
 // com os totais processados/falhados somados das três sub-syncs.
@@ -62,6 +66,8 @@ func (s *AppGoAPIDataSource) Sync(ctx context.Context) error {
 		EventType: models.SyncTypeFullSync,
 		Status:    models.SyncStatusStarted,
 		StartedAt: startedAt,
+		// sync_events.metadata é JSONB NOT NULL e o pgx envia RawMessage nil como NULL.
+		Metadata: json.RawMessage(`{}`),
 	})
 	if recordErr != nil {
 		log.Warn().Err(recordErr).Msg("appgoapi datasource: falha ao registrar evento de sync")
@@ -98,9 +104,11 @@ func (s *AppGoAPIDataSource) Sync(ctx context.Context) error {
 
 	durationMs := int(time.Since(startedAt).Milliseconds())
 	if recordErr == nil {
-		if err := s.repo.UpdateSyncEvent(ctx, eventID, finalStatus, processed, failed, errMsg, durationMs); err != nil {
+		updateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), syncEventUpdateTimeout)
+		if err := s.repo.UpdateSyncEvent(updateCtx, eventID, finalStatus, processed, failed, errMsg, durationMs); err != nil {
 			log.Warn().Err(err).Int64("event_id", eventID).Msg("appgoapi datasource: falha ao atualizar evento de sync")
 		}
+		cancel()
 	}
 
 	log.Info().
