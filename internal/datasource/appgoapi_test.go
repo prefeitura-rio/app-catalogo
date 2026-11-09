@@ -192,6 +192,16 @@ func (r *stubAppGoAPIRepo) SoftDeleteActiveNotIn(_ context.Context, source model
 	return r.orphanCount, nil
 }
 
+// RecordSyncEvent/UpdateSyncEvent são no-op aqui; os testes do evento de sync usam
+// syncEventRecordingRepo (appgoapi_sync_event_test.go), que os sobrescreve.
+func (r *stubAppGoAPIRepo) RecordSyncEvent(_ context.Context, _ *models.SyncEvent) (int64, error) {
+	return 0, nil
+}
+
+func (r *stubAppGoAPIRepo) UpdateSyncEvent(_ context.Context, _ int64, _ models.SyncEventStatus, _, _ int, _ string, _ int) error {
+	return nil
+}
+
 func TestSyncCourses_FiltersAndOrphanDelete(t *testing.T) {
 	t.Parallel()
 
@@ -206,8 +216,12 @@ func TestSyncCourses_FiltersAndOrphanDelete(t *testing.T) {
 	repo := &stubAppGoAPIRepo{orphanCount: 2}
 	ds := NewAppGoAPIDataSource(fetcher, repo, time.Hour)
 
-	if err := ds.syncCourses(context.Background()); err != nil {
+	processed, failed, err := ds.syncCourses(context.Background())
+	if err != nil {
 		t.Fatalf("syncCourses: %v", err)
+	}
+	if processed != 2 || failed != 0 {
+		t.Fatalf("processed=%d failed=%d want 2/0", processed, failed)
 	}
 
 	if len(repo.upserted) != 2 {
@@ -241,7 +255,7 @@ func TestSyncJobs_FiltersAndOrphanDelete(t *testing.T) {
 	repo := &stubAppGoAPIRepo{orphanCount: 1}
 	ds := NewAppGoAPIDataSource(fetcher, repo, time.Hour)
 
-	if err := ds.syncJobs(context.Background()); err != nil {
+	if _, _, err := ds.syncJobs(context.Background()); err != nil {
 		t.Fatalf("syncJobs: %v", err)
 	}
 
@@ -269,7 +283,7 @@ func TestSyncMEI_FiltersAndOrphanDelete(t *testing.T) {
 	repo := &stubAppGoAPIRepo{}
 	ds := NewAppGoAPIDataSource(fetcher, repo, time.Hour)
 
-	if err := ds.syncMEI(context.Background()); err != nil {
+	if _, _, err := ds.syncMEI(context.Background()); err != nil {
 		t.Fatalf("syncMEI: %v", err)
 	}
 
@@ -287,7 +301,7 @@ func TestSyncCourses_SkipsOrphanDeleteOnEmptyListing(t *testing.T) {
 	repo := &stubAppGoAPIRepo{}
 	ds := NewAppGoAPIDataSource(&stubAppGoAPIFetcher{}, repo, time.Hour)
 
-	if err := ds.syncCourses(context.Background()); err != nil {
+	if _, _, err := ds.syncCourses(context.Background()); err != nil {
 		t.Fatalf("syncCourses: %v", err)
 	}
 	if repo.orphanCalls != 0 {
@@ -304,7 +318,7 @@ func TestSyncJobs_SkipsOrphanDeleteOnEmptyListing(t *testing.T) {
 	repo := &stubAppGoAPIRepo{}
 	ds := NewAppGoAPIDataSource(&stubAppGoAPIFetcher{}, repo, time.Hour)
 
-	if err := ds.syncJobs(context.Background()); err != nil {
+	if _, _, err := ds.syncJobs(context.Background()); err != nil {
 		t.Fatalf("syncJobs: %v", err)
 	}
 	if repo.orphanCalls != 0 {
@@ -318,7 +332,7 @@ func TestSyncMEI_SkipsOrphanDeleteOnEmptyListing(t *testing.T) {
 	repo := &stubAppGoAPIRepo{}
 	ds := NewAppGoAPIDataSource(&stubAppGoAPIFetcher{}, repo, time.Hour)
 
-	if err := ds.syncMEI(context.Background()); err != nil {
+	if _, _, err := ds.syncMEI(context.Background()); err != nil {
 		t.Fatalf("syncMEI: %v", err)
 	}
 	if repo.orphanCalls != 0 {
@@ -338,7 +352,7 @@ func TestSyncCourses_SkipsOrphanDeleteWhenNoIndexableIDs(t *testing.T) {
 	repo := &stubAppGoAPIRepo{}
 	ds := NewAppGoAPIDataSource(fetcher, repo, time.Hour)
 
-	if err := ds.syncCourses(context.Background()); err != nil {
+	if _, _, err := ds.syncCourses(context.Background()); err != nil {
 		t.Fatalf("syncCourses: %v", err)
 	}
 	if len(repo.upserted) != 0 {
@@ -360,9 +374,12 @@ func TestSyncCourses_SkipsOrphanDeleteOnUpsertError(t *testing.T) {
 	repo := &stubAppGoAPIRepo{upsertErr: errors.New("db down")}
 	ds := NewAppGoAPIDataSource(fetcher, repo, time.Hour)
 
-	err := ds.syncCourses(context.Background())
+	processed, failed, err := ds.syncCourses(context.Background())
 	if err == nil {
 		t.Fatal("expected upsert error")
+	}
+	if processed != 0 || failed != 1 {
+		t.Fatalf("processed=%d failed=%d want 0/1 on upsert failure", processed, failed)
 	}
 	if repo.orphanCalls != 0 {
 		t.Fatalf("SoftDeleteActiveNotIn must not run after upsert failure, calls=%d", repo.orphanCalls)
@@ -376,7 +393,7 @@ func TestSyncCourses_PropagatesFetchError(t *testing.T) {
 	repo := &stubAppGoAPIRepo{}
 	ds := NewAppGoAPIDataSource(fetcher, repo, time.Hour)
 
-	if err := ds.syncCourses(context.Background()); err == nil {
+	if _, _, err := ds.syncCourses(context.Background()); err == nil {
 		t.Fatal("expected fetch error")
 	}
 	if len(repo.upserted) != 0 || repo.orphanCalls != 0 {
