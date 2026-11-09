@@ -67,6 +67,12 @@ var (
 		Name:      "http_client_retries_total",
 		Help:      "Total de novas tentativas (retries) por cliente HTTP",
 	}, []string{"client"})
+
+	GoroutinePanicsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "catalogo",
+		Name:      "goroutine_panics_total",
+		Help:      "Panics recuperados em goroutines soltas, por goroutine (o processo segue no ar)",
+	}, []string{"goroutine"})
 )
 
 func init() {
@@ -80,6 +86,7 @@ func init() {
 		SalesForceWebhookEventsTotal,
 		HTTPClientCircuitState,
 		HTTPClientRetriesTotal,
+		GoroutinePanicsTotal,
 	)
 }
 

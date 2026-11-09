@@ -14,6 +14,7 @@ import (
 
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
 	"github.com/prefeitura-rio/app-catalogo/internal/observability"
+	"github.com/prefeitura-rio/app-catalogo/internal/safego"
 )
 
 // WebhookEventStore é a fila durável dos eventos do webhook SalesForce.
@@ -175,7 +176,7 @@ func (s *SalesForceWebhookService) Process(ctx context.Context, ev *models.Sales
 		return nil
 	}
 	syncCtx, cancel := context.WithTimeout(ctx, s.cfg.ProcessTimeout)
-	syncErr := s.syncer.SyncRecord(syncCtx, ev.Slug)
+	syncErr := s.syncRecord(syncCtx, ev.Slug)
 	cancel()
 
 	// A gravação do resultado não pode depender do context da tentativa (que pode
@@ -213,6 +214,15 @@ func (s *SalesForceWebhookService) Process(ctx context.Context, ev *models.Sales
 		Int64("events_completed", completed).
 		Msg("webhook: registro sincronizado")
 	return nil
+}
+
+// syncRecord chama o syncer convertendo um panic em erro: o evento fica como
+// falha registrada, com a espera crescente das novas tentativas. Sem isso, o
+// reprocessador (que roda no processo da API) retomaria o evento depois do
+// lease e cairia no mesmo panic a cada reinício.
+func (s *SalesForceWebhookService) syncRecord(ctx context.Context, slug string) (err error) {
+	defer safego.Recover("salesforce_webhook_sync", func(panicErr error) { err = panicErr })
+	return s.syncer.SyncRecord(ctx, slug)
 }
 
 // ProcessDue assume os eventos pendentes vencidos e os processa em sequência.

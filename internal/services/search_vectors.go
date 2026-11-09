@@ -11,6 +11,7 @@ import (
 
 	"github.com/prefeitura-rio/app-catalogo/internal/cache"
 	"github.com/prefeitura-rio/app-catalogo/internal/clients"
+	"github.com/prefeitura-rio/app-catalogo/internal/safego"
 )
 
 // semanticVectorsTimeout limita a geração do embedding da query e do HyDE.
@@ -85,11 +86,15 @@ func (s *SearchService) generateSearchVectors(ctx context.Context, q string) (se
 	embedCh := make(chan vecResult, 1)
 	hydeCh := make(chan vecResult, 1)
 
+	// Um panic no encoder (SDK de terceiros) vira erro no canal: a busca cai
+	// para FTS em vez de derrubar o processo ou ficar esperando o canal.
 	go func() {
+		defer safego.Recover("search_query_embedding", func(err error) { embedCh <- vecResult{nil, err} })
 		v, err := s.encoder.EmbedQuery(parallelCtx, q)
 		embedCh <- vecResult{v, err}
 	}()
 	go func() {
+		defer safego.Recover("search_hyde", func(err error) { hydeCh <- vecResult{nil, err} })
 		hydeDoc, err := s.encoder.GenerateHyDE(parallelCtx, q)
 		if err != nil {
 			hydeCh <- vecResult{nil, err}
