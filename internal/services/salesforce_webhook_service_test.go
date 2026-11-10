@@ -504,3 +504,67 @@ func TestWebhookService_QueueMetricsKeepLastReadingWhenStatsFail(t *testing.T) {
 		t.Fatalf("falha de leitura não deveria zerar os gauges: got pending=%v failing=%v age=%v", p, f, age)
 	}
 }
+
+// panickingSyncer entra em panic nas primeiras panics chamadas.
+type panickingSyncer struct {
+	mu     sync.Mutex
+	panics int
+	calls  int
+}
+
+func (s *panickingSyncer) SyncRecord(_ context.Context, _ string) error {
+	s.mu.Lock()
+	s.calls++
+	call := s.calls
+	s.mu.Unlock()
+	if call <= s.panics {
+		panic("falha simulada no sync do registro")
+	}
+	return nil
+}
+
+// Um panic ao sincronizar vira falha registrada, com espera crescente: nem a
+// tentativa do handler nem a do reprocessador (que roda no processo da API)
+// derrubam o processo, e o evento não volta a cada reinício (DEV-438).
+func TestWebhookService_SyncPanicIsRecordedAsFailure(t *testing.T) {
+	ctx := context.Background()
+	store := newMemWebhookStore()
+	syncer := &panickingSyncer{panics: 2}
+	svc := NewSalesForceWebhookService(store, syncer, testWebhookConfig)
+
+	ev, created, err := svc.Enqueue(ctx, []byte(`{"sobject":{"Slug":"servico-panic"}}`), "servico-panic", "updated", "2026-10-28T12:00:00Z")
+	if err != nil || !created {
+		t.Fatalf("enqueue: created=%v err=%v", created, err)
+	}
+
+	// Tentativa do handler: panic vira erro e falha registrada.
+	if err := svc.Process(ctx, ev); err == nil {
+		t.Fatal("panic no sync deveria virar erro")
+	}
+	got := store.get(ev.ID)
+	if got.ev.Status != models.WebhookEventPending || !strings.Contains(got.lastError, "panic") {
+		t.Fatalf("esperava pendente com last_error do panic: status=%s last_error=%q", got.ev.Status, got.lastError)
+	}
+	if want := store.now.Add(30 * time.Second); !got.ev.NextAttemptAt.Equal(want) {
+		t.Fatalf("próxima tentativa: esperava %v, got %v", want, got.ev.NextAttemptAt)
+	}
+
+	// Reprocessador: panic de novo, espera dobra.
+	store.advance(30 * time.Second)
+	if n, err := svc.ProcessDue(ctx); n != 1 || err != nil {
+		t.Fatalf("esperava 1 evento reprocessado, got %d (%v)", n, err)
+	}
+	got = store.get(ev.ID)
+	if want := store.now.Add(60 * time.Second); got.ev.Status != models.WebhookEventPending || !got.ev.NextAttemptAt.Equal(want) {
+		t.Fatalf("após 2º panic: status=%s next=%v (esperava %v)", got.ev.Status, got.ev.NextAttemptAt, want)
+	}
+
+	// Quando o sync volta a funcionar, o evento conclui.
+	store.advance(60 * time.Second)
+	if n, _ := svc.ProcessDue(ctx); n != 1 {
+		t.Fatalf("esperava 1 evento reprocessado, got %d", n)
+	}
+	if got := store.get(ev.ID); got.ev.Status != models.WebhookEventCompleted {
+		t.Fatalf("esperava concluído, status=%s", got.ev.Status)
+	}
+}

@@ -6,7 +6,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -95,33 +94,13 @@ type ServerSettings struct {
 	Port           int
 	RequestTimeout int
 	// TrustedProxies são os IPs/CIDRs dos proxies cujo X-Forwarded-For é
-	// aceito para resolver o IP do cliente (rate limiting e log de acesso).
+	// aceito para resolver o IP do cliente no log de acesso.
 	// Vazia, o IP é sempre o da conexão.
 	TrustedProxies []string
-	// RateLimitDisabled desliga o rate limiting em memória por IP da API
-	// (RATE_LIMIT_ENABLED=false), para quando o limite passar à borda (Cloud
-	// Armor ou Istio). O valor zero mantém o limiter ligado.
-	RateLimitDisabled bool
 	// MetricsPort é a porta em que a API expõe GET /metrics (METRICS_PORT;
 	// 0 desativa). Fica separada de Port porque o Service e o gateway levam
 	// Port para fora do cluster.
 	MetricsPort int
-}
-
-// parseRateLimitEnabled interpreta RATE_LIMIT_ENABLED. Vazio vale true (o
-// limiter fica ligado); aceita os valores de strconv.ParseBool. Um valor
-// inválido é erro, para que um erro de digitação não desligue o limite em
-// silêncio.
-func parseRateLimitEnabled(raw string) (bool, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return true, nil
-	}
-	enabled, err := strconv.ParseBool(raw)
-	if err != nil {
-		return false, fmt.Errorf("RATE_LIMIT_ENABLED: %q não é booleano (use true ou false)", raw)
-	}
-	return enabled, nil
 }
 
 func (s *ServerSettings) Validate() error {
@@ -455,12 +434,6 @@ func Load() (*AppConfig, error) {
 	cfg.Auth.JWTIssuer = getEnv(v, "AUTH_JWT_ISSUER", keycloakIssuer(cfg.Keycloak.URL, cfg.Keycloak.Realm))
 	cfg.Auth.JWKSURL = getEnv(v, "AUTH_JWKS_URL", defaultJWKSURL(cfg.Auth.JWTIssuer))
 	cfg.Auth.AuthorizedParties = parseAuthorizedParties(getEnv(v, "AUTH_JWT_AUTHORIZED_PARTIES", defaultJWTAuthorizedParties))
-
-	rateLimitEnabled, err := parseRateLimitEnabled(getEnv(v, "RATE_LIMIT_ENABLED", "true"))
-	if err != nil {
-		return nil, fmt.Errorf("configuração de servidor inválida: %w", err)
-	}
-	cfg.Server.RateLimitDisabled = !rateLimitEnabled
 
 	if err := cfg.Database.Validate(); err != nil {
 		return nil, fmt.Errorf("configuração de banco inválida: %w", err)
