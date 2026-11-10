@@ -20,7 +20,9 @@ info:
 
     ## Rate Limiting
 
-    Limite global de **300 requisições/minuto por IP**. Excedido, retorna `429`.
+    O rate limiting é aplicado na borda (Cloud Armor / Istio), não por este
+    serviço. Excedido o limite, a borda responde `429` antes da requisição
+    chegar à aplicação.
 
     ## Headers de Resposta
 
@@ -111,8 +113,6 @@ paths:
                     items: []
         "400":
           $ref: "#/components/responses/BadRequest"
-        "429":
-          $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -169,8 +169,6 @@ paths:
                     items: []
         "400":
           $ref: "#/components/responses/BadRequest"
-        "429":
-          $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -233,8 +231,6 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "429":
-          $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -274,8 +270,6 @@ paths:
                 $ref: "#/components/schemas/RecommendationResponse"
         "400":
           $ref: "#/components/responses/BadRequest"
-        "429":
-          $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -301,8 +295,6 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
-        "429":
-          $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -583,8 +575,6 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "404":
           $ref: "#/components/responses/NotFound"
-        "429":
-          $ref: "#/components/responses/TooManyRequests"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1181,16 +1171,6 @@ components:
             $ref: "#/components/schemas/Error"
           example:
             error: "item não encontrado"
-
-    TooManyRequests:
-      description: Limite de 300 req/min por IP excedido
-      headers:
-        X-Request-ID:
-          $ref: "#/components/headers/X-Request-ID"
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/Error"
 
     InternalError:
       description: Erro interno do servidor

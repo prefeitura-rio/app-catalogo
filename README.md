@@ -50,8 +50,7 @@ O Adminer (UI do banco) em `http://localhost:8083`.
 | `KEYCLOAK_URL` / `KEYCLOAK_REALM` / `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` | Auth para chamadas ao app-rmi e app-go-api |
 | `AUTH_JWT_ISSUER` / `AUTH_JWKS_URL` | Emissor e JWKS para verificar o JWT de `X-Auth-Request-Token` (padrão derivado de `KEYCLOAK_URL`/`KEYCLOAK_REALM`; ver [Autenticação](#autenticação)) |
 | `AUTH_JWT_AUTHORIZED_PARTIES` | Clients do Keycloak (claim `azp`) aceitos, separados por vírgula (padrão `superapp`; ver [Autenticação](#autenticação)) |
-| `TRUSTED_PROXIES` | IPs/CIDRs dos proxies cujo `X-Forwarded-For` define o IP do cliente (rate limiting e log), separados por vírgula. Padrão: loopback, redes privadas e proxies do LB do Google (`35.191.0.0/16`, `130.211.0.0/22`); os manifests acrescentam o IP do LB de cada ambiente. Lista vazia (`,`) = sempre o IP da conexão |
-| `RATE_LIMIT_ENABLED` | Liga o rate limiting em memória da API, 300 req/min por IP (padrão `true`). `false` o desliga sem deploy de código, para quando o limite estiver na borda (Cloud Armor ou Istio); valor que não é booleano impede o startup. Ver a nota de rate limiting em [API](#api) |
+| `TRUSTED_PROXIES` | IPs/CIDRs dos proxies cujo `X-Forwarded-For` define o IP do cliente no log de acesso, separados por vírgula. Padrão: loopback, redes privadas e proxies do LB do Google (`35.191.0.0/16`, `130.211.0.0/22`); os manifests acrescentam o IP do LB de cada ambiente. Lista vazia (`,`) = sempre o IP da conexão |
 | `TRACING_ENABLED` / `TRACING_ENDPOINT` | Liga o envio de traces e o endpoint OTLP gRPC do SigNoz/OTel (opcional) |
 | `METRICS_PORT` | Porta em que a API expõe `GET /metrics`, separada da porta pública (padrão `9092`; `0` desativa; igual a `SERVER_PORT` impede o startup) |
 | `WORKER_METRICS_PORT` | Porta em que o worker expõe `GET /metrics` com as métricas de sync (padrão `9091`; `0` desativa) |
@@ -106,7 +105,7 @@ GET  /ready                      readiness probe (pinga o banco)
 
 As métricas Prometheus não ficam na porta pública: a API serve `GET /metrics` na porta `METRICS_PORT` (9092) e o worker na `WORKER_METRICS_PORT` (9091), sem Service que as leve ao gateway; o Prometheus do `istio-system` as coleta pelas anotações `prometheus.io/*` dos pods.
 
-> Rate limiting: 300 req/min por IP, em memória. O contador é de cada pod: com N réplicas o limite efetivo chega a N × 300, por isso o limite vai para a borda (Cloud Armor ou Istio). Enquanto a borda não existe, o limiter em memória fica ligado como fallback; quando ela estiver em produção, `RATE_LIMIT_ENABLED=false` no Deployment o desliga sem deploy de código (a API loga um aviso no startup e deixa de enviar `X-RateLimit-Limit`/`X-RateLimit-Remaining` e de responder 429). O estado em memória é limitado: as entradas com a janela de 1 min vencida são removidas (varredura na própria requisição, no máximo uma por minuto) e o limiter acompanha no máximo 100 000 IPs; cheio, um IP qualquer dá lugar ao novo. O IP é o do cliente real: o `X-Forwarded-For` só é lido quando a conexão vem de um proxy de `TRUSTED_PROXIES`, da direita para a esquerda, e o primeiro endereço que não é proxy é o cliente; o que o cliente escreve no cabeçalho (ou em `X-Real-IP`) não muda a chave.
+> Rate limiting: aplicado na borda (Cloud Armor / Istio), não neste serviço. O IP do cliente no log de acesso continua resolvido via `TRUSTED_PROXIES`: o `X-Forwarded-For` só é lido quando a conexão vem de um proxy confiável, da direita para a esquerda, e o primeiro endereço que não é proxy é o cliente; o que o cliente escreve no cabeçalho (ou em `X-Real-IP`) não muda o valor.
 
 ## Fontes de Dados
 
@@ -192,7 +191,7 @@ internal/
   cache/               Redis TTL cache genérico
   db/                  pool pgx/v5
   config/              Viper singleton
-  observability/       OTel tracing + Prometheus metrics + rate limiting
+  observability/       OTel tracing + Prometheus metrics
 db/migrations/         goose SQL migrations (.up.sql / .down.sql)
 k8s/
   staging/             Deployment + KEDA + Service

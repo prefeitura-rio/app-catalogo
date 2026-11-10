@@ -266,3 +266,56 @@ func TestSearchVectorsCacheKey(t *testing.T) {
 		t.Fatalf("chave inesperada: %q", a)
 	}
 }
+
+// panickingEncoder imita um SDK de terceiros que entra em panic.
+type panickingEncoder struct {
+	panicEmbed bool
+	panicHyDE  bool
+}
+
+func (e *panickingEncoder) EmbedQuery(_ context.Context, text string) ([]float32, error) {
+	if e.panicEmbed && text == "curso" {
+		panic("sdk: falha simulada no embedding")
+	}
+	return []float32{float32(len(text)), 1}, nil
+}
+
+func (e *panickingEncoder) GenerateHyDE(_ context.Context, _ string) (string, error) {
+	if e.panicHyDE {
+		panic("sdk: falha simulada no hyde")
+	}
+	return "documento hipotético", nil
+}
+
+// Um panic no embedding da query vira erro (a busca cai para FTS): nem derruba
+// o processo, nem deixa a requisição esperando o canal (DEV-438).
+func TestSemanticVectors_EmbeddingPanicBecomesError(t *testing.T) {
+	svc := newVectorsTestService(&panickingEncoder{panicEmbed: true}, newMemoryStore())
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.semanticVectors(context.Background(), "curso")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("panic no embedding da query deveria virar erro")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("busca ficou presa esperando a goroutine que entrou em panic")
+	}
+}
+
+// Um panic no HyDE só deixa o HyDE vazio, como qualquer falha dele.
+func TestSemanticVectors_HyDEPanicFallsBackToQueryOnly(t *testing.T) {
+	svc := newVectorsTestService(&panickingEncoder{panicHyDE: true}, newMemoryStore())
+
+	got, err := svc.semanticVectors(context.Background(), "curso")
+	if err != nil {
+		t.Fatalf("panic no HyDE não pode virar erro: %v", err)
+	}
+	if got.Query == "" || got.HyDE != "" {
+		t.Fatalf("esperado só o vetor da query: %+v", got)
+	}
+}

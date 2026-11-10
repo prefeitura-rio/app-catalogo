@@ -14,6 +14,7 @@ import (
 	"github.com/prefeitura-rio/app-catalogo/internal/clients"
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
 	"github.com/prefeitura-rio/app-catalogo/internal/repository"
+	"github.com/prefeitura-rio/app-catalogo/internal/safego"
 )
 
 type CitizenProfileService struct {
@@ -57,9 +58,9 @@ func (s *CitizenProfileService) GetOrSync(ctx context.Context, cpf string) (*mod
 		}
 		// Atualizar em background e retornar o dado existente
 		//nolint:gosec // G118: background RMI sync must outlive request-scoped ctx
-		go func() {
+		safego.Go("citizen_profile_refresh", func() {
 			_, _ = s.syncFromRMI(context.Background(), cpf, hash)
-		}()
+		})
 		return profile, nil
 	}
 

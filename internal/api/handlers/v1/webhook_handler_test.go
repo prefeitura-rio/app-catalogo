@@ -283,3 +283,40 @@ func TestWebhook_SlugWithControlCharacterIsRejectedWith400(t *testing.T) {
 		t.Fatalf("slug com caractere de controle não deveria ser gravado, got %v", q.enqueued)
 	}
 }
+
+// panickingWebhookQueue grava o evento, mas o processamento entra em panic.
+type panickingWebhookQueue struct {
+	*recordingWebhookQueue
+	panicked chan struct{}
+}
+
+func (q *panickingWebhookQueue) Process(_ context.Context, _ *models.SalesForceWebhookEvent) error {
+	defer close(q.panicked)
+	panic("falha simulada no processamento do webhook")
+}
+
+// Um panic no processamento assíncrono não derruba a API (sem o recover, o
+// binário de teste inteiro cai): o evento já está gravado e o reprocessador o
+// retoma (DEV-438).
+func TestWebhook_ProcessPanicDoesNotCrashProcess(t *testing.T) {
+	q := &panickingWebhookQueue{recordingWebhookQueue: newRecordingWebhookQueue(), panicked: make(chan struct{})}
+	h := NewWebhookHandler(q, testWebhookSecret)
+
+	w := postWebhook(t, h, webhookBody, signWebhook(webhookBody))
+	if w.Code != http.StatusOK || responseStatus(t, w)["status"] != "queued" {
+		t.Fatalf("esperava 200 queued, got %d (%s)", w.Code, w.Body.String())
+	}
+	select {
+	case <-q.panicked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("o processamento deveria ter rodado")
+	}
+	// Dá tempo ao panic de propagar (ou ser recuperado) antes de seguir.
+	time.Sleep(100 * time.Millisecond)
+
+	ok := newRecordingWebhookQueue()
+	w = postWebhook(t, NewWebhookHandler(ok, testWebhookSecret), webhookBody, signWebhook(webhookBody))
+	if w.Code != http.StatusOK {
+		t.Fatalf("a API deveria seguir atendendo depois do panic: %d", w.Code)
+	}
+}
