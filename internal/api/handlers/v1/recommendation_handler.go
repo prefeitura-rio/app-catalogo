@@ -150,8 +150,12 @@ func (h *RecommendationHandler) parseRequest(c *gin.Context) (*models.Recommenda
 	if err != nil {
 		return nil, err
 	}
+	recCtx, err := models.ParseRecommendationContext(c.Query("context"))
+	if err != nil {
+		return nil, err
+	}
 	req := &models.RecommendationRequest{
-		Context: models.RecommendationContext(c.DefaultQuery("context", string(models.ContextHomepage))),
+		Context: recCtx,
 		Types:   types,
 	}
 
