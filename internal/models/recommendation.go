@@ -1,5 +1,10 @@
 package models
 
+import (
+	"errors"
+	"strings"
+)
+
 // RecommendationContext indica em qual contexto a recomendação está sendo solicitada.
 type RecommendationContext string
 
@@ -8,6 +13,48 @@ const (
 	ContextAfterSearch RecommendationContext = "after_search"
 	ContextProfile     RecommendationContext = "profile"
 )
+
+// RecommendationContexts são os valores aceitos de `context` (enum
+// RecommendationContext do contrato OpenAPI).
+var RecommendationContexts = []RecommendationContext{ContextHomepage, ContextAfterSearch, ContextProfile}
+
+// ErrInvalidRecommendationContext indica um valor de `context` fora de
+// RecommendationContexts.
+var ErrInvalidRecommendationContext = errors.New("context inválido: valores aceitos são " + joinRecommendationContexts(RecommendationContexts))
+
+func joinRecommendationContexts(contexts []RecommendationContext) string {
+	strs := make([]string, len(contexts))
+	for i, c := range contexts {
+		strs[i] = string(c)
+	}
+	return strings.Join(strs, ", ")
+}
+
+// Valid informa se c é um dos valores do enum RecommendationContext
+// (comparação exata).
+func (c RecommendationContext) Valid() bool {
+	for _, known := range RecommendationContexts {
+		if c == known {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseRecommendationContext lê o parâmetro `context`. Ausente ou vazio vira
+// homepage (o default do contrato); valor fora do enum devolve
+// ErrInvalidRecommendationContext, para que a entrada do cliente nunca chegue
+// ao ranking nem seja ecoada na resposta.
+func ParseRecommendationContext(raw string) (RecommendationContext, error) {
+	if raw == "" {
+		return ContextHomepage, nil
+	}
+	c := RecommendationContext(raw)
+	if !c.Valid() {
+		return "", ErrInvalidRecommendationContext
+	}
+	return c, nil
+}
 
 // RecommendationRequest é o request de recomendação.
 type RecommendationRequest struct {

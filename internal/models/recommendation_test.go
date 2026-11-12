@@ -1,6 +1,9 @@
 package models
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestRecommendationRequest_Normalize_Limit(t *testing.T) {
 	cases := []struct {
@@ -40,5 +43,34 @@ func TestRecommendationRequest_Normalize_Context(t *testing.T) {
 	req.Normalize()
 	if req.Context != ContextProfile {
 		t.Errorf("Context informado → got %q, want %q", req.Context, ContextProfile)
+	}
+}
+
+func TestParseRecommendationContext(t *testing.T) {
+	valid := map[string]RecommendationContext{
+		"":             ContextHomepage,
+		"homepage":     ContextHomepage,
+		"after_search": ContextAfterSearch,
+		"profile":      ContextProfile,
+	}
+	for raw, want := range valid {
+		got, err := ParseRecommendationContext(raw)
+		if err != nil || got != want {
+			t.Errorf("%q: got %q, err=%v; want %q", raw, got, err, want)
+		}
+	}
+
+	for _, raw := range []string{"invalido", "HOMEPAGE", "Profile", " homepage", "homepage,profile", "after-search"} {
+		got, err := ParseRecommendationContext(raw)
+		if !errors.Is(err, ErrInvalidRecommendationContext) {
+			t.Errorf("%q: err=%v, want ErrInvalidRecommendationContext", raw, err)
+		}
+		if got != "" {
+			t.Errorf("%q: got %q, want vazio", raw, got)
+		}
+	}
+
+	if got := ErrInvalidRecommendationContext.Error(); got != "context inválido: valores aceitos são homepage, after_search, profile" {
+		t.Errorf("mensagem = %q", got)
 	}
 }
