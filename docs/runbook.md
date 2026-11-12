@@ -42,7 +42,6 @@ Este documento não traz segredos. Valores sensíveis vivem no Infisical (Secret
 | Redis (Valkey `redis` no namespace `catalogo`) | cache de busca, vetores e recomendação | a API segue sem cache (log `redis indisponível — cache desativado` no startup); mais carga no banco |
 | Keycloak (realm de `KEYCLOAK_REALM`) | JWKS para verificar o JWT; `client_credentials` para chamar app-rmi e app-go-api | rotas `/api/v1/*` respondem 401; recomendação personalizada e sync do app-go-api falham |
 | SalesForce / Carta de Serviços (API CloudHub, `SALESFORCE_INSTANCE_URL`) | sync da Carta (delta a cada 15 min) e o detalhe de cada serviço do webhook | a Carta fica desatualizada; eventos do webhook ficam pendentes com nova tentativa |
-| Typesense (`TYPESENSE_URL`, **temporário**) | Carta de Serviços enquanto a migração para o SalesForce não termina | a Carta fica desatualizada (delta a cada 30 min) |
 | app-go-api (`APP_GO_API_BASE_URL`) | cursos, vagas e MEI (sync completo a cada 30 min) | itens desses tipos ficam desatualizados; nada é apagado |
 | app-rmi (`RMI_BASE_URL`) | perfil do cidadão, no caminho síncrono de `GET /api/v1/recommendations` | o circuit breaker abre e a recomendação cai na genérica (sem personalização) |
 | Gemini (`GOOGLE_API_KEY`, opcional) | embeddings para busca semântica | a busca fica só FTS; o backfill para |
@@ -72,7 +71,7 @@ kubectl -n argocd get application catalogo -o jsonpath='{.status.sync.status} {.
 
 - `GET /health`: liveness, sempre 200 enquanto o processo responde.
 - `GET /ready`: readiness, faz ping no banco; 503 com `banco de dados indisponível` quando o PostgreSQL não responde.
-- `GET /api/v1/admin/sync/status` (papel admin): o último evento de sync por fonte (`salesforce`, `typesense`), com `last_status`, horários, `items_processed`, `items_failed` e `error_message`. O app-go-api não grava esse histórico; para ele, use as métricas e os logs do worker.
+- `GET /api/v1/admin/sync/status` (papel admin): o último evento de sync por fonte (`salesforce`; o `typesense` antigo pode aparecer, mas a fonte foi desligada), com `last_status`, horários, `items_processed`, `items_failed` e `error_message`. O app-go-api não grava esse histórico; para ele, use as métricas e os logs do worker.
 
 ### Métricas (`/metrics`, Prometheus)
 
@@ -117,7 +116,7 @@ time() - catalogo_sync_last_success_timestamp_seconds                           
   - startup: `verificação de JWT via JWKS ativada` (ou o erro de `AUTH_JWT_ISSUER/AUTH_JWKS_URL ... endpoints autenticados responderão 401`), `worker: <fonte> não configurado ou desabilitado, fonte ignorada`.
 
 ```bash
-kubectl -n catalogo logs deploy/catalogo-worker --since=1h | grep -E 'datasource|typesense|webhook'
+kubectl -n catalogo logs deploy/catalogo-worker --since=1h | grep -E 'datasource|webhook'
 kubectl -n catalogo logs -l app=catalogo --since=15m --max-log-requests=10 | grep '"level":"error"'
 ```
 
@@ -139,14 +138,14 @@ Não há regras de alerta do app-catalogo configuradas (nem no repositório nem 
 | Taxa de 5xx da API alta (`istio_requests_total`) | erro do banco, timeout de requisição (`SERVER_REQUEST_TIMEOUT`, 30 s) ou regressão de código | logs `"level":"error"` e traces no SigNoz; se começou com um deploy, [rollback](#rollback) |
 | Muitos 401 em `/api/v1/*` | token inválido ou expirado, `azp` fora de `AUTH_JWT_AUTHORIZED_PARTIES`, token sem CPF válido em `preferred_username` (rotas não admin), ou verificador sem emissor/JWKS | conferir no log de startup se o JWKS está ativado; conferir `AUTH_JWT_*`/`KEYCLOAK_*` e se o Keycloak responde |
 | Muitos 429 | rate limit na borda (Cloud Armor / Istio) | conferir as regras da borda e o tráfego por IP; este serviço não aplica limite em memória |
-| `catalogo_sync_runs_total{result="failure"}` subindo, ou `time() - catalogo_sync_last_success_timestamp_seconds` acima de 2× o intervalo da fonte | a fonte falhou nas 4 tentativas | logs do worker com o `source`; checar a dependência (SalesForce, Typesense, app-go-api, Keycloak); depois de corrigir, [sync manual](#sync-manual) |
+| `catalogo_sync_runs_total{result="failure"}` subindo, ou `time() - catalogo_sync_last_success_timestamp_seconds` acima de 2× o intervalo da fonte | a fonte falhou nas 4 tentativas | logs do worker com o `source`; checar a dependência (SalesForce, app-go-api, Keycloak); depois de corrigir, [sync manual](#sync-manual) |
 | `catalogo_sync_retries_total` subindo, sem falha final | falhas transitórias absorvidas pelas novas tentativas | só acompanhar; vira incidente se virar `failure` |
 | `catalogo_http_client_circuit_state{client="rmi"} == 2` | o app-rmi está fora ou lento; recomendações autenticadas caem na genérica | checar o app-rmi e o Keycloak (`client_credentials`); o circuito tenta de novo sozinho depois de 30 s |
 | `catalogo_http_client_circuit_state{client="appgoapi"} == 2` | o app-go-api está fora; o sync de cursos, vagas e MEI falha | checar o app-go-api; o circuito tenta de novo depois de 60 s; o próximo ciclo (30 min) ou um sync manual recupera |
 | `catalogo_salesforce_webhook_events_total{result="failed"}` subindo | o detalhe do serviço na Carta não pôde ser lido; os eventos ficam pendentes e voltam com espera que dobra (30 s até 1 h) | ver `last_error` na fila ([consulta](#fila-do-webhook-salesforce)); checar a API CloudHub |
 | Webhook respondendo 401 (`webhook: assinatura inválida`) ou `webhook não configurado` | HMAC não confere com `SALESFORCE_WEBHOOK_SECRET`, ou o segredo não está definido | conferir com o time da Carta qual segredo assina; o segredo novo entra pelo Infisical |
 | Webhook respondendo 503 | o evento não pôde ser gravado no banco; o remetente deve reenviar | checar o PostgreSQL; nada se perde se o remetente reenviar |
-| Busca com resultados de outra época, ou serviços faltando | Carta desatualizada (Typesense ou SalesForce) ou cache antigo (TTL de 60 s) | `GET /api/v1/admin/sync/status`; [sync manual](#sync-manual); full da Carta se a hierarquia ou os órgãos estão vazios |
+| Busca com resultados de outra época, ou serviços faltando | Carta desatualizada (SalesForce) ou cache antigo (TTL de 60 s) | `GET /api/v1/admin/sync/status`; [sync manual](#sync-manual); full da Carta se a hierarquia ou os órgãos estão vazios |
 | KEDA no `fallback` (réplicas fixas) | o Prometheus do `istio-system` não responde à query do ScaledObject | `kubectl -n catalogo describe scaledobject catalogo-scaled-object`; o serviço segue com 1 (staging) ou 2 (produção) réplicas |
 
 ## Rotina de incidente
@@ -155,7 +154,7 @@ Não há regras de alerta do app-catalogo configuradas (nem no repositório nem 
 
 1. Começou com um deploy? Compare o horário com o último run de `deploy-staging.yaml` (staging) ou `release.yaml` (produção) e com `kubectl argo rollouts get rollout catalogo -n catalogo`. Se sim, avalie o [rollback](#rollback) antes de investigar.
 2. Os pods estão Ready? `kubectl -n catalogo get pods`; `/ready` 503 = banco.
-3. Qual superfície falha? Busca/recomendação (API, banco, Redis, RMI), dados desatualizados (worker e fontes) ou Carta (webhook e SalesForce/Typesense).
+3. Qual superfície falha? Busca/recomendação (API, banco, Redis, RMI), dados desatualizados (worker e fontes) ou Carta (webhook e SalesForce).
 4. Erros nos logs e traces do SigNoz no período, filtrando `"level":"error"` e o `request_id` de uma requisição que falhou.
 5. Registre o que viu (horários, versão, métricas) na issue do incidente, sem token, CPF ou outro dado pessoal.
 
@@ -206,8 +205,8 @@ curl -sS -H "X-Auth-Request-Token: Bearer $TOKEN" \
 Pontos de atenção:
 
 - A sync manual roda **no pod da API** que recebeu a chamada, com as mesmas novas tentativas da agendada. O resultado aparece nos logs desse pod (`datasource: sync manual falhou`), em `catalogo_sync_runs_total{trigger="manual"}` do `/metrics` da API e, para o SalesForce, em `/admin/sync/status`.
-- A API só conhece as fontes `salesforce` e `app-go-api`, e só quando configuradas (`SALESFORCE_INSTANCE_URL` com `SALESFORCE_SYNC_ENABLED`; `APP_GO_API_BASE_URL` com `APP_GO_API_SYNC_ENABLED`). Para `source=typesense`, uma fonte desconhecida ou uma não configurada a resposta é 400 e nada roda; `available_sources` lista as fontes que aquele pod dispara.
-- O **Typesense** sincroniza só no worker: o worker faz uma sync ao subir, então reiniciá-lo (`kubectl -n catalogo rollout restart deploy/catalogo-worker`, ação de quem tem escrita no cluster) força a sync. Ela é delta desde o último evento `completed` do `typesense` em `sync_events`; vira full quando o evento mais recente do `typesense` não é `completed` (ou não existe).
+- A API só conhece as fontes `salesforce` e `app-go-api`, e só quando configuradas (`SALESFORCE_INSTANCE_URL` com `SALESFORCE_SYNC_ENABLED`; `APP_GO_API_BASE_URL` com `APP_GO_API_SYNC_ENABLED`). Para `source=typesense` (fonte legada desligada), uma fonte desconhecida ou uma não configurada a resposta é 400 e nada roda; `available_sources` lista as fontes que aquele pod dispara.
+- O **Typesense** foi desligado: nem a API nem o worker o sincronizam, e as variáveis `TYPESENSE_*` que ainda estiverem no Secret são ignoradas.
 
 ### Fila do webhook SalesForce
 
@@ -267,7 +266,6 @@ Os valores vêm do Secret `catalogo-secrets` (sincronizado do Infisical pelo ope
 | Variável | Padrão | Efeito |
 |----------|--------|--------|
 | `SALESFORCE_SYNC_ENABLED` | `true` | sync da Carta pelo SalesForce (exige `SALESFORCE_INSTANCE_URL`); `false` tira a fonte do worker e da sync manual |
-| `TYPESENSE_SYNC_ENABLED` | `true` | sync da Carta pelo Typesense (exige `TYPESENSE_URL` e `TYPESENSE_API_KEY`) |
 | `APP_GO_API_SYNC_ENABLED` | `true` | sync de cursos, vagas e MEI (exige `APP_GO_API_BASE_URL`) |
 | `TRACING_ENABLED` | `false` (`true` nos manifests) | envio de traces ao SigNoz |
 | `GOOGLE_API_KEY` | vazio | presente, liga a busca semântica e o backfill de embeddings |
@@ -293,8 +291,6 @@ Os valores vêm do Secret `catalogo-secrets` (sincronizado do Infisical pelo ope
 |----------|--------|
 | `SALESFORCE_INSTANCE_URL`, `SALESFORCE_BASE_SERVICE_URL` | vazio, `https://prefeitura.rio` |
 | `SALESFORCE_SYNC_INTERVAL`, `SALESFORCE_DETAIL_CONCURRENCY` | `15m`, `8` |
-| `TYPESENSE_URL`, `TYPESENSE_API_KEY`, `TYPESENSE_COLLECTION` | vazio, vazio, `prefrio_services_base` |
-| `TYPESENSE_SYNC_INTERVAL` | `30m` |
 | `APP_GO_API_BASE_URL`, `APP_GO_API_SYNC_INTERVAL` | vazio, `30m` |
 | `RMI_BASE_URL` | vazio |
 | `CITIZEN_PROFILE_STALE_THRESHOLD`, `CITIZEN_PROFILE_SYNC_INTERVAL` | `1h`, `24h` |

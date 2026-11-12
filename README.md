@@ -111,10 +111,11 @@ As métricas Prometheus não ficam na porta pública: a API serve `GET /metrics`
 
 | Fonte | Entidades | Estratégia |
 |-------|-----------|------------|
-| Typesense | Carta de Serviços (**temporário**) | Delta sync por `last_update` (unix) a cada 30min; full sync na 1ª execução. Ativo enquanto a migração para o SalesForce não é concluída |
-| SalesForce | Carta de Serviços (**futuro**) | Delta sync por `LastModifiedDate` + webhooks HMAC-SHA256; em migração a partir do Typesense |
+| SalesForce | Carta de Serviços | Delta sync por `LastModifiedDate` + webhooks HMAC-SHA256 |
 | app-go-api | Cursos, Vagas, MEI | Full sync paginado (delta via `updated_since` ainda não ativado) |
 | app-rmi | Perfil do cidadão | Demand-driven: busca síncrona no primeiro acesso; refresh em background quando stale |
+
+O Typesense, fonte temporária da Carta antes do SalesForce, foi desligado: não há mais código nem configuração dele. As linhas antigas com `source = 'typesense'` seguem no banco, inativas e fora da busca (migration `000012`).
 
 ### Testes de contrato (app-go-api e app-rmi)
 

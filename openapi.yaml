@@ -637,7 +637,7 @@ paths:
         Dispara uma sincronização ad-hoc em background e retorna imediatamente.
         Se `source` for omitido, sincroniza todas as fontes registradas na API.
         A API registra só `salesforce` e `app-go-api`, e cada uma só quando configurada; o Typesense
-        sincroniza apenas no worker. Fonte desconhecida ou não registrada na API responde 400 com
+        é fonte legada desligada. Fonte desconhecida ou não registrada na API responde 400 com
         `available_sources` (as fontes que a API dispara) e nada é disparado.
         Com `mode=full`, as fontes que têm sincronização completa (Carta de Serviços) reprocessam
         todos os itens, ignorando o cursor incremental; as demais executam a sync normal.
@@ -1253,7 +1253,7 @@ components:
       description: |
         Fonte de origem do item:
         - `salesforce`: Carta de Serviços (API CloudHub)
-        - `typesense`: Carta de Serviços temporária (Typesense)
+        - `typesense`: legado, Carta via Typesense (fonte desligada; só itens antigos e inativos)
         - `courses`: Cursos do app-go-api
         - `jobs`: Vagas do app-go-api
         - `mei`: MEI do app-go-api
