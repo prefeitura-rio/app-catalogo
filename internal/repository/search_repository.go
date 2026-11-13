@@ -24,6 +24,18 @@ type SearchResult struct {
 	Headline string
 }
 
+// acessibilidadeExclusivoPCD é o valor de acessibilidade_pcd (app-go-api) das
+// vagas exclusivas para PCD, as únicas que pcd=true devolve (openapi.yaml).
+const acessibilidadeExclusivoPCD = "exclusivo_pcd"
+
+// jobSalaryExpr lê valor_vaga sem quebrar a query quando o valor não é número.
+const jobSalaryExpr = "(CASE WHEN jsonb_typeof(ci.source_data->'valor_vaga') = 'number' THEN (ci.source_data->'valor_vaga')::float8 END)"
+
+// onlyForType aplica cond só aos itens do tipo t; os demais tipos passam.
+func onlyForType(t models.ItemType, cond string) string {
+	return fmt.Sprintf("(ci.type <> '%s' OR (%s))", t, cond)
+}
+
 // buildFilterClauses constrói as cláusulas WHERE dinâmicas para os filtros do SearchRequest.
 // startIdx é o índice do primeiro parâmetro posicional ($N) a ser usado.
 // Retorna (cláusulas AND, args, próximo índice livre).
@@ -73,6 +85,46 @@ func buildFilterClauses(req *models.SearchRequest, startIdx int) (string, []inte
 		clauses = append(clauses, fmt.Sprintf("$%d = ANY(ci.tags)", idx))
 		args = append(args, req.Filters.Segmento)
 		idx++
+	}
+
+	// Filtros de curso e de vaga leem o source_data gravado pelo sync do
+	// app-go-api e só restringem o tipo deles (SearchFilters: filtros não
+	// aplicáveis ao tipo são ignorados).
+	if turno := models.NormalizeTurno(req.Filters.Turno); turno != "" {
+		clauses = append(clauses, onlyForType(models.TypeCourse,
+			fmt.Sprintf("upper(ci.source_data->>'turno') = $%d", idx)))
+		args = append(args, turno)
+		idx++
+	}
+	if v := strings.TrimSpace(req.Filters.RegimeContratacao); v != "" {
+		clauses = append(clauses, onlyForType(models.TypeJob,
+			fmt.Sprintf("lower(unaccent(btrim(ci.source_data->'regime_contratacao'->>'descricao'))) = lower(unaccent($%d))", idx)))
+		args = append(args, v)
+		idx++
+	}
+	if v := strings.TrimSpace(req.Filters.ModeloTrabalho); v != "" {
+		clauses = append(clauses, onlyForType(models.TypeJob,
+			fmt.Sprintf("lower(unaccent(btrim(ci.source_data->'modelo_trabalho'->>'descricao'))) = lower(unaccent($%d))", idx)))
+		args = append(args, v)
+		idx++
+	}
+	if req.Filters.PCD != nil {
+		cond := fmt.Sprintf("ci.source_data->>'acessibilidade_pcd' = '%s'", acessibilidadeExclusivoPCD)
+		if !*req.Filters.PCD {
+			cond = fmt.Sprintf("ci.source_data->>'acessibilidade_pcd' IS DISTINCT FROM '%s'", acessibilidadeExclusivoPCD)
+		}
+		clauses = append(clauses, onlyForType(models.TypeJob, cond))
+	}
+	if minExcl, maxIncl, ok := models.FaixaSalarialBounds(req.Filters.FaixaSalarial); ok {
+		cond := fmt.Sprintf("%s > $%d::float8", jobSalaryExpr, idx)
+		args = append(args, minExcl)
+		idx++
+		if maxIncl > 0 {
+			cond += fmt.Sprintf(" AND %s <= $%d::float8", jobSalaryExpr, idx)
+			args = append(args, maxIncl)
+			idx++
+		}
+		clauses = append(clauses, onlyForType(models.TypeJob, cond))
 	}
 
 	sql := ""

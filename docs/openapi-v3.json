@@ -433,7 +433,7 @@
             }
           },
           {
-            "description": "[job] Faixa salarial: ate-2sm, 2-4sm, acima-4sm",
+            "description": "[job] Faixa salarial em salários mínimos (R$ 1.621): ate-2sm, 2-4sm, acima-4sm; outro valor → 400",
             "name": "faixa_salarial",
             "in": "query",
             "schema": {
@@ -1378,7 +1378,7 @@
             }
           },
           {
-            "description": "[job] Faixa salarial: ate-2sm, 2-4sm, acima-4sm",
+            "description": "[job] Faixa salarial em salários mínimos (R$ 1.621): ate-2sm, 2-4sm, acima-4sm; outro valor → 400",
             "name": "faixa_salarial",
             "in": "query",
             "schema": {

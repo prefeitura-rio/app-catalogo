@@ -45,7 +45,7 @@ func NewSearchHandler(searchSvc *services.SearchService, citizenSvc *services.Ci
 // @Param        regime_contratacao query  string    false  "[job] Regime: CLT, PJ, temporario"
 // @Param        modelo_trabalho    query  string    false  "[job] Modelo: presencial, remoto, hibrido"
 // @Param        pcd                query  bool      false  "[job] Apenas vagas exclusivas para PCD"
-// @Param        faixa_salarial     query  string    false  "[job] Faixa salarial: ate-2sm, 2-4sm, acima-4sm"
+// @Param        faixa_salarial     query  string    false  "[job] Faixa salarial em salários mínimos (R$ 1.621): ate-2sm, 2-4sm, acima-4sm; outro valor → 400"
 // @Param        canal_atendimento  query  string    false  "[service] Canal: presencial, digital, telefone"
 // @Param        tema               query  string    false  "[service] Tema do serviço"
 // @Param        segmento           query  string    false  "[mei_opportunity] Segmento do negócio"
@@ -83,6 +83,10 @@ func parseSearchQuery(c *gin.Context) (models.SearchRequest, error) {
 	if err != nil {
 		return models.SearchRequest{}, err
 	}
+	faixaSalarial, err := models.ParseFaixaSalarial(c.Query("faixa_salarial"))
+	if err != nil {
+		return models.SearchRequest{}, err
+	}
 	req := models.SearchRequest{
 		Types:   types,
 		Q:       c.Query("q"),
@@ -99,7 +103,7 @@ func parseSearchQuery(c *gin.Context) (models.SearchRequest, error) {
 		RegimeContratacao: c.Query("regime_contratacao"),
 		ModeloTrabalho:    c.Query("modelo_trabalho"),
 		PCD:               queryBool(c, "pcd"),
-		FaixaSalarial:     c.Query("faixa_salarial"),
+		FaixaSalarial:     faixaSalarial,
 		CanalAtendimento:  c.Query("canal_atendimento"),
 		Tema:              c.Query("tema"),
 		Segmento:          c.Query("segmento"),
