@@ -154,3 +154,25 @@ func (r *SalesForceWebhookRepository) DeleteCompletedBefore(ctx context.Context,
 	}
 	return tag.RowsAffected(), nil
 }
+
+// QueueStats conta os eventos pendentes, os pendentes que já falharam e a idade do
+// pendente mais antigo, para as métricas de acúmulo da fila.
+func (r *SalesForceWebhookRepository) QueueStats(ctx context.Context) (models.WebhookQueueStats, error) {
+	var (
+		stats     models.WebhookQueueStats
+		oldestAge float64
+	)
+	if err := r.db.QueryRow(ctx, `
+		SELECT COUNT(*),
+		       COUNT(*) FILTER (WHERE last_error IS NOT NULL),
+		       COALESCE(EXTRACT(EPOCH FROM NOW() - MIN(received_at)), 0)::double precision
+		FROM salesforce_webhook_events
+		WHERE status = 'pending'
+	`).Scan(&stats.Pending, &stats.Failing, &oldestAge); err != nil {
+		return models.WebhookQueueStats{}, err
+	}
+	if oldestAge > 0 {
+		stats.OldestPendingAge = time.Duration(oldestAge * float64(time.Second))
+	}
+	return stats, nil
+}
