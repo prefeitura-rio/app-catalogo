@@ -1017,7 +1017,7 @@ components:
       required: false
       schema:
         type: string
-      description: "[course] Turno das aulas (ex: `matutino`, `vespertino`, `noturno`)"
+      description: "[course] Turno das aulas (ex: `matutino`, `vespertino`, `noturno`; também `integral` e `livre`). Só restringe cursos."
 
     filterRegimeContratacao:
       name: regime_contratacao
@@ -1025,7 +1025,7 @@ components:
       required: false
       schema:
         type: string
-      description: "[job] Regime de contratação (ex: `CLT`, `PJ`, `temporario`)"
+      description: "[job] Regime de contratação (ex: `CLT`, `PJ`, `temporario`), comparado sem acento e sem diferenciar maiúsculas. Só restringe vagas."
 
     filterModeloTrabalho:
       name: modelo_trabalho
@@ -1033,7 +1033,7 @@ components:
       required: false
       schema:
         type: string
-      description: "[job] Modelo de trabalho (ex: `presencial`, `remoto`, `hibrido`)"
+      description: "[job] Modelo de trabalho (ex: `presencial`, `remoto`, `hibrido`), comparado sem acento e sem diferenciar maiúsculas. Só restringe vagas."
 
     filterPCD:
       name: pcd
@@ -1041,7 +1041,7 @@ components:
       required: false
       schema:
         type: boolean
-      description: "[job] `true` para vagas exclusivas PCD"
+      description: "[job] `true` para vagas exclusivas PCD; `false` para as demais. Só restringe vagas."
 
     filterFaixaSalarial:
       name: faixa_salarial
@@ -1049,7 +1049,7 @@ components:
       required: false
       schema:
         type: string
-      description: "[job] Faixa salarial (ex: `ate-2sm`, `2-4sm`, `acima-4sm`)"
+      description: "[job] Faixa salarial em salários mínimos (R$ 1.621,00): `ate-2sm`, `2-4sm`, `acima-4sm`. Vagas sem valor não entram em faixa. Outro valor responde 400. Só restringe vagas."
 
     filterCanalAtendimento:
       name: canal_atendimento

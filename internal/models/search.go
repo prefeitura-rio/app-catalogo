@@ -1,6 +1,10 @@
 package models
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+)
 
 // SearchRequest é o corpo da requisição de busca.
 type SearchRequest struct {
@@ -56,6 +60,72 @@ type SearchFilters struct {
 
 	// MEI
 	Segmento string `json:"segmento"`
+}
+
+// SalarioMinimo é o salário mínimo nacional (R$) usado nas faixas de
+// faixa_salarial: R$ 1.621,00 a partir de 1º/01/2026 (Decreto nº 12.797/2025).
+const SalarioMinimo = 1621.0
+
+// Valores aceitos em faixa_salarial (openapi.yaml, filterFaixaSalarial).
+const (
+	FaixaSalarialAte2SM   = "ate-2sm"
+	FaixaSalarial2a4SM    = "2-4sm"
+	FaixaSalarialAcima4SM = "acima-4sm"
+)
+
+// ErrInvalidFaixaSalarial é devolvido quando faixa_salarial não é um dos valores do contrato.
+var ErrInvalidFaixaSalarial = errors.New("faixa_salarial inválida: valores aceitos são ate-2sm, 2-4sm, acima-4sm")
+
+// ParseFaixaSalarial normaliza faixa_salarial (sem espaços nas pontas, minúsculas).
+// Vazio é "sem filtro"; qualquer valor fora do contrato é erro.
+func ParseFaixaSalarial(raw string) (string, error) {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	if v == "" {
+		return "", nil
+	}
+	if _, _, ok := FaixaSalarialBounds(v); !ok {
+		return "", ErrInvalidFaixaSalarial
+	}
+	return v, nil
+}
+
+// FaixaSalarialBounds devolve o intervalo (min, max] de valor_vaga, em reais,
+// de uma faixa salarial. max = 0 quer dizer sem teto. Vaga sem valor (0) não
+// entra em faixa nenhuma, por isso min começa acima de zero.
+func FaixaSalarialBounds(faixa string) (minExclusive, maxInclusive float64, ok bool) {
+	switch faixa {
+	case FaixaSalarialAte2SM:
+		return 0, 2 * SalarioMinimo, true
+	case FaixaSalarial2a4SM:
+		return 2 * SalarioMinimo, 4 * SalarioMinimo, true
+	case FaixaSalarialAcima4SM:
+		return 4 * SalarioMinimo, 0, true
+	default:
+		return 0, 0, false
+	}
+}
+
+// NormalizeTurno converte o turno do contrato (matutino, vespertino, noturno)
+// para o valor gravado pelo app-go-api (MANHA, TARDE, NOITE, INTEGRAL, LIVRE).
+// Um valor desconhecido segue em maiúsculas e não casa com nenhum curso.
+func NormalizeTurno(raw string) string {
+	v := strings.ToLower(strings.TrimSpace(raw))
+	switch v {
+	case "":
+		return ""
+	case "matutino", "manha", "manhã":
+		return "MANHA"
+	case "vespertino", "tarde":
+		return "TARDE"
+	case "noturno", "noite":
+		return "NOITE"
+	case "integral":
+		return "INTEGRAL"
+	case "livre":
+		return "LIVRE"
+	default:
+		return strings.ToUpper(v)
+	}
 }
 
 // SearchResponse é a resposta paginada da busca.
