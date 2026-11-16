@@ -1420,8 +1420,9 @@ components:
           description: |
             Trechos do texto com o termo buscado destacado via `ts_headline`.
             Os matches aparecem entre tags `<mark>...</mark>`. Ausente nos itens que não
-            casam o FTS (os que vieram só das listas semânticas da busca híbrida) e
-            na busca sem `q`.
+            estão na lista FTS da busca híbrida (os que vieram só das listas semânticas,
+            inclusive um item que casa o FTS mas ficou fora das 50 primeiras posições
+            dele) e na busca sem `q`.
           examples:
             - ["Curso de <mark>empreendedorismo</mark> para iniciantes"]
         metadata:
