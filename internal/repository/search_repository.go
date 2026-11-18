@@ -24,6 +24,16 @@ type SearchResult struct {
 	Headline string
 }
 
+// searchEligibleWhere devolve o WHERE base de todas as buscas: item ativo, não
+// removido e vigente (inForceSQL), seguido dos filtros dinâmicos de filterSQL.
+func searchEligibleWhere(filterSQL string) string {
+	return `
+		ci.status = 'active'
+		AND ci.deleted_at IS NULL
+		AND ` + inForceSQL("ci.") + `
+		` + filterSQL
+}
+
 // buildFilterClauses constrói as cláusulas WHERE dinâmicas para os filtros do SearchRequest.
 // startIdx é o índice do primeiro parâmetro posicional ($N) a ser usado.
 // Retorna (cláusulas AND, args, próximo índice livre).
@@ -106,11 +116,7 @@ func searchOrderBy(hasQuery bool) string {
 func (r *SearchRepository) Search(ctx context.Context, req *models.SearchRequest) ([]*SearchResult, int, error) {
 	filterSQL, filterArgs, _ := buildFilterClauses(req, 2) // $1 reservado para a query
 
-	baseWhere := `
-		ci.status = 'active'
-		AND ci.deleted_at IS NULL
-		AND (ci.valid_until IS NULL OR ci.valid_until > NOW())
-		` + filterSQL
+	baseWhere := searchEligibleWhere(filterSQL)
 
 	var rankExpr, headlineExpr, tsCondition, orderBy string
 	var queryArg interface{}
@@ -149,11 +155,7 @@ func (r *SearchRepository) Search(ctx context.Context, req *models.SearchRequest
 	} else {
 		// Reconstrói filtros a partir de $1 já que não há queryArg
 		filterSQL, filterArgs, _ = buildFilterClauses(req, 1)
-		baseWhere = `
-			ci.status = 'active'
-			AND ci.deleted_at IS NULL
-			AND (ci.valid_until IS NULL OR ci.valid_until > NOW())
-			` + filterSQL
+		baseWhere = searchEligibleWhere(filterSQL)
 		countArgs = filterArgs
 	}
 
@@ -345,11 +347,7 @@ func (r *SearchRepository) SearchHybrid(ctx context.Context, req *models.SearchR
 	// Args: $1=expandedQuery, $2=rawQuery(trigram), $3=vector, $4...$N=filtros, $N+1=limit, $N+2=offset
 	filterSQL, filterArgs, nextIdx := buildFilterClauses(req, 4) // FTS=$1, trigram=$2, vector=$3
 
-	baseWhere := `
-		ci.status = 'active'
-		AND ci.deleted_at IS NULL
-		AND (ci.valid_until IS NULL OR ci.valid_until > NOW())
-		` + filterSQL
+	baseWhere := searchEligibleWhere(filterSQL)
 
 	offset := (req.Page - 1) * req.PerPage
 
@@ -370,11 +368,7 @@ func (r *SearchRepository) SearchHybridWithHyDE(ctx context.Context, req *models
 	// Args: $1=expandedQ, $2=rawQ(trigram), $3=queryVec, $4=hydeVec, $5...$N=filtros, $N+1=limit, $N+2=offset
 	filterSQL, filterArgs, nextIdx := buildFilterClauses(req, 5)
 
-	baseWhere := `
-		ci.status = 'active'
-		AND ci.deleted_at IS NULL
-		AND (ci.valid_until IS NULL OR ci.valid_until > NOW())
-		` + filterSQL
+	baseWhere := searchEligibleWhere(filterSQL)
 
 	offset := (req.Page - 1) * req.PerPage
 	mainArgs := make([]interface{}, 0, 4+len(filterArgs)+2)
