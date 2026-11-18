@@ -29,6 +29,7 @@ func TestCartaQueries_RequireValidityWindow(t *testing.T) {
 		"total de ListAllServices":                            {countAllServicesSQL, ""},
 		"lista de ListAllServices":                            {listAllServicesSQL, ""},
 		"detalhe (GetServiceDetail)":                          {getServiceDetailSQL, ""},
+		"destaques da home (ListHomeFeatured)":                {listHomeFeaturedSQL, "ci."},
 		"condição publicada sem alias (cartaPublishedSQL)":    {cartaPublishedSQL(""), ""},
 		"condição publicada com alias (cartaPublishedSQL ci)": {cartaPublishedSQL("ci."), "ci."},
 	}
@@ -247,5 +248,92 @@ func TestCartaRepo_HidesServicesOutOfValidity(t *testing.T) {
 	}
 	if themeCount != wantCount || themeSubthemes != 1 {
 		t.Errorf("tema: publishedServices=%d subthemesCount=%d, esperado %d e 1", themeCount, themeSubthemes, wantCount)
+	}
+}
+
+// Os destaques da home seguem a mesma condição das listas: aparecem só os
+// destaques cujo serviço está publicado e vigente, pelo slug ou por um alias
+// que resolve para ele; destaque de serviço com início futuro, vencido ou
+// ausente do catálogo some da home (DEV-628).
+func TestCartaRepo_HomeFeaturedHidesServicesOutOfValidity(t *testing.T) {
+	pool := testCatalogPool(t)
+	catalog := NewCatalogItemRepository(pool)
+	carta := NewCartaRepository(pool)
+	ctx := context.Background()
+
+	token := fmt.Sprintf("test-home-vig-%d", time.Now().UnixNano())
+	now := time.Now().UTC()
+	past := now.Add(-48 * time.Hour)
+	future := now.Add(48 * time.Hour)
+	expired := now.Add(-time.Hour)
+
+	t.Cleanup(func() {
+		bg := context.Background()
+		_, _ = pool.Exec(bg, `DELETE FROM carta_home_featured WHERE slug LIKE $1`, token+"%")
+		_, _ = pool.Exec(bg, `DELETE FROM carta_service_slug_aliases WHERE old_slug LIKE $1`, token+"%")
+		_, _ = pool.Exec(bg, `DELETE FROM catalog_items WHERE source = 'salesforce' AND external_id LIKE $1`, token+"%")
+	})
+
+	newItem := func(suffix string, from, until *time.Time) *models.CatalogItem {
+		slug := token + "-" + suffix
+		raw, err := json.Marshal(map[string]any{"slug": slug, "name": "Serviço " + suffix})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return &models.CatalogItem{
+			ExternalID:     slug,
+			Source:         models.SourceSalesForce,
+			Type:           models.TypeService,
+			Title:          "Serviço " + token + " " + suffix,
+			Status:         models.StatusActive,
+			Tags:           []string{},
+			Bairros:        []string{},
+			TargetAudience: json.RawMessage(`{}`),
+			SourceData:     raw,
+			ValidFrom:      from,
+			ValidUntil:     until,
+		}
+	}
+	if _, err := catalog.UpsertBatch(ctx, []*models.CatalogItem{
+		newItem("vigente", &past, &future),
+		newItem("semfrom", nil, nil),
+		newItem("futuro", &future, nil),
+		newItem("vencido", &past, &expired),
+	}); err != nil {
+		t.Fatalf("UpsertBatch: %v", err)
+	}
+	if err := carta.UpsertSlugAlias(ctx, token+"-antigo", token+"-vigente"); err != nil {
+		t.Fatalf("UpsertSlugAlias vigente: %v", err)
+	}
+	if err := carta.UpsertSlugAlias(ctx, token+"-antigo-vencido", token+"-vencido"); err != nil {
+		t.Fatalf("UpsertSlugAlias vencido: %v", err)
+	}
+
+	suffixes := []string{"futuro", "vigente", "vencido", "ausente", "antigo", "semfrom", "antigo-vencido"}
+	featured := make([]models.CartaHomeFeatured, 0, len(suffixes))
+	for i, suffix := range suffixes {
+		featured = append(featured, models.CartaHomeFeatured{
+			Slug:     token + "-" + suffix,
+			Position: i + 1,
+			Name:     "Destaque " + suffix,
+		})
+	}
+	if err := carta.ReplaceHomeFeatured(ctx, featured); err != nil {
+		t.Fatalf("ReplaceHomeFeatured: %v", err)
+	}
+
+	got, err := carta.ListHomeFeatured(ctx)
+	if err != nil {
+		t.Fatalf("ListHomeFeatured: %v", err)
+	}
+	slugs := make([]string, 0, len(got))
+	for _, f := range got {
+		if strings.HasPrefix(f.Slug, token) {
+			slugs = append(slugs, strings.TrimPrefix(f.Slug, token+"-"))
+		}
+	}
+	want := []string{"vigente", "antigo", "semfrom"}
+	if strings.Join(slugs, ",") != strings.Join(want, ",") {
+		t.Fatalf("ListHomeFeatured: destaques=%v, esperado %v (em ordem de position)", slugs, want)
 	}
 }

@@ -171,6 +171,30 @@ var (
 		WHERE ` + cartaPublishedSQL("") + `
 		  AND external_id = $1
 		LIMIT 1`
+
+	// listHomeFeaturedSQL lê a cópia editorial da home, mas só os destaques cujo
+	// serviço está publicado e vigente (cartaPublishedSQL), pelo slug canônico ou
+	// por um slug antigo que o alias resolve para ele (o detalhe redireciona).
+	// Fora disso o link do destaque levaria a um serviço inexistente (DEV-628).
+	listHomeFeaturedSQL = `
+		SELECT f.slug, f.position, f.name, f.summary,
+		       f.theme_slug, f.theme_name, f.subtheme_slug, f.subtheme_name,
+		       f.last_published_date, f.autoservice_category, f.synced_at
+		FROM carta_home_featured f
+		WHERE EXISTS (
+			SELECT 1
+			FROM catalog_items ci
+			WHERE ` + cartaPublishedSQL("ci.") + `
+			  AND (
+			    ci.external_id = f.slug
+			    OR ci.external_id IN (
+			      SELECT a.canonical_slug
+			      FROM carta_service_slug_aliases a
+			      WHERE a.old_slug = f.slug
+			    )
+			  )
+		)
+		ORDER BY f.position ASC, f.slug ASC`
 )
 
 // UpsertTheme grava/atualiza um tema e limpa soft-delete.
@@ -243,14 +267,10 @@ func (r *CartaRepository) ReplaceHomeFeatured(ctx context.Context, items []model
 	return tx.Commit(ctx)
 }
 
-// ListHomeFeatured retorna os destaques editoriais ordenados por position (desempate por slug).
+// ListHomeFeatured retorna os destaques editoriais cujo serviço está publicado e
+// vigente, ordenados por position (desempate por slug).
 func (r *CartaRepository) ListHomeFeatured(ctx context.Context) ([]models.CartaHomeFeatured, error) {
-	rows, err := r.db.Query(ctx, `
-		SELECT slug, position, name, summary,
-		       theme_slug, theme_name, subtheme_slug, subtheme_name,
-		       last_published_date, autoservice_category, synced_at
-		FROM carta_home_featured
-		ORDER BY position ASC, slug ASC`)
+	rows, err := r.db.Query(ctx, listHomeFeaturedSQL)
 	if err != nil {
 		return nil, err
 	}
