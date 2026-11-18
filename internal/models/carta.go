@@ -24,6 +24,16 @@ type CartaSubtheme struct {
 	DeletedAt         *time.Time `json:"-"`
 }
 
+// CartaHierarchyLabel propaga slug/nome de tema e subtema para serviços já indexados.
+// Usado no delta sync quando o CloudHub renomeia a hierarquia sem alterar LastModified dos serviços.
+type CartaHierarchyLabel struct {
+	ThemeSlug    string
+	ThemeName    string
+	SubthemeSlug string
+	SubthemeName string
+	ServiceSlugs []string
+}
+
 // CartaMeta espelha a paginação da API CloudHub.
 type CartaMeta struct {
 	Page       int `json:"page"`
