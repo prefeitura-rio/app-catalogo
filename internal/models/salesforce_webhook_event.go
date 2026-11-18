@@ -26,3 +26,13 @@ type SalesForceWebhookEvent struct {
 	// Eventos pendentes do mesmo slug recebidos até ele são cobertos pela sincronização.
 	ClaimedAt time.Time
 }
+
+// WebhookQueueStats resume a fila do webhook SalesForce para as métricas de acúmulo.
+type WebhookQueueStats struct {
+	// Pending é quantos eventos estão pendentes (novos, em tentativa ou à espera da próxima).
+	Pending int64
+	// Failing é quantos pendentes já falharam ao menos uma vez (last_error preenchido).
+	Failing int64
+	// OldestPendingAge é há quanto tempo o pendente mais antigo foi recebido; 0 sem pendentes.
+	OldestPendingAge time.Duration
+}

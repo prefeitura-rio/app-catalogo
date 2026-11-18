@@ -56,6 +56,24 @@ var (
 		Help:      "Eventos do webhook SalesForce por resultado (enqueued|duplicate|processed|failed)",
 	}, []string{"result"})
 
+	SalesForceWebhookPendingEvents = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "catalogo",
+		Name:      "salesforce_webhook_pending_events",
+		Help:      "Eventos do webhook SalesForce pendentes na fila (lidos do banco pelo reprocessador)",
+	})
+
+	SalesForceWebhookFailingEvents = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "catalogo",
+		Name:      "salesforce_webhook_failing_events",
+		Help:      "Eventos do webhook SalesForce pendentes que já falharam ao menos uma vez (last_error preenchido)",
+	})
+
+	SalesForceWebhookOldestPendingAge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "catalogo",
+		Name:      "salesforce_webhook_oldest_pending_age_seconds",
+		Help:      "Idade, em segundos, do evento pendente mais antigo do webhook SalesForce (0 sem pendentes)",
+	})
+
 	HTTPClientCircuitState = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "catalogo",
 		Name:      "http_client_circuit_state",
@@ -84,6 +102,9 @@ func init() {
 		SyncRetriesTotal,
 		SyncLastSuccessTimestamp,
 		SalesForceWebhookEventsTotal,
+		SalesForceWebhookPendingEvents,
+		SalesForceWebhookFailingEvents,
+		SalesForceWebhookOldestPendingAge,
 		HTTPClientCircuitState,
 		HTTPClientRetriesTotal,
 		GoroutinePanicsTotal,

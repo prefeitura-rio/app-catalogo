@@ -24,6 +24,7 @@ type WebhookEventStore interface {
 	Complete(ctx context.Context, ev *models.SalesForceWebhookEvent) (int64, error)
 	Fail(ctx context.Context, ev *models.SalesForceWebhookEvent, errMsg string, retryIn time.Duration) error
 	DeleteCompletedBefore(ctx context.Context, before time.Time) (int64, error)
+	QueueStats(ctx context.Context) (models.WebhookQueueStats, error)
 }
 
 // RecordSyncer sincroniza um serviço da Carta pelo slug. Precisa ser idempotente:
@@ -252,6 +253,7 @@ func (s *SalesForceWebhookService) Run(ctx context.Context, interval time.Durati
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	lastCleanup := time.Time{}
+	s.refreshQueueMetrics(ctx)
 
 	for {
 		select {
@@ -264,6 +266,7 @@ func (s *SalesForceWebhookService) Run(ctx context.Context, interval time.Durati
 			} else if n > 0 {
 				log.Info().Int("events", n).Msg("webhook: eventos pendentes reprocessados")
 			}
+			s.refreshQueueMetrics(ctx)
 			if time.Since(lastCleanup) >= time.Hour {
 				lastCleanup = time.Now()
 				if n, err := s.store.DeleteCompletedBefore(ctx, time.Now().Add(-s.cfg.Retention)); err != nil {
@@ -273,6 +276,28 @@ func (s *SalesForceWebhookService) Run(ctx context.Context, interval time.Durati
 				}
 			}
 		}
+	}
+}
+
+// RefreshQueueMetrics lê o estado da fila e publica os gauges de acúmulo
+// (catalogo_salesforce_webhook_pending_events, _failing_events e
+// _oldest_pending_age_seconds), base dos alertas de fila parada.
+func (s *SalesForceWebhookService) RefreshQueueMetrics(ctx context.Context) error {
+	stats, err := s.store.QueueStats(ctx)
+	if err != nil {
+		return err
+	}
+	observability.SalesForceWebhookPendingEvents.Set(float64(stats.Pending))
+	observability.SalesForceWebhookFailingEvents.Set(float64(stats.Failing))
+	observability.SalesForceWebhookOldestPendingAge.Set(stats.OldestPendingAge.Seconds())
+	return nil
+}
+
+// refreshQueueMetrics é RefreshQueueMetrics no laço do reprocessador: a falha só
+// é logada, e os gauges ficam com a última leitura bem-sucedida.
+func (s *SalesForceWebhookService) refreshQueueMetrics(ctx context.Context) {
+	if err := s.RefreshQueueMetrics(ctx); err != nil && ctx.Err() == nil {
+		log.Warn().Err(err).Msg("webhook: falha ao ler o estado da fila para as métricas")
 	}
 }
 
