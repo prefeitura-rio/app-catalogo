@@ -308,19 +308,37 @@ func (c *CartaServicosClient) ListSubthemes(ctx context.Context, themeSlug strin
 }
 
 // ListAllSubthemes pagina todos os subtemas de um tema.
+// Falha se o meta indicar itens mas a página vier vazia, ou se o total coletado
+// for menor que meta.total — evita soft-delete/hierarquia incompleta sob respostas truncadas.
 func (c *CartaServicosClient) ListAllSubthemes(ctx context.Context, themeSlug string) ([]CartaSubtheme, error) {
 	var all []CartaSubtheme
+	expectedTotal := -1
 	page := 1
 	for {
 		items, meta, err := c.ListSubthemes(ctx, themeSlug, page, cartaServicosDefaultPerPage)
 		if err != nil {
 			return nil, err
 		}
+		if page == 1 {
+			expectedTotal = meta.Total
+		}
+		if meta.Total > 0 && len(items) == 0 {
+			return nil, fmt.Errorf(
+				"carta-servicos: tema %q: meta.total=%d mas data vazia (page=%d)",
+				themeSlug, meta.Total, page,
+			)
+		}
 		all = append(all, items...)
 		if page >= meta.TotalPages || len(items) == 0 {
 			break
 		}
 		page++
+	}
+	if expectedTotal > 0 && len(all) < expectedTotal {
+		return nil, fmt.Errorf(
+			"carta-servicos: tema %q: esperava %d subtemas, obteve %d",
+			themeSlug, expectedTotal, len(all),
+		)
 	}
 	return all, nil
 }

@@ -167,22 +167,123 @@ func (r *CartaRepository) SoftDeleteThemesNotIn(ctx context.Context, keep []stri
 	return tag.RowsAffected(), err
 }
 
-// SoftDeleteSubthemesNotIn marca subtemas fora da lista como deletados.
-func (r *CartaRepository) SoftDeleteSubthemesNotIn(ctx context.Context, keep []string) (int64, error) {
+// PropagateHierarchyLabels atualiza theme/subtheme (slug + nome) em catalog_items e
+// carta_home_featured a partir da hierarquia CloudHub. Cobre renomes e mudanças de
+// vínculo sem depender do LastModified dos serviços.
+func (r *CartaRepository) PropagateHierarchyLabels(ctx context.Context, labels []models.CartaHierarchyLabel) (int64, error) {
+	var updated int64
+	for _, label := range labels {
+		if len(label.ServiceSlugs) == 0 {
+			continue
+		}
+		themeSlug := strings.TrimSpace(label.ThemeSlug)
+		subthemeSlug := strings.TrimSpace(label.SubthemeSlug)
+		themeName := strings.TrimSpace(label.ThemeName)
+		subthemeName := strings.TrimSpace(label.SubthemeName)
+		if themeSlug == "" || subthemeSlug == "" {
+			continue
+		}
+		if themeName == "" {
+			themeName = themeSlug
+		}
+		if subthemeName == "" {
+			subthemeName = subthemeSlug
+		}
+
+		tag, err := r.db.Exec(ctx, `
+			UPDATE catalog_items
+			SET
+				theme_slug = $1,
+				subtheme_slug = $2,
+				source_data = CASE
+					WHEN source_data IS NULL OR source_data = 'null'::jsonb THEN source_data
+					ELSE jsonb_set(jsonb_set(jsonb_set(jsonb_set(
+						source_data,
+						'{themeSlug}', to_jsonb($1::text), true),
+						'{themeName}', to_jsonb($3::text), true),
+						'{subthemeSlug}', to_jsonb($2::text), true),
+						'{subthemeName}', to_jsonb($4::text), true)
+				END,
+				tags = ARRAY_REMOVE(ARRAY[
+					NULLIF($3::text, ''),
+					NULLIF($4::text, ''),
+					COALESCE(
+						NULLIF(source_data#>>'{info,cost}', ''),
+						CASE
+							WHEN COALESCE((source_data#>>'{info,isFree}')::boolean, false) THEN 'Gratuito'
+							ELSE NULL
+						END
+					),
+					NULLIF(source_data->>'responsibleOrgUnitShortName', '')
+				], NULL),
+				updated_at = NOW()
+			WHERE source = 'salesforce'
+			  AND deleted_at IS NULL
+			  AND external_id = ANY($5)
+			  AND (
+				theme_slug IS DISTINCT FROM $1
+				OR subtheme_slug IS DISTINCT FROM $2
+				OR COALESCE(source_data->>'themeSlug', '') IS DISTINCT FROM $1
+				OR COALESCE(source_data->>'themeName', '') IS DISTINCT FROM $3
+				OR COALESCE(source_data->>'subthemeSlug', '') IS DISTINCT FROM $2
+				OR COALESCE(source_data->>'subthemeName', '') IS DISTINCT FROM $4
+			  )`,
+			themeSlug, subthemeSlug, themeName, subthemeName, label.ServiceSlugs,
+		)
+		if err != nil {
+			return updated, fmt.Errorf("propagar hierarquia no subtema %q: %w", subthemeSlug, err)
+		}
+		updated += tag.RowsAffected()
+
+		_, err = r.db.Exec(ctx, `
+			UPDATE carta_home_featured
+			SET
+				theme_slug = $1,
+				theme_name = $3,
+				subtheme_slug = $2,
+				subtheme_name = $4
+			WHERE slug = ANY($5)
+			  AND (
+				theme_slug IS DISTINCT FROM $1
+				OR subtheme_slug IS DISTINCT FROM $2
+				OR theme_name IS DISTINCT FROM $3
+				OR subtheme_name IS DISTINCT FROM $4
+			  )`,
+			themeSlug, subthemeSlug, themeName, subthemeName, label.ServiceSlugs,
+		)
+		if err != nil {
+			return updated, fmt.Errorf("propagar hierarquia no home_featured do subtema %q: %w", subthemeSlug, err)
+		}
+	}
+	return updated, nil
+}
+
+// SoftDeleteSubthemesNotInTheme marca subtemas do tema fora da lista keep como deletados.
+// Escopo por tema evita apagar subtemas de outros temas quando a listagem de um tema falha parcialmente.
+func (r *CartaRepository) SoftDeleteSubthemesNotInTheme(ctx context.Context, themeSlug string, keep []string) (int64, error) {
+	themeSlug = strings.TrimSpace(themeSlug)
+	if themeSlug == "" {
+		return 0, fmt.Errorf("theme slug vazio")
+	}
 	if len(keep) == 0 {
 		tag, err := r.db.Exec(ctx, `
 			UPDATE carta_subthemes SET deleted_at = NOW(), updated_at = NOW()
-			WHERE deleted_at IS NULL`)
+			WHERE deleted_at IS NULL AND theme_slug = $1`, themeSlug)
 		return tag.RowsAffected(), err
 	}
 	tag, err := r.db.Exec(ctx, `
 		UPDATE carta_subthemes SET deleted_at = NOW(), updated_at = NOW()
-		WHERE deleted_at IS NULL AND NOT (slug = ANY($1))`, keep)
+		WHERE deleted_at IS NULL AND theme_slug = $1 AND NOT (slug = ANY($2))`, themeSlug, keep)
 	return tag.RowsAffected(), err
 }
 
-// RefreshHierarchyCounts recalcula contagens a partir dos serviços ativos locais.
+// RefreshHierarchyCounts recria subtemas/temas órfãos a partir de catalog_items e recalcula contagens.
+// O heal cobre o caso em que serviços já têm theme_slug/subtheme_slug mas carta_subthemes foi soft-deleted.
 func (r *CartaRepository) RefreshHierarchyCounts(ctx context.Context) error {
+	if err := r.healHierarchyFromCatalogItems(ctx); err != nil {
+		return err
+	}
+
 	_, err := r.db.Exec(ctx, `
 		UPDATE carta_subthemes s SET
 			published_services = (
@@ -213,6 +314,69 @@ func (r *CartaRepository) RefreshHierarchyCounts(ctx context.Context) error {
 			updated_at = NOW()
 		WHERE t.deleted_at IS NULL`)
 	return err
+}
+
+// healHierarchyFromCatalogItems garante linhas ativas em carta_themes/carta_subthemes
+// para todo par (theme_slug, subtheme_slug) presente em serviços Salesforce ativos.
+func (r *CartaRepository) healHierarchyFromCatalogItems(ctx context.Context) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO carta_themes (slug, name, subthemes_count, published_services)
+		SELECT
+			ci.theme_slug,
+			COALESCE(
+				NULLIF(MAX(ci.source_data->>'themeName'), ''),
+				ci.theme_slug
+			),
+			0,
+			0
+		FROM catalog_items ci
+		WHERE ci.source = 'salesforce'
+		  AND ci.deleted_at IS NULL
+		  AND ci.status = 'active'
+		  AND ci.theme_slug IS NOT NULL
+		  AND ci.theme_slug <> ''
+		GROUP BY ci.theme_slug
+		ON CONFLICT (slug) DO UPDATE SET
+			deleted_at = NULL,
+			updated_at = NOW()`)
+	if err != nil {
+		return fmt.Errorf("heal temas a partir de catalog_items: %w", err)
+	}
+
+	_, err = r.db.Exec(ctx, `
+		INSERT INTO carta_subthemes (slug, theme_slug, name, published_services)
+		SELECT
+			sub.subtheme_slug,
+			sub.theme_slug,
+			sub.subtheme_name,
+			0
+		FROM (
+			SELECT DISTINCT ON (ci.subtheme_slug)
+				ci.subtheme_slug,
+				ci.theme_slug,
+				COALESCE(
+					NULLIF(ci.source_data->>'subthemeName', ''),
+					ci.subtheme_slug
+				) AS subtheme_name
+			FROM catalog_items ci
+			WHERE ci.source = 'salesforce'
+			  AND ci.deleted_at IS NULL
+			  AND ci.status = 'active'
+			  AND ci.subtheme_slug IS NOT NULL
+			  AND ci.subtheme_slug <> ''
+			  AND ci.theme_slug IS NOT NULL
+			  AND ci.theme_slug <> ''
+			ORDER BY ci.subtheme_slug, ci.updated_at DESC NULLS LAST, ci.id DESC
+		) sub
+		ON CONFLICT (slug) DO UPDATE SET
+			theme_slug = EXCLUDED.theme_slug,
+			name = EXCLUDED.name,
+			deleted_at = NULL,
+			updated_at = NOW()`)
+	if err != nil {
+		return fmt.Errorf("heal subtemas a partir de catalog_items: %w", err)
+	}
+	return nil
 }
 
 // ListThemes pagina temas ativos.

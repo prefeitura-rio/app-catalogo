@@ -236,7 +236,9 @@ type stubHierarchyRepo struct {
 	subthemes            []*models.CartaSubtheme
 	aliases              map[string]string
 	themeKeep            []string
-	subthemeKeep         []string
+	subthemeKeeps        map[string][]string
+	propagated           []models.CartaHierarchyLabel
+	propagateCalls       int
 	homeFeatured         []models.CartaHomeFeatured
 	replaceFeaturedCalls int
 	refreshCalls         int
@@ -244,6 +246,7 @@ type stubHierarchyRepo struct {
 	upsertSubErr         error
 	softThemeErr         error
 	softSubErr           error
+	propagateErr         error
 	refreshErr           error
 	replaceFeaturedErr   error
 }
@@ -280,14 +283,32 @@ func (h *stubHierarchyRepo) SoftDeleteThemesNotIn(ctx context.Context, keep []st
 	return 1, nil
 }
 
-func (h *stubHierarchyRepo) SoftDeleteSubthemesNotIn(ctx context.Context, keep []string) (int64, error) {
+func (h *stubHierarchyRepo) SoftDeleteSubthemesNotInTheme(ctx context.Context, themeSlug string, keep []string) (int64, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.softSubErr != nil {
 		return 0, h.softSubErr
 	}
-	h.subthemeKeep = append([]string{}, keep...)
+	if h.subthemeKeeps == nil {
+		h.subthemeKeeps = map[string][]string{}
+	}
+	h.subthemeKeeps[themeSlug] = append([]string{}, keep...)
 	return 1, nil
+}
+
+func (h *stubHierarchyRepo) PropagateHierarchyLabels(ctx context.Context, labels []models.CartaHierarchyLabel) (int64, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.propagateCalls++
+	if h.propagateErr != nil {
+		return 0, h.propagateErr
+	}
+	h.propagated = append([]models.CartaHierarchyLabel(nil), labels...)
+	var n int64
+	for _, label := range labels {
+		n += int64(len(label.ServiceSlugs))
+	}
+	return n, nil
 }
 
 func (h *stubHierarchyRepo) RefreshHierarchyCounts(ctx context.Context) error {
@@ -975,14 +996,95 @@ func TestFullSync_PersistsHierarchy(t *testing.T) {
 	if len(hier.themeKeep) != 2 {
 		t.Fatalf("themeKeep=%v", hier.themeKeep)
 	}
-	if len(hier.subthemeKeep) != 1 || hier.subthemeKeep[0] != "iptu" {
-		t.Fatalf("subthemeKeep=%v", hier.subthemeKeep)
+	if keep := hier.subthemeKeeps["tributos"]; len(keep) != 1 || keep[0] != "iptu" {
+		t.Fatalf("subthemeKeeps=%v", hier.subthemeKeeps)
+	}
+	if keep := hier.subthemeKeeps["saude"]; keep == nil || len(keep) != 0 {
+		t.Fatalf("saude subthemeKeeps=%v", hier.subthemeKeeps)
 	}
 	if hier.refreshCalls != 1 {
 		t.Fatalf("refreshCalls=%d", hier.refreshCalls)
 	}
 	if len(repo.upserted) != 1 || repo.upserted[0].ThemeSlug != "tributos" {
 		t.Fatalf("catalog theme_slug=%v", repo.upserted)
+	}
+}
+
+func TestFullSync_AbortsWhenSubthemesEmptyButCountPositive(t *testing.T) {
+	client := &stubCartaClient{
+		themes: []clients.CartaTheme{
+			{Slug: "transparencia-1", Name: "Transparência", SubthemesCount: 3, PublishedServices: 8},
+			{Slug: "tributos", Name: "Tributos", SubthemesCount: 1, PublishedServices: 1},
+		},
+		subthemes: map[string][]clients.CartaSubtheme{
+			"transparencia-1": {}, // resposta vazia inconsistente com SubthemesCount
+			"tributos":        {{Slug: "iptu", Name: "IPTU", PublishedServices: 1}},
+		},
+		services: map[string][]clients.CartaServiceListItem{
+			"iptu": {sampleListItem("svc-a", "2026-08-20T00:00:00.000Z")},
+		},
+		details: map[string]*clients.CartaServiceDetail{
+			"svc-a": sampleDetail("svc-a", "Serviço A"),
+		},
+	}
+	repo := &stubSyncRepo{}
+	hier := &stubHierarchyRepo{}
+	svc := newTestSyncWithHierarchy(client, repo, hier)
+
+	err := svc.FullSync(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "transparencia-1") || !strings.Contains(err.Error(), "vazia") {
+		t.Fatalf("err=%v", err)
+	}
+	if repo.cursor != nil {
+		t.Fatal("cursor não deve avançar com hierarquia incompleta")
+	}
+	if hier.subthemeKeeps != nil {
+		t.Fatalf("não deve soft-deletar subtemas após falha: %v", hier.subthemeKeeps)
+	}
+	if len(repo.orphanKept) != 0 {
+		t.Fatal("SoftDeleteActiveNotIn não deve rodar com hierarquia incompleta")
+	}
+}
+
+func TestFullSync_SoftDeletesSubthemesPerTheme(t *testing.T) {
+	client := &stubCartaClient{
+		themes: []clients.CartaTheme{
+			{Slug: "transparencia-1", Name: "Transparência", SubthemesCount: 2, PublishedServices: 2},
+			{Slug: "tributos", Name: "Tributos", SubthemesCount: 1, PublishedServices: 1},
+		},
+		subthemes: map[string][]clients.CartaSubtheme{
+			"transparencia-1": {
+				{Slug: "acesso-a-informacao", Name: "Acesso à informação", PublishedServices: 1},
+				{Slug: "anticorrupcao", Name: "Anticorrupção", PublishedServices: 1},
+			},
+			"tributos": {{Slug: "iptu", Name: "IPTU", PublishedServices: 1}},
+		},
+		services: map[string][]clients.CartaServiceListItem{
+			"acesso-a-informacao": {sampleListItem("svc-lai", "2026-08-20T00:00:00.000Z")},
+			"anticorrupcao":       {sampleListItem("svc-ac", "2026-08-20T00:00:00.000Z")},
+			"iptu":                {sampleListItem("svc-iptu", "2026-08-20T00:00:00.000Z")},
+		},
+		details: map[string]*clients.CartaServiceDetail{
+			"svc-lai":  sampleDetail("svc-lai", "LAI"),
+			"svc-ac":   sampleDetail("svc-ac", "AC"),
+			"svc-iptu": sampleDetail("svc-iptu", "IPTU"),
+		},
+	}
+	repo := &stubSyncRepo{}
+	hier := &stubHierarchyRepo{}
+	svc := newTestSyncWithHierarchy(client, repo, hier)
+
+	if err := svc.FullSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := hier.subthemeKeeps["transparencia-1"]; len(got) != 2 {
+		t.Fatalf("transparencia keep=%v", got)
+	}
+	if got := hier.subthemeKeeps["tributos"]; len(got) != 1 || got[0] != "iptu" {
+		t.Fatalf("tributos keep=%v", got)
+	}
+	if len(hier.subthemeKeeps) != 2 {
+		t.Fatalf("subthemeKeeps=%v", hier.subthemeKeeps)
 	}
 }
 
@@ -1221,11 +1323,54 @@ func TestDeltaSync_SkipsHierarchySoftDelete(t *testing.T) {
 	if len(hier.themes) == 0 || len(hier.subthemes) == 0 {
 		t.Fatal("expected hierarchy upserts on delta")
 	}
-	if hier.themeKeep != nil || hier.subthemeKeep != nil {
-		t.Fatalf("delta must not soft-delete hierarchy: themes=%v subs=%v", hier.themeKeep, hier.subthemeKeep)
+	if hier.themeKeep != nil || hier.subthemeKeeps != nil {
+		t.Fatalf("delta must not soft-delete hierarchy: themes=%v subs=%v", hier.themeKeep, hier.subthemeKeeps)
 	}
 	if hier.refreshCalls != 1 {
 		t.Fatalf("refreshCalls=%d", hier.refreshCalls)
+	}
+}
+
+func TestDeltaSync_PropagatesHierarchyRenameWithoutDetailFetch(t *testing.T) {
+	since := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	// Serviço com LastModified anterior ao cursor → to_fetch=0, mas o nome do tema mudou.
+	client := &stubCartaClient{
+		themes: []clients.CartaTheme{
+			{Slug: "cultura-e-lazer", Name: "Cultura e Lazer", SubthemesCount: 1, PublishedServices: 1},
+		},
+		subthemes: map[string][]clients.CartaSubtheme{
+			"cultura-e-lazer": {{Slug: "audiovisual-1", Name: "Audiovisual", PublishedServices: 1}},
+		},
+		services: map[string][]clients.CartaServiceListItem{
+			"audiovisual-1": {sampleListItem("cine-rio", "2026-08-01T00:00:00.000Z")},
+		},
+		details: map[string]*clients.CartaServiceDetail{},
+	}
+	repo := &stubSyncRepo{cursor: &models.SalesForceSyncCursor{LastSyncAt: &since, LastDeltaToken: cartaSyncVersion}}
+	hier := &stubHierarchyRepo{}
+	svc := newTestSyncWithHierarchy(client, repo, hier)
+
+	if err := svc.DeltaSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.upserted) != 0 {
+		t.Fatalf("não deve re-fetch/upsert detalhe: upserted=%d", len(repo.upserted))
+	}
+	if hier.propagateCalls != 1 {
+		t.Fatalf("propagateCalls=%d", hier.propagateCalls)
+	}
+	if len(hier.propagated) != 1 {
+		t.Fatalf("propagated=%v", hier.propagated)
+	}
+	got := hier.propagated[0]
+	if got.ThemeSlug != "cultura-e-lazer" || got.ThemeName != "Cultura e Lazer" {
+		t.Fatalf("theme label=%+v", got)
+	}
+	if got.SubthemeSlug != "audiovisual-1" || got.SubthemeName != "Audiovisual" {
+		t.Fatalf("subtheme label=%+v", got)
+	}
+	if len(got.ServiceSlugs) != 1 || got.ServiceSlugs[0] != "cine-rio" {
+		t.Fatalf("service slugs=%v", got.ServiceSlugs)
 	}
 }
 
