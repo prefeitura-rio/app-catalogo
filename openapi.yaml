@@ -1426,12 +1426,24 @@ components:
           examples:
             - ["Curso de <mark>empreendedorismo</mark> para iniciantes"]
         metadata:
+          type: object
+          additionalProperties: true
           description: |
-            Payload original da fonte de dados (`source_data`), schema livre.
-            O conteúdo varia por `source` e `type`.
+            Subconjunto sanitizado do payload da fonte de dados (`source_data`), não o
+            payload original: a busca copia só as chaves de uma lista permitida pelo
+            `type` do item e descarta todas as outras. Chaves permitidas:
+
+            - qualquer `type`: `id`, `slug`;
+            - `service`: também `tema_geral`, `tema_especifico`, `Tema__c`, `themeSlug`
+              e `themeName`.
+
+            Cada valor é repassado como está em `source_data`. Uma chave ausente ou nula
+            na fonte não aparece, e o campo `metadata` inteiro é omitido quando nenhuma
+            chave permitida tem valor.
           examples:
-            - carga_horaria: 40
-              inscricoes_abertas: true
+            - slug: iptu-2026
+              themeSlug: tributos
+              themeName: Tributos
 
     # --- Recomendações ---
 
