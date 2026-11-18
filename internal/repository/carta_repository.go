@@ -55,6 +55,124 @@ func cartaMeta(page, perPage, total int) models.CartaMeta {
 	return models.CartaMeta{Page: page, PerPage: perPage, Total: total, TotalPages: pages}
 }
 
+// cartaPublishedSQL é a condição de um serviço publicado da Carta: da fonte
+// SalesForce, não removido, ativo e vigente (inForceSQL: já começou e ainda não
+// terminou). Toda leitura pública da Carta e as contagens da hierarquia a usam,
+// para que listas, detalhe e contagens mostrem os mesmos serviços (DEV-622).
+// prefix é o alias da tabela com o ponto ("ci.") ou "" sem alias.
+func cartaPublishedSQL(prefix string) string {
+	return prefix + "source = 'salesforce'" +
+		" AND " + prefix + "deleted_at IS NULL" +
+		" AND " + prefix + "status = 'active'" +
+		" AND " + inForceSQL(prefix)
+}
+
+var (
+	refreshSubthemeCountsSQL = `
+		UPDATE carta_subthemes s SET
+			published_services = (
+				SELECT COUNT(*)::INT FROM catalog_items ci
+				WHERE ` + cartaPublishedSQL("ci.") + `
+				  AND ci.subtheme_slug = s.slug
+			),
+			updated_at = NOW()
+		WHERE s.deleted_at IS NULL`
+
+	refreshThemeCountsSQL = `
+		UPDATE carta_themes t SET
+			published_services = (
+				SELECT COUNT(*)::INT FROM catalog_items ci
+				WHERE ` + cartaPublishedSQL("ci.") + `
+				  AND ci.theme_slug = t.slug
+			),
+			subthemes_count = (
+				SELECT COUNT(*)::INT FROM carta_subthemes s
+				WHERE s.theme_slug = t.slug AND s.deleted_at IS NULL
+			),
+			updated_at = NOW()
+		WHERE t.deleted_at IS NULL`
+
+	countServicesBySubthemeSQL = `
+		SELECT COUNT(*) FROM catalog_items
+		WHERE ` + cartaPublishedSQL("") + `
+		  AND subtheme_slug = $1`
+
+	listServicesBySubthemeSQL = `
+		SELECT external_id, title, COALESCE(short_desc, ''), COALESCE(organization, ''),
+		       status, COALESCE(theme_slug, ''), COALESCE(subtheme_slug, ''),
+		       source_data
+		FROM catalog_items
+		WHERE ` + cartaPublishedSQL("") + `
+		  AND subtheme_slug = $1
+		ORDER BY title ASC
+		LIMIT $2 OFFSET $3`
+
+	// Uma única agregação (CTE) + COUNT(*) OVER() evita o GROUP BY duplicado.
+	listOrgUnitsSQL = `
+		WITH orgs AS (
+			SELECT
+				sici_code,
+				COALESCE(NULLIF(MAX(organization), ''), sici_code) AS responsible_org_unit,
+				COALESCE(MAX(source_data->>'responsibleOrgUnitShortName'), '') AS short_name,
+				COUNT(*)::INT AS published_services
+			FROM catalog_items
+			WHERE ` + cartaPublishedSQL("") + `
+			  AND sici_code IS NOT NULL
+			  AND sici_code <> ''
+			GROUP BY sici_code
+		)
+		SELECT
+			sici_code,
+			responsible_org_unit,
+			short_name,
+			published_services,
+			COUNT(*) OVER()::INT AS total
+		FROM orgs
+		ORDER BY responsible_org_unit ASC
+		LIMIT $1 OFFSET $2`
+
+	countOrgUnitsSQL = `
+		SELECT COUNT(*) FROM (
+			SELECT sici_code
+			FROM catalog_items
+			WHERE ` + cartaPublishedSQL("") + `
+			  AND sici_code IS NOT NULL
+			  AND sici_code <> ''
+			GROUP BY sici_code
+		) AS orgs`
+
+	countServicesBySiciCodeSQL = `
+		SELECT COUNT(*) FROM catalog_items
+		WHERE ` + cartaPublishedSQL("") + `
+		  AND sici_code = $1`
+
+	listServicesBySiciCodeSQL = `
+		SELECT source_data
+		FROM catalog_items
+		WHERE ` + cartaPublishedSQL("") + `
+		  AND sici_code = $1
+		ORDER BY title ASC
+		LIMIT $2 OFFSET $3`
+
+	countAllServicesSQL = `
+		SELECT COUNT(*) FROM catalog_items
+		WHERE ` + cartaPublishedSQL("")
+
+	listAllServicesSQL = `
+		SELECT source_data
+		FROM catalog_items
+		WHERE ` + cartaPublishedSQL("") + `
+		ORDER BY sici_code NULLS FIRST, title ASC
+		LIMIT $1 OFFSET $2`
+
+	getServiceDetailSQL = `
+		SELECT source_data
+		FROM catalog_items
+		WHERE ` + cartaPublishedSQL("") + `
+		  AND external_id = $1
+		LIMIT 1`
+)
+
 // UpsertTheme grava/atualiza um tema e limpa soft-delete.
 func (r *CartaRepository) UpsertTheme(ctx context.Context, theme *models.CartaTheme) error {
 	_, err := r.db.Exec(ctx, `
@@ -181,37 +299,13 @@ func (r *CartaRepository) SoftDeleteSubthemesNotIn(ctx context.Context, keep []s
 	return tag.RowsAffected(), err
 }
 
-// RefreshHierarchyCounts recalcula contagens a partir dos serviços ativos locais.
+// RefreshHierarchyCounts recalcula contagens a partir dos serviços publicados e
+// vigentes locais (cartaPublishedSQL), os mesmos que as listas mostram.
 func (r *CartaRepository) RefreshHierarchyCounts(ctx context.Context) error {
-	_, err := r.db.Exec(ctx, `
-		UPDATE carta_subthemes s SET
-			published_services = (
-				SELECT COUNT(*)::INT FROM catalog_items ci
-				WHERE ci.source = 'salesforce'
-				  AND ci.deleted_at IS NULL
-				  AND ci.status = 'active'
-				  AND ci.subtheme_slug = s.slug
-			),
-			updated_at = NOW()
-		WHERE s.deleted_at IS NULL`)
-	if err != nil {
+	if _, err := r.db.Exec(ctx, refreshSubthemeCountsSQL); err != nil {
 		return err
 	}
-	_, err = r.db.Exec(ctx, `
-		UPDATE carta_themes t SET
-			published_services = (
-				SELECT COUNT(*)::INT FROM catalog_items ci
-				WHERE ci.source = 'salesforce'
-				  AND ci.deleted_at IS NULL
-				  AND ci.status = 'active'
-				  AND ci.theme_slug = t.slug
-			),
-			subthemes_count = (
-				SELECT COUNT(*)::INT FROM carta_subthemes s
-				WHERE s.theme_slug = t.slug AND s.deleted_at IS NULL
-			),
-			updated_at = NOW()
-		WHERE t.deleted_at IS NULL`)
+	_, err := r.db.Exec(ctx, refreshThemeCountsSQL)
 	return err
 }
 
@@ -289,7 +383,7 @@ func (r *CartaRepository) ListSubthemes(ctx context.Context, themeSlug string, p
 	return out, cartaMeta(page, perPage, total), rows.Err()
 }
 
-// ListServicesBySubtheme pagina serviços ativos de um subtema.
+// ListServicesBySubtheme pagina serviços publicados e vigentes de um subtema.
 func (r *CartaRepository) ListServicesBySubtheme(ctx context.Context, subthemeSlug string, page, perPage int) ([]models.CartaServiceSummary, models.CartaMeta, error) {
 	subthemeSlug = strings.TrimSpace(subthemeSlug)
 	if subthemeSlug == "" {
@@ -298,27 +392,12 @@ func (r *CartaRepository) ListServicesBySubtheme(ctx context.Context, subthemeSl
 	page, perPage = clampCartaPage(page, perPage)
 
 	var total int
-	if err := r.db.QueryRow(ctx, `
-		SELECT COUNT(*) FROM catalog_items
-		WHERE source = 'salesforce'
-		  AND subtheme_slug = $1
-		  AND deleted_at IS NULL
-		  AND status = 'active'`, subthemeSlug).Scan(&total); err != nil {
+	if err := r.db.QueryRow(ctx, countServicesBySubthemeSQL, subthemeSlug).Scan(&total); err != nil {
 		return nil, models.CartaMeta{}, err
 	}
 
 	offset := (page - 1) * perPage
-	rows, err := r.db.Query(ctx, `
-		SELECT external_id, title, COALESCE(short_desc, ''), COALESCE(organization, ''),
-		       status, COALESCE(theme_slug, ''), COALESCE(subtheme_slug, ''),
-		       source_data
-		FROM catalog_items
-		WHERE source = 'salesforce'
-		  AND subtheme_slug = $1
-		  AND deleted_at IS NULL
-		  AND status = 'active'
-		ORDER BY title ASC
-		LIMIT $2 OFFSET $3`, subthemeSlug, perPage, offset)
+	rows, err := r.db.Query(ctx, listServicesBySubthemeSQL, subthemeSlug, perPage, offset)
 	if err != nil {
 		return nil, models.CartaMeta{}, err
 	}
@@ -390,36 +469,13 @@ func enrichCartaServiceSummary(sum *models.CartaServiceSummary, sourceData []byt
 	}
 }
 
-// ListOrgUnits pagina órgãos com ao menos 1 serviço publicado e sici_code preenchido.
-// Uma única agregação (CTE) + COUNT(*) OVER() evita o GROUP BY duplicado.
+// ListOrgUnits pagina órgãos com ao menos 1 serviço publicado e vigente e
+// sici_code preenchido.
 func (r *CartaRepository) ListOrgUnits(ctx context.Context, page, perPage int) ([]models.CartaOrgUnit, models.CartaMeta, error) {
 	page, perPage = clampCartaPage(page, perPage)
 	offset := (page - 1) * perPage
 
-	rows, err := r.db.Query(ctx, `
-		WITH orgs AS (
-			SELECT
-				sici_code,
-				COALESCE(NULLIF(MAX(organization), ''), sici_code) AS responsible_org_unit,
-				COALESCE(MAX(source_data->>'responsibleOrgUnitShortName'), '') AS short_name,
-				COUNT(*)::INT AS published_services
-			FROM catalog_items
-			WHERE source = 'salesforce'
-			  AND deleted_at IS NULL
-			  AND status = 'active'
-			  AND sici_code IS NOT NULL
-			  AND sici_code <> ''
-			GROUP BY sici_code
-		)
-		SELECT
-			sici_code,
-			responsible_org_unit,
-			short_name,
-			published_services,
-			COUNT(*) OVER()::INT AS total
-		FROM orgs
-		ORDER BY responsible_org_unit ASC
-		LIMIT $1 OFFSET $2`, perPage, offset)
+	rows, err := r.db.Query(ctx, listOrgUnitsSQL, perPage, offset)
 	if err != nil {
 		return nil, models.CartaMeta{}, err
 	}
@@ -445,24 +501,15 @@ func (r *CartaRepository) ListOrgUnits(ctx context.Context, page, perPage int) (
 	}
 	// Página vazia (OFFSET além do fim) não traz COUNT(*) OVER(); consulta só o total.
 	if len(out) == 0 {
-		if err := r.db.QueryRow(ctx, `
-			SELECT COUNT(*) FROM (
-				SELECT sici_code
-				FROM catalog_items
-				WHERE source = 'salesforce'
-				  AND deleted_at IS NULL
-				  AND status = 'active'
-				  AND sici_code IS NOT NULL
-				  AND sici_code <> ''
-				GROUP BY sici_code
-			) AS orgs`).Scan(&total); err != nil {
+		if err := r.db.QueryRow(ctx, countOrgUnitsSQL).Scan(&total); err != nil {
 			return nil, models.CartaMeta{}, err
 		}
 	}
 	return out, cartaMeta(page, perPage, total), nil
 }
 
-// ListServicesBySiciCode pagina o detalhe completo (source_data) dos serviços de um órgão.
+// ListServicesBySiciCode pagina o detalhe completo (source_data) dos serviços
+// publicados e vigentes de um órgão.
 // Código em branco retorna erro; código sem serviço retorna slice vazio.
 func (r *CartaRepository) ListServicesBySiciCode(ctx context.Context, siciCode string, page, perPage int) ([]json.RawMessage, models.CartaMeta, error) {
 	siciCode = strings.TrimSpace(siciCode)
@@ -472,25 +519,12 @@ func (r *CartaRepository) ListServicesBySiciCode(ctx context.Context, siciCode s
 	page, perPage = clampCartaPage(page, perPage)
 
 	var total int
-	if err := r.db.QueryRow(ctx, `
-		SELECT COUNT(*) FROM catalog_items
-		WHERE source = 'salesforce'
-		  AND deleted_at IS NULL
-		  AND status = 'active'
-		  AND sici_code = $1`, siciCode).Scan(&total); err != nil {
+	if err := r.db.QueryRow(ctx, countServicesBySiciCodeSQL, siciCode).Scan(&total); err != nil {
 		return nil, models.CartaMeta{}, err
 	}
 
 	offset := (page - 1) * perPage
-	rows, err := r.db.Query(ctx, `
-		SELECT source_data
-		FROM catalog_items
-		WHERE source = 'salesforce'
-		  AND deleted_at IS NULL
-		  AND status = 'active'
-		  AND sici_code = $1
-		ORDER BY title ASC
-		LIMIT $2 OFFSET $3`, siciCode, perPage, offset)
+	rows, err := r.db.Query(ctx, listServicesBySiciCodeSQL, siciCode, perPage, offset)
 	if err != nil {
 		return nil, models.CartaMeta{}, err
 	}
@@ -507,29 +541,19 @@ func (r *CartaRepository) ListServicesBySiciCode(ctx context.Context, siciCode s
 	return out, cartaMeta(page, perPage, total), rows.Err()
 }
 
-// ListAllServices pagina o detalhe completo de todos os serviços publicados da Carta.
+// ListAllServices pagina o detalhe completo de todos os serviços publicados e
+// vigentes da Carta.
 // Serviços sem sici_code entram aqui; ordem por sici_code, depois title.
 func (r *CartaRepository) ListAllServices(ctx context.Context, page, perPage int) ([]json.RawMessage, models.CartaMeta, error) {
 	page, perPage = clampCartaPage(page, perPage)
 
 	var total int
-	if err := r.db.QueryRow(ctx, `
-		SELECT COUNT(*) FROM catalog_items
-		WHERE source = 'salesforce'
-		  AND deleted_at IS NULL
-		  AND status = 'active'`).Scan(&total); err != nil {
+	if err := r.db.QueryRow(ctx, countAllServicesSQL).Scan(&total); err != nil {
 		return nil, models.CartaMeta{}, err
 	}
 
 	offset := (page - 1) * perPage
-	rows, err := r.db.Query(ctx, `
-		SELECT source_data
-		FROM catalog_items
-		WHERE source = 'salesforce'
-		  AND deleted_at IS NULL
-		  AND status = 'active'
-		ORDER BY sici_code NULLS FIRST, title ASC
-		LIMIT $1 OFFSET $2`, perPage, offset)
+	rows, err := r.db.Query(ctx, listAllServicesSQL, perPage, offset)
 	if err != nil {
 		return nil, models.CartaMeta{}, err
 	}
@@ -616,7 +640,8 @@ func (r *CartaRepository) ResolveSlugAlias(ctx context.Context, oldSlug string) 
 	return canonical, nil
 }
 
-// GetServiceDetail retorna o source_data do serviço publicado pelo slug (external_id).
+// GetServiceDetail retorna o source_data do serviço publicado e vigente pelo
+// slug (external_id); fora da vigência, responde como serviço inexistente.
 // Se o slug for um alias antigo, retorna redirectTo com o slug canônico (data vazio).
 func (r *CartaRepository) GetServiceDetail(ctx context.Context, slug string) (data json.RawMessage, redirectTo string, err error) {
 	slug = strings.TrimSpace(slug)
@@ -624,14 +649,7 @@ func (r *CartaRepository) GetServiceDetail(ctx context.Context, slug string) (da
 		return nil, "", fmt.Errorf("slug vazio")
 	}
 	var raw []byte
-	err = r.db.QueryRow(ctx, `
-		SELECT source_data
-		FROM catalog_items
-		WHERE source = 'salesforce'
-		  AND external_id = $1
-		  AND deleted_at IS NULL
-		  AND status = 'active'
-		LIMIT 1`, slug).Scan(&raw)
+	err = r.db.QueryRow(ctx, getServiceDetailSQL, slug).Scan(&raw)
 	if err == nil {
 		return json.RawMessage(raw), "", nil
 	}
