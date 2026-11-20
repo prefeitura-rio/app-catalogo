@@ -2,6 +2,7 @@ package observability
 
 import (
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -50,6 +51,31 @@ var (
 		Help:      "Horário (Unix, segundos) da última sincronização bem-sucedida por fonte",
 	}, []string{"source"})
 
+	SyncIntervalSeconds = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "catalogo",
+		Name:      "sync_interval_seconds",
+		Help:      "Intervalo (segundos) da sincronização periódica por fonte, publicado pelo processo que a agenda (worker)",
+	}, []string{"source"})
+
+	SyncScheduleStartTimestamp = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "catalogo",
+		Name:      "sync_schedule_start_timestamp_seconds",
+		Help:      "Horário (Unix, segundos) em que a sincronização periódica da fonte começou neste processo; referência do atraso enquanto não há sucesso",
+	}, []string{"source"})
+
+	HTTPRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "catalogo",
+		Name:      "http_requests_total",
+		Help:      "Requisições HTTP atendidas pela API, por método, rota (modelo do Gin) e status",
+	}, []string{"method", "route", "status"})
+
+	HTTPRequestDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "catalogo",
+		Name:      "http_request_duration_seconds",
+		Help:      "Latência das requisições HTTP da API, por método e rota (modelo do Gin)",
+		Buckets:   []float64{.025, .05, .1, .25, .5, 1, 2.5, 5, 10},
+	}, []string{"method", "route"})
+
 	SalesForceWebhookEventsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "catalogo",
 		Name:      "salesforce_webhook_events_total",
@@ -75,19 +101,27 @@ var (
 	}, []string{"goroutine"})
 )
 
+// collectors são todas as métricas do serviço; alerts_test.go confere contra
+// elas as métricas citadas em alerts.yml.
+var collectors = []prometheus.Collector{
+	SearchDuration,
+	RecommendationsDuration,
+	SyncDuration,
+	SyncRunsTotal,
+	SyncRetriesTotal,
+	SyncLastSuccessTimestamp,
+	SyncIntervalSeconds,
+	SyncScheduleStartTimestamp,
+	HTTPRequestsTotal,
+	HTTPRequestDuration,
+	SalesForceWebhookEventsTotal,
+	HTTPClientCircuitState,
+	HTTPClientRetriesTotal,
+	GoroutinePanicsTotal,
+}
+
 func init() {
-	prometheus.MustRegister(
-		SearchDuration,
-		RecommendationsDuration,
-		SyncDuration,
-		SyncRunsTotal,
-		SyncRetriesTotal,
-		SyncLastSuccessTimestamp,
-		SalesForceWebhookEventsTotal,
-		HTTPClientCircuitState,
-		HTTPClientRetriesTotal,
-		GoroutinePanicsTotal,
-	)
+	prometheus.MustRegister(collectors...)
 }
 
 // NewMetricsServer devolve um servidor HTTP que expõe só GET /metrics, numa
@@ -101,6 +135,41 @@ func NewMetricsServer(addr string) *http.Server {
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+	}
+}
+
+// unmatchedRoute é o rótulo de rota das requisições que não casam com nenhuma
+// rota registrada: o caminho cru viraria uma série por URL que o cliente inventar.
+const unmatchedRoute = "unmatched"
+
+// metricMethods são os métodos que viram rótulo; qualquer outro vira "OTHER",
+// porque o método também vem do cliente e não pode criar séries à vontade.
+var metricMethods = map[string]struct{}{
+	http.MethodGet: {}, http.MethodHead: {}, http.MethodPost: {}, http.MethodPut: {},
+	http.MethodPatch: {}, http.MethodDelete: {}, http.MethodOptions: {},
+}
+
+// HTTPMetrics é um middleware Gin que conta as requisições (HTTPRequestsTotal) e
+// mede a latência (HTTPRequestDuration) por método, rota e status. A rota é o
+// modelo registrado no Gin (ex.: /api/public/catalog/:id), nunca o caminho cru.
+// Registre-o antes do gin.Recovery, para que o 500 de um panic recuperado entre
+// na contagem.
+func HTTPMetrics() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		start := time.Now()
+
+		c.Next()
+
+		route := c.FullPath()
+		if route == "" {
+			route = unmatchedRoute
+		}
+		method := c.Request.Method
+		if _, ok := metricMethods[method]; !ok {
+			method = "OTHER"
+		}
+		HTTPRequestsTotal.WithLabelValues(method, route, strconv.Itoa(c.Writer.Status())).Inc()
+		HTTPRequestDuration.WithLabelValues(method, route).Observe(time.Since(start).Seconds())
 	}
 }
 

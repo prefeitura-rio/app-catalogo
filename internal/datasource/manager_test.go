@@ -424,3 +424,50 @@ func TestManager_SourceNames(t *testing.T) {
 		t.Fatalf("esperado [salesforce app-go-api] na ordem de registro, obtido %v", got)
 	}
 }
+
+// TestManager_Start_PublishesScheduleGauges: o worker publica, por fonte, o
+// intervalo e o início do agendamento que o alerta de sync atrasado usa, mesmo
+// quando nenhuma sync deu certo ainda.
+func TestManager_Start_PublishesScheduleGauges(t *testing.T) {
+	src := &flakySource{name: "schedule-gauges", failures: 100}
+	m := NewManager(WithRetryPolicy(RetryPolicy{MaxAttempts: 1, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond}))
+	m.Register(src)
+
+	before := float64(time.Now().Unix())
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	m.Start(ctx)
+
+	if got := metricValue(t, observability.SyncIntervalSeconds.WithLabelValues(src.name)); got != time.Hour.Seconds() {
+		t.Errorf("sync_interval_seconds: esperava %v, got %v", time.Hour.Seconds(), got)
+	}
+	if got := metricValue(t, observability.SyncScheduleStartTimestamp.WithLabelValues(src.name)); got < before || got > float64(time.Now().Unix())+1 {
+		t.Errorf("sync_schedule_start_timestamp_seconds fora do intervalo da execução: %v", got)
+	}
+	if got := metricValue(t, observability.SyncLastSuccessTimestamp.WithLabelValues(src.name)); got != 0 {
+		t.Errorf("sem sucesso, last_success deveria seguir 0, got %v", got)
+	}
+}
+
+// TestManager_TriggerSync_DoesNotPublishScheduleGauges: a sync manual (API) não
+// tem agendamento, então não publica intervalo, e o alerta só vê o do worker.
+func TestManager_TriggerSync_DoesNotPublishScheduleGauges(t *testing.T) {
+	src := &stubSource{name: "manual-only"}
+	m := NewManager()
+	m.Register(src)
+	if err := m.syncWithRetry(context.Background(), src, triggerManual); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	observability.NewMetricsServer("").Handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := w.Body.String()
+	for _, unwanted := range []string{
+		`catalogo_sync_interval_seconds{source="manual-only"}`,
+		`catalogo_sync_schedule_start_timestamp_seconds{source="manual-only"}`,
+	} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("/metrics não deveria conter %q sem agendamento", unwanted)
+		}
+	}
+}
