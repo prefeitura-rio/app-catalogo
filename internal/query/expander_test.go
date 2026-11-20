@@ -30,6 +30,12 @@ func TestExpand(t *testing.T) {
 		{"sigla dentro de palavra não casa", "crasso", "crasso"},
 		{"aspas preservam a sintaxe", `"cras" centro`, `"cras" centro`},
 		{"OR explícito preserva a sintaxe", "cras OR creas", "cras OR creas"},
+		{"or minúsculo preserva a sintaxe", "cras or creas", "cras or creas"},
+		{"Or capitalizado preserva a sintaxe", "cras Or creas", "cras Or creas"},
+		{"oR misto preserva a sintaxe", "cras oR creas", "cras oR creas"},
+		{"or minúsculo com espaços extras", "  cras   or  creas ", "cras or creas"},
+		{"palavra que contém or ainda expande", "cor cras", "cor cras OR centro referência assistência social"},
+		{"palavra que começa com or ainda expande", "orientação cras", "orientação cras OR centro referência assistência social"},
 		{"exclusão preserva a sintaxe", "cras -creas", "cras -creas"},
 	}
 	for _, tc := range cases {
