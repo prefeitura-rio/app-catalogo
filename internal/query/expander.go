@@ -117,12 +117,15 @@ func Expand(query string) string {
 	return canonicalQuery + " OR " + strings.Join(expansions, " OR ")
 }
 
+// hasExplicitWebsearchSyntax reports whether the query already uses
+// websearch_to_tsquery operators. PostgreSQL matches the "or" operator
+// case-insensitively, so "or", "Or", "oR" and "OR" all count.
 func hasExplicitWebsearchSyntax(searchQuery string) bool {
 	if strings.Contains(searchQuery, `"`) {
 		return true
 	}
 	for _, queryField := range strings.Fields(searchQuery) {
-		if queryField == "OR" || strings.HasPrefix(queryField, "-") {
+		if strings.EqualFold(queryField, "or") || strings.HasPrefix(queryField, "-") {
 			return true
 		}
 	}
