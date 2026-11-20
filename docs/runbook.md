@@ -91,7 +91,11 @@ curl -s localhost:9092/metrics | grep '^catalogo_'
 | `catalogo_sync_retries_total` | idem | `source` | novas tentativas depois de falha (até 4 tentativas em ~3,5 min) |
 | `catalogo_sync_duration_seconds` | idem | `source`, `type` (= trigger) | duração de cada tentativa |
 | `catalogo_sync_last_success_timestamp_seconds` | idem | `source` | horário Unix do último sucesso; só existe depois do primeiro sucesso do processo |
-| `catalogo_salesforce_webhook_events_total` | API | `result` (`enqueued`, `duplicate`, `processed`, `failed`) | eventos do webhook; `failed` conta tentativas que falharam (o evento continua pendente) |
+| `catalogo_sync_interval_seconds` | worker | `source` | intervalo da sync agendada da fonte, em segundos (referência do alerta de sync atrasado) |
+| `catalogo_sync_schedule_start_timestamp_seconds` | worker | `source` | horário Unix em que o agendamento da fonte começou no processo; conta o atraso enquanto não há sucesso |
+| `catalogo_http_requests_total` | API | `method`, `route` (modelo do Gin, ex.: `/api/public/catalog/:id`; `unmatched` sem rota), `status` | requisições atendidas pela API |
+| `catalogo_http_request_duration_seconds` | API | `method`, `route` | latência das requisições da API |
+| `catalogo_salesforce_webhook_events_total` | API | `result` (`enqueued`, `duplicate`, `processed`, `failed`) | eventos do webhook; `failed` conta tentativas que falharam (o evento continua pendente); as quatro séries existem desde o startup, com 0 |
 | `catalogo_http_client_circuit_state` | API (`rmi`), API e worker (`appgoapi`) | `client` | 0 fechado, 1 meio-aberto, 2 aberto |
 | `catalogo_http_client_retries_total` | idem | `client` | novas tentativas dos clientes HTTP |
 | `catalogo_search_duration_seconds` | API | `has_query`, `type_filter` | latência da busca |
@@ -126,7 +130,18 @@ Não há dashboard do app-catalogo versionado, nem no SigNoz (os dashboards do `
 
 ## Sinais e alertas: o que significam e o primeiro passo
 
-Não há regras de alerta do app-catalogo configuradas (nem no repositório nem no `prefeitura-rio/infra`; pedidas na OPS-149, sobre as métricas que o Prometheus do `istio-system` já coleta da API e do worker). Os avisos que chegam hoje são as notificações de deploy no Discord (staging e release) e a análise automática do canary de produção. A tabela cobre esses avisos e os sinais que valem um alerta quando ele for criado, com o primeiro passo de cada um.
+As regras de alerta do app-catalogo estão versionadas em `internal/observability/alerts.yml` (formato de arquivo de regras do Prometheus; o bloco `groups` serve de `spec` de um PrometheusRule), com testes em `alerts_test.yml` (`just alerts-test`):
+
+| Alerta | Dispara quando | Severidade |
+|--------|----------------|------------|
+| `CatalogoHTTP5xxAlto` | mais de 2% das respostas da API em 5xx (janela de 5 min), por 5 min | critical |
+| `CatalogoLatenciaPublicaP95Alta` | p95 de `/api/public/*` acima de 1 s, por 10 min | warning |
+| `CatalogoPodReiniciando` | mais de 3 reinícios do contêiner `catalogo` ou `catalogo-worker` em 15 min | critical |
+| `CatalogoPodCrashLoop` | contêiner em `CrashLoopBackOff` por 5 min | critical |
+| `CatalogoSyncAtrasado` | `time()` menos o último sucesso da fonte (ou o início do agendamento, sem sucesso) acima de 2× o intervalo da fonte | warning |
+| `CatalogoWebhookSalesForceFalhou` | qualquer evento `failed` do webhook SalesForce em 5 min | warning |
+
+Elas ainda não estão carregadas em nenhum Prometheus: levar o arquivo ao Prometheus do `istio-system` (ou à stack que for escolhida) e rotear a notificação é da raia Infra (OPS-149). Os dois alertas de pod usam `kube_pod_container_*`, do kube-state-metrics, que esse Prometheus tem desligado hoje. Os avisos que chegam hoje são as notificações de deploy no Discord (staging e release) e a análise automática do canary de produção. A tabela abaixo cobre esses avisos e os sinais dos alertas, com o primeiro passo de cada um.
 
 | Sinal | O que significa | Primeiro passo |
 |-------|-----------------|----------------|

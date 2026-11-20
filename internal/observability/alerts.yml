@@ -1,0 +1,98 @@
+# Regras de alerta mínimas do app-catalogo (DEV-699 / PREF-605), no formato de
+# arquivo de regras do Prometheus (rule_files). O mesmo bloco `groups` serve de
+# `spec` de um PrometheusRule do prometheus-operator.
+#
+# Este arquivo só versiona as regras: levá-las à stack de monitoração (o
+# Prometheus do istio-system carrega /etc/config/alerting_rules.yml) e rotear os
+# alertas é da raia Infra. Os seletores usam os rótulos que o job kubernetes-pods
+# desse Prometheus acrescenta: `namespace`, `pod` e os rótulos do pod (`app`).
+#
+# Métricas do próprio serviço (internal/observability/metrics.go):
+#   catalogo_http_requests_total, catalogo_http_request_duration_seconds (API)
+#   catalogo_sync_last_success_timestamp_seconds, catalogo_sync_interval_seconds,
+#   catalogo_sync_schedule_start_timestamp_seconds (worker)
+#   catalogo_salesforce_webhook_events_total (API)
+# Reinícios de pod vêm do kube-state-metrics (kube_pod_container_*), que a stack
+# precisa ter.
+#
+# alerts_test.go confere que toda métrica catalogo_* citada aqui existe no código.
+groups:
+  - name: app-catalogo
+    rules:
+      - alert: CatalogoHTTP5xxAlto
+        expr: |
+          sum by (namespace) (rate(catalogo_http_requests_total{status=~"5.."}[5m]))
+            /
+          sum by (namespace) (rate(catalogo_http_requests_total[5m]))
+            > 0.02
+        for: 5m
+        labels:
+          severity: critical
+          service: app-catalogo
+        annotations:
+          summary: "app-catalogo: mais de 2% de respostas 5xx em 5 min ({{ $labels.namespace }})"
+          description: "{{ $value | humanizePercentage }} das requisições da API terminaram em 5xx nos últimos 5 min. Veja os logs de nível error e /ready (banco, Redis)."
+
+      - alert: CatalogoLatenciaPublicaP95Alta
+        expr: |
+          histogram_quantile(0.95,
+            sum by (namespace, le) (rate(catalogo_http_request_duration_seconds_bucket{route=~"/api/public/.*"}[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+          service: app-catalogo
+        annotations:
+          summary: "app-catalogo: p95 das rotas públicas acima de 1s por 10 min ({{ $labels.namespace }})"
+          description: "O p95 da latência de /api/public/* está em {{ $value | humanizeDuration }}. Veja catalogo_http_request_duration_seconds por rota, o banco e o Redis."
+
+      - alert: CatalogoPodReiniciando
+        expr: |
+          increase(kube_pod_container_status_restarts_total{container=~"catalogo|catalogo-worker"}[15m]) > 3
+        labels:
+          severity: critical
+          service: app-catalogo
+        annotations:
+          summary: "app-catalogo: {{ $labels.pod }}/{{ $labels.container }} reiniciou mais de 3 vezes em 15 min"
+          description: "{{ $value | humanize }} reinícios em 15 min em {{ $labels.namespace }}. Veja kubectl describe pod e os logs com --previous."
+
+      - alert: CatalogoPodCrashLoop
+        expr: |
+          max by (namespace, pod, container) (
+            kube_pod_container_status_waiting_reason{container=~"catalogo|catalogo-worker", reason="CrashLoopBackOff"}
+          ) == 1
+        for: 5m
+        labels:
+          severity: critical
+          service: app-catalogo
+        annotations:
+          summary: "app-catalogo: {{ $labels.pod }}/{{ $labels.container }} em CrashLoopBackOff"
+          description: "O contêiner está em CrashLoopBackOff há 5 min em {{ $labels.namespace }}. Veja kubectl describe pod e os logs com --previous."
+
+      # Atraso = agora - última sync bem-sucedida da fonte; sem nenhum sucesso
+      # desde que o worker subiu, conta a partir do início do agendamento. O
+      # limite é 2x o intervalo que o próprio worker publica por fonte.
+      - alert: CatalogoSyncAtrasado
+        expr: |
+          time() - max by (namespace, source) (
+            catalogo_sync_last_success_timestamp_seconds
+              or
+            catalogo_sync_schedule_start_timestamp_seconds
+          )
+            > 2 * max by (namespace, source) (catalogo_sync_interval_seconds)
+        labels:
+          severity: warning
+          service: app-catalogo
+        annotations:
+          summary: "app-catalogo: sync da fonte {{ $labels.source }} atrasada ({{ $labels.namespace }})"
+          description: "A última sync bem-sucedida de {{ $labels.source }} foi há {{ $value | humanizeDuration }}, mais de 2x o intervalo. Veja catalogo_sync_runs_total{result=\"failure\"} e os logs do worker."
+
+      - alert: CatalogoWebhookSalesForceFalhou
+        expr: |
+          sum by (namespace) (increase(catalogo_salesforce_webhook_events_total{result="failed"}[5m])) > 0
+        labels:
+          severity: warning
+          service: app-catalogo
+        annotations:
+          summary: "app-catalogo: evento do webhook SalesForce falhou ({{ $labels.namespace }})"
+          description: "{{ $value | humanize }} falha(s) ao sincronizar eventos do webhook SalesForce em 5 min; o evento fica pendente e é reprocessado. Veja os logs \"webhook: falha ao sincronizar registro\"."

@@ -33,6 +33,7 @@
             # Development tools
             just
             direnv
+            prometheus # promtool (just alerts-test)
 
             # Docker
             docker

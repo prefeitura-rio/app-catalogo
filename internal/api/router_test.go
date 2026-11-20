@@ -16,10 +16,12 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/api/middleware"
 	"github.com/prefeitura-rio/app-catalogo/internal/config"
 	"github.com/prefeitura-rio/app-catalogo/internal/datasource"
+	"github.com/prefeitura-rio/app-catalogo/internal/observability"
 	"github.com/prefeitura-rio/app-catalogo/internal/repository"
 )
 
@@ -236,5 +238,34 @@ func TestSetupRouter_PublicRoutes(t *testing.T) {
 	}
 	if w := f.do(http.MethodGet, "/rota-inexistente", ""); w.Code != http.StatusNotFound {
 		t.Fatalf("rota inexistente: esperado 404, obtido %d", w.Code)
+	}
+}
+
+// O router mede toda requisição (alertas de 5xx e de latência): pela rota
+// modelo e com o status final, inclusive o 500 do banco fora e o 401 da borda.
+func TestSetupRouter_RecordsHTTPMetrics(t *testing.T) {
+	f := newRouterFixture(t)
+	const route = "/api/public/catalog/:id"
+	counter := func(method, route, status string) float64 {
+		return testutil.ToFloat64(observability.HTTPRequestsTotal.WithLabelValues(method, route, status))
+	}
+	errBefore := counter(http.MethodGet, route, "500")
+	authBefore := counter(http.MethodGet, "/api/v1/search", "401")
+
+	if w := f.do(http.MethodGet, "/api/public/catalog/"+itemID, ""); w.Code != http.StatusInternalServerError {
+		t.Fatalf("catálogo público com banco fora: esperado 500, obtido %d", w.Code)
+	}
+	if w := f.do(http.MethodGet, "/api/v1/search", ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("busca autenticada sem token: esperado 401, obtido %d", w.Code)
+	}
+
+	if got := counter(http.MethodGet, route, "500") - errBefore; got != 1 {
+		t.Errorf("5xx da rota pública: esperado 1, obtido %v", got)
+	}
+	if got := counter(http.MethodGet, "/api/v1/search", "401") - authBefore; got != 1 {
+		t.Errorf("401 da busca autenticada: esperado 1, obtido %v", got)
+	}
+	if got := testutil.CollectAndCount(observability.HTTPRequestDuration); got == 0 {
+		t.Error("latência não registrada")
 	}
 }

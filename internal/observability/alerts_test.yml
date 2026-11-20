@@ -1,0 +1,207 @@
+# Testes de unidade das regras de alerts.yml: promtool test rules internal/observability/alerts_test.yml
+# (just alerts-test). Cada caso tem a série que dispara o alerta e outra, parecida,
+# que não deve disparar.
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # 5% de 5xx em "ruim" dispara; 1% em "bom" não.
+  - interval: 1m
+    input_series:
+      - series: 'catalogo_http_requests_total{namespace="ruim",pod="api-1",app="catalogo",method="GET",route="/api/public/search",status="200"}'
+        values: '0+95x20'
+      - series: 'catalogo_http_requests_total{namespace="ruim",pod="api-1",app="catalogo",method="GET",route="/api/public/search",status="500"}'
+        values: '0+5x20'
+      - series: 'catalogo_http_requests_total{namespace="bom",pod="api-1",app="catalogo",method="GET",route="/api/public/search",status="200"}'
+        values: '0+99x20'
+      - series: 'catalogo_http_requests_total{namespace="bom",pod="api-1",app="catalogo",method="GET",route="/api/public/search",status="503"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CatalogoHTTP5xxAlto
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: CatalogoHTTP5xxAlto
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: app-catalogo
+              namespace: ruim
+            exp_annotations:
+              summary: "app-catalogo: mais de 2% de respostas 5xx em 5 min (ruim)"
+              description: "5% das requisições da API terminaram em 5xx nos últimos 5 min. Veja os logs de nível error e /ready (banco, Redis)."
+
+  # Rota pública lenta (todas entre 1s e 2,5s) dispara depois de 10 min; rota
+  # autenticada igualmente lenta não entra no alerta.
+  - interval: 1m
+    input_series:
+      - series: 'catalogo_http_request_duration_seconds_bucket{namespace="ruim",pod="api-1",app="catalogo",method="GET",route="/api/public/search",le="1"}'
+        values: '0x30'
+      - series: 'catalogo_http_request_duration_seconds_bucket{namespace="ruim",pod="api-1",app="catalogo",method="GET",route="/api/public/search",le="2.5"}'
+        values: '0+10x30'
+      - series: 'catalogo_http_request_duration_seconds_bucket{namespace="ruim",pod="api-1",app="catalogo",method="GET",route="/api/public/search",le="+Inf"}'
+        values: '0+10x30'
+      - series: 'catalogo_http_request_duration_seconds_bucket{namespace="autenticada",pod="api-1",app="catalogo",method="GET",route="/api/v1/search",le="1"}'
+        values: '0x30'
+      - series: 'catalogo_http_request_duration_seconds_bucket{namespace="autenticada",pod="api-1",app="catalogo",method="GET",route="/api/v1/search",le="2.5"}'
+        values: '0+10x30'
+      - series: 'catalogo_http_request_duration_seconds_bucket{namespace="autenticada",pod="api-1",app="catalogo",method="GET",route="/api/v1/search",le="+Inf"}'
+        values: '0+10x30'
+      - series: 'catalogo_http_request_duration_seconds_bucket{namespace="rapida",pod="api-1",app="catalogo",method="GET",route="/api/public/catalog/:id",le="1"}'
+        values: '0+10x30'
+      - series: 'catalogo_http_request_duration_seconds_bucket{namespace="rapida",pod="api-1",app="catalogo",method="GET",route="/api/public/catalog/:id",le="2.5"}'
+        values: '0+10x30'
+      - series: 'catalogo_http_request_duration_seconds_bucket{namespace="rapida",pod="api-1",app="catalogo",method="GET",route="/api/public/catalog/:id",le="+Inf"}'
+        values: '0+10x30'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: CatalogoLatenciaPublicaP95Alta
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: CatalogoLatenciaPublicaP95Alta
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: app-catalogo
+              namespace: ruim
+            exp_annotations:
+              summary: "app-catalogo: p95 das rotas públicas acima de 1s por 10 min (ruim)"
+              description: "O p95 da latência de /api/public/* está em 2.425s. Veja catalogo_http_request_duration_seconds por rota, o banco e o Redis."
+
+  # Um reinício por minuto passa de 3 em 15 min; 2 reinícios, ou outro contêiner, não.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="ruim",pod="catalogo-abc",container="catalogo"}'
+        values: '0+1x10'
+      - series: 'kube_pod_container_status_restarts_total{namespace="bom",pod="catalogo-worker-abc",container="catalogo-worker"}'
+        values: '0 0 0 1 1 1 2 2 2 2 2'
+      - series: 'kube_pod_container_status_restarts_total{namespace="ruim",pod="outro-abc",container="outro"}'
+        values: '0+1x10'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CatalogoPodReiniciando
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: app-catalogo
+              namespace: ruim
+              pod: catalogo-abc
+              container: catalogo
+            exp_annotations:
+              summary: "app-catalogo: catalogo-abc/catalogo reiniciou mais de 3 vezes em 15 min"
+              description: "10 reinícios em 15 min em ruim. Veja kubectl describe pod e os logs com --previous."
+
+  # CrashLoopBackOff por 5 min dispara; outro motivo de espera, não.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_waiting_reason{namespace="ruim",pod="catalogo-worker-abc",container="catalogo-worker",reason="CrashLoopBackOff"}'
+        values: '1x10'
+      - series: 'kube_pod_container_status_waiting_reason{namespace="ruim",pod="catalogo-abc",container="catalogo",reason="ContainerCreating"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: CatalogoPodCrashLoop
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: CatalogoPodCrashLoop
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: app-catalogo
+              namespace: ruim
+              pod: catalogo-worker-abc
+              container: catalogo-worker
+            exp_annotations:
+              summary: "app-catalogo: catalogo-worker-abc/catalogo-worker em CrashLoopBackOff"
+              description: "O contêiner está em CrashLoopBackOff há 5 min em ruim. Veja kubectl describe pod e os logs com --previous."
+
+  # Aos 31 min: salesforce (intervalo 15 min, último sucesso em 0) passou de 2x;
+  # app-go-api (intervalo 30 min, mesmo sucesso) não; a fonte "nova" nunca teve
+  # sucesso e o agendamento começou em 0 (intervalo 10 min): conta do início.
+  # Um sucesso recente na API (sync manual) também vale para a fonte.
+  - interval: 1m
+    input_series:
+      - series: 'catalogo_sync_interval_seconds{namespace="stg",pod="worker-1",app="catalogo-worker",source="salesforce"}'
+        values: '900x40'
+      - series: 'catalogo_sync_last_success_timestamp_seconds{namespace="stg",pod="worker-1",app="catalogo-worker",source="salesforce"}'
+        values: '0x40'
+      - series: 'catalogo_sync_schedule_start_timestamp_seconds{namespace="stg",pod="worker-1",app="catalogo-worker",source="salesforce"}'
+        values: '0x40'
+      - series: 'catalogo_sync_interval_seconds{namespace="stg",pod="worker-1",app="catalogo-worker",source="app-go-api"}'
+        values: '1800x40'
+      - series: 'catalogo_sync_last_success_timestamp_seconds{namespace="stg",pod="worker-1",app="catalogo-worker",source="app-go-api"}'
+        values: '0x40'
+      - series: 'catalogo_sync_schedule_start_timestamp_seconds{namespace="stg",pod="worker-1",app="catalogo-worker",source="app-go-api"}'
+        values: '0x40'
+      - series: 'catalogo_sync_interval_seconds{namespace="stg",pod="worker-1",app="catalogo-worker",source="nova"}'
+        values: '600x40'
+      - series: 'catalogo_sync_schedule_start_timestamp_seconds{namespace="stg",pod="worker-1",app="catalogo-worker",source="nova"}'
+        values: '0x40'
+      - series: 'catalogo_sync_interval_seconds{namespace="prd",pod="worker-1",app="catalogo-worker",source="salesforce"}'
+        values: '900x40'
+      - series: 'catalogo_sync_last_success_timestamp_seconds{namespace="prd",pod="worker-1",app="catalogo-worker",source="salesforce"}'
+        values: '0x40'
+      - series: 'catalogo_sync_last_success_timestamp_seconds{namespace="prd",pod="api-1",app="catalogo",source="salesforce"}'
+        values: '1500x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CatalogoSyncAtrasado
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: app-catalogo
+              namespace: stg
+              source: nova
+            exp_annotations:
+              summary: "app-catalogo: sync da fonte nova atrasada (stg)"
+              description: "A última sync bem-sucedida de nova foi há 25m 0s, mais de 2x o intervalo. Veja catalogo_sync_runs_total{result=\"failure\"} e os logs do worker."
+      - eval_time: 31m
+        alertname: CatalogoSyncAtrasado
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: app-catalogo
+              namespace: stg
+              source: salesforce
+            exp_annotations:
+              summary: "app-catalogo: sync da fonte salesforce atrasada (stg)"
+              description: "A última sync bem-sucedida de salesforce foi há 31m 0s, mais de 2x o intervalo. Veja catalogo_sync_runs_total{result=\"failure\"} e os logs do worker."
+          - exp_labels:
+              severity: warning
+              service: app-catalogo
+              namespace: stg
+              source: nova
+            exp_annotations:
+              summary: "app-catalogo: sync da fonte nova atrasada (stg)"
+              description: "A última sync bem-sucedida de nova foi há 31m 0s, mais de 2x o intervalo. Veja catalogo_sync_runs_total{result=\"failure\"} e os logs do worker."
+
+  # Um evento failed dispara; namespace sem falha, não.
+  - interval: 1m
+    input_series:
+      - series: 'catalogo_salesforce_webhook_events_total{namespace="ruim",pod="api-1",app="catalogo",result="failed"}'
+        values: '0 0 0 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'catalogo_salesforce_webhook_events_total{namespace="ruim",pod="api-1",app="catalogo",result="processed"}'
+        values: '0+3x14'
+      - series: 'catalogo_salesforce_webhook_events_total{namespace="bom",pod="api-1",app="catalogo",result="failed"}'
+        values: '0x14'
+      - series: 'catalogo_salesforce_webhook_events_total{namespace="bom",pod="api-1",app="catalogo",result="processed"}'
+        values: '0+3x14'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: CatalogoWebhookSalesForceFalhou
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: CatalogoWebhookSalesForceFalhou
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: app-catalogo
+              namespace: ruim
+            exp_annotations:
+              summary: "app-catalogo: evento do webhook SalesForce falhou (ruim)"
+              description: "1 falha(s) ao sincronizar eventos do webhook SalesForce em 5 min; o evento fica pendente e é reprocessado. Veja os logs \"webhook: falha ao sincronizar registro\"."
+      - eval_time: 14m
+        alertname: CatalogoWebhookSalesForceFalhou
+        exp_alerts: []

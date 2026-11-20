@@ -42,6 +42,8 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 	r := gin.New()
 	configureClientIP(r, cfg.Server.TrustedProxies)
 	r.Use(joinForwardedFor())
+	// Antes do Recovery: o 500 de um panic recuperado também entra nas métricas.
+	r.Use(observability.HTTPMetrics())
 	r.Use(gin.Recovery())
 	r.Use(otelgin.Middleware(cfg.Tracing.ServiceName))
 	r.Use(observability.RequestLogger())
