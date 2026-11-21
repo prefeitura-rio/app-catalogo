@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
 )
@@ -29,47 +32,43 @@ func TestMaxCosineDistance(t *testing.T) {
 }
 
 // Cada lista semântica corta pela distância do próprio vetor, com o próprio
-// parâmetro, antes do ORDER BY/LIMIT: o piso vale para o RRF e para o total
-// (DEV-601).
+// parâmetro, sobre os vizinhos já ordenados: o piso vale para o RRF e para o
+// total (DEV-601). A lista _knn, sem piso, fica para a observação de calibração.
 func TestSemanticCTEs_FilterByOwnMaxDistance(t *testing.T) {
-	cte := hybridSemanticCTE("sem", "$3", "$4", "TRUE")
-	cond := "(ci.embedding <=> $3::vector) <= $4::float8"
-	condIdx := strings.Index(cte, cond)
-	orderIdx := strings.LastIndex(cte, "ORDER BY ci.embedding")
-	if condIdx < 0 || orderIdx < 0 || condIdx > orderIdx {
-		t.Fatalf("CTE semântica sem o piso %q no WHERE:\n%s", cond, cte)
-	}
-
 	for name, tc := range map[string]struct {
 		ctes  string
-		conds []string
+		lists map[string][2]string // lista -> (vetor, distância máxima)
 	}{
-		"híbrida": {hybridSearchCTEs("TRUE"), []string{
-			"(ci.embedding <=> $3::vector) <= $4::float8",
-		}},
-		"hyde": {hydeSearchCTEs("TRUE"), []string{
-			"(ci.embedding <=> $3::vector) <= $5::float8",
-			"(ci.embedding <=> $4::vector) <= $6::float8",
-		}},
+		"híbrida": {hybridSearchCTEs("TRUE"), map[string][2]string{"sem": {"$3", "$4"}}},
+		"hyde":    {hydeSearchCTEs("TRUE"), map[string][2]string{"sem": {"$3", "$5"}, "hyde": {"$4", "$6"}}},
 	} {
-		for _, c := range tc.conds {
-			if !strings.Contains(tc.ctes, c) {
-				t.Errorf("%s: sem o piso %q:\n%s", name, c, tc.ctes)
+		for list, p := range tc.lists {
+			knn := hybridSemanticCTE(list, p[0], p[1], "TRUE")
+			if !strings.Contains(tc.ctes, knn) {
+				t.Errorf("%s: sem a CTE %s com vetor %s e piso %s:\n%s", name, list, p[0], p[1], tc.ctes)
+			}
+			knnStart := strings.Index(knn, list+"_knn AS (")
+			distCol := strings.Index(knn, "ci.embedding <=> "+p[0]+"::vector AS dist")
+			limit := strings.Index(knn, "LIMIT 50")
+			floorStart := strings.Index(knn, "\n\t\t"+list+" AS (")
+			floor := strings.Index(knn, "FROM "+list+"_knn k\n\t\t\tWHERE k.dist <= "+p[1]+"::float8")
+			if knnStart < 0 || distCol < knnStart || limit < distCol || floorStart < limit || floor < floorStart {
+				t.Errorf("%s: CTE %s fora da forma knn (LIMIT 50) -> piso:\n%s", name, list, knn)
 			}
 		}
 	}
 }
 
-// Item semântico abaixo do piso da lista não entra no RRF nem no total; com o
-// piso desligado a busca segue trazendo os vizinhos como antes (DEV-601).
-func TestSearchHybrid_SemanticFloorsCutListAndTotal(t *testing.T) {
+// semanticFixture grava três itens de um órgão próprio com vetores em relação a
+// (1,0): perto = similaridade 1, meio ≈ 0,707, longe = 0 (e similaridade 1
+// com (0,1)). Devolve o órgão, que isola os itens nos filtros da busca.
+func semanticFixture(t *testing.T) (*pgxpool.Pool, string) {
+	t.Helper()
 	pool := testCatalogPool(t)
 	itemRepo := NewCatalogItemRepository(pool)
 	ctx := context.Background()
 
 	token := fmt.Sprintf("orgpiso%d", time.Now().UnixNano())
-	// Vetores em relação à query (1,0): perto = similaridade 1, meio ≈ 0,707,
-	// longe = 0 (e similaridade 1 com o vetor HyDE (0,1)).
 	vectors := map[string][2]float64{
 		"perto": {1, 0},
 		"meio":  {1, 1},
@@ -107,14 +106,24 @@ func TestSearchHybrid_SemanticFloorsCutListAndTotal(t *testing.T) {
 			t.Fatalf("embedding %s: %v", name, err)
 		}
 	}
+	return pool, token
+}
 
-	// Query sem termo real: nada casa o FTS, só as listas semânticas trazem itens.
-	req := func() *models.SearchRequest {
-		return &models.SearchRequest{
-			Q: "zzqsemtermo" + token, Types: []models.ItemType{models.TypeService},
-			Filters: models.SearchFilters{Orgao: token}, Page: 1, PerPage: 10,
-		}
+// semanticFixtureRequest é uma busca sem termo real (nada casa o FTS) restrita
+// ao órgão da fixture: só as listas semânticas trazem itens.
+func semanticFixtureRequest(token string, page int) *models.SearchRequest {
+	return &models.SearchRequest{
+		Q: "zzqsemtermo" + token, Types: []models.ItemType{models.TypeService},
+		Filters: models.SearchFilters{Orgao: token}, Page: page, PerPage: 10,
 	}
+}
+
+// Item semântico abaixo do piso da lista não entra no RRF nem no total; com o
+// piso desligado a busca segue trazendo os vizinhos como antes (DEV-601).
+func TestSearchHybrid_SemanticFloorsCutListAndTotal(t *testing.T) {
+	pool, token := semanticFixture(t)
+	ctx := context.Background()
+	req := func() *models.SearchRequest { return semanticFixtureRequest(token, 1) }
 	queryVec, hydeVec := testVectorLiteral(1, 0), testVectorLiteral(0, 1)
 	titles := func(results []*SearchResult) []string {
 		var out []string
@@ -162,6 +171,73 @@ func TestSearchHybrid_SemanticFloorsCutListAndTotal(t *testing.T) {
 			}
 			if total != len(tc.want) {
 				t.Errorf("total = %d, want %d (o piso também vale para o total)", total, len(tc.want))
+			}
+		})
+	}
+}
+
+// A melhor similaridade de cada lista é observada antes do piso, uma vez por
+// busca (só na primeira página), inclusive quando o piso esvazia a resposta
+// (DEV-601).
+func TestSearchHybrid_ObservesBestSimilarityBeforeFloor(t *testing.T) {
+	pool, token := semanticFixture(t)
+	ctx := context.Background()
+	// (1,-1) tem similaridade ≈ 0,707 com perto, 0 com meio e ≈ -0,707 com longe;
+	// (0,1) tem similaridade 1 com longe.
+	queryVec, hydeVec := testVectorLiteral(1, -1), testVectorLiteral(0, 1)
+
+	type run struct {
+		name   string
+		floors SemanticFloors
+		hyde   bool
+		page   int
+		want   map[string]float64 // lista -> melhor similaridade
+		total  int
+		fts    bool // busca com termo que casa o FTS (os títulos da fixture)
+	}
+	runs := []run{
+		{"híbrida sem piso", SemanticFloors{}, false, 1, map[string]float64{SemanticListQuery: math.Sqrt2 / 2}, 3, false},
+		{"híbrida com piso que esvazia", SemanticFloors{Query: 0.9}, false, 1, map[string]float64{SemanticListQuery: math.Sqrt2 / 2}, 0, false},
+		{"hyde com pisos", SemanticFloors{Query: 0.9, HyDE: 0.9}, true, 1,
+			map[string]float64{SemanticListQuery: math.Sqrt2 / 2, SemanticListHyDE: 1}, 1, false},
+		{"hyde página 2", SemanticFloors{}, true, 2, map[string]float64{}, 3, false},
+		{"híbrida com termo real", SemanticFloors{Query: 0.9}, false, 1, map[string]float64{SemanticListQuery: math.Sqrt2 / 2}, 3, true},
+	}
+	for _, tc := range runs {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []SemanticObservation
+			repo := NewSearchRepository(pool).WithSemanticFloors(tc.floors).
+				WithSemanticObserver(func(o SemanticObservation) { got = append(got, o) })
+			var (
+				total int
+				err   error
+			)
+			req := semanticFixtureRequest(token, tc.page)
+			if tc.fts {
+				req.Q = "vetorial"
+			}
+			if tc.hyde {
+				_, total, err = repo.SearchHybridWithHyDE(ctx, req, queryVec, hydeVec)
+			} else {
+				_, total, err = repo.SearchHybrid(ctx, req, queryVec)
+			}
+			if err != nil {
+				t.Fatalf("busca: %v", err)
+			}
+			if total != tc.total {
+				t.Errorf("total = %d, want %d", total, tc.total)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("observações = %+v, want %v", got, tc.want)
+			}
+			for _, o := range got {
+				want, ok := tc.want[o.List]
+				if !ok || math.Abs(o.BestSimilarity-want) > 1e-6 {
+					t.Errorf("observação %+v, want similaridade %v", o, want)
+				}
+				if o.FTSMatch != tc.fts {
+					t.Errorf("observação %+v: FTSMatch want %v", o, tc.fts)
+				}
 			}
 		})
 	}

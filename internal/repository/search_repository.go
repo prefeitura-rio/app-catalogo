@@ -11,8 +11,9 @@ import (
 )
 
 type SearchRepository struct {
-	db     *pgxpool.Pool
-	floors SemanticFloors
+	db       *pgxpool.Pool
+	floors   SemanticFloors
+	observer SemanticObserver
 }
 
 func NewSearchRepository(db *pgxpool.Pool) *SearchRepository {
@@ -31,6 +32,34 @@ type SemanticFloors struct {
 // WithSemanticFloors define os pisos das listas semânticas e devolve r.
 func (r *SearchRepository) WithSemanticFloors(floors SemanticFloors) *SearchRepository {
 	r.floors = floors
+	return r
+}
+
+// Listas semânticas da busca híbrida, como aparecem em SemanticObservation.List.
+const (
+	SemanticListQuery = "query"
+	SemanticListHyDE  = "hyde"
+)
+
+// SemanticObservation é a melhor similaridade de cosseno (1 - menor distância)
+// de uma lista semântica numa busca híbrida, medida antes do piso: é o dado de
+// calibração dos pisos (DEV-601). FTSMatch diz se algum item casou o FTS na
+// mesma busca, o que separa as buscas com termo reconhecido das sem.
+type SemanticObservation struct {
+	List           string
+	FTSMatch       bool
+	BestSimilarity float64
+}
+
+// SemanticObserver recebe as observações das listas semânticas.
+type SemanticObserver func(SemanticObservation)
+
+// WithSemanticObserver define quem recebe a melhor similaridade de cada lista
+// semântica das buscas híbridas e devolve r. A observação é feita uma vez por
+// busca, na primeira página (as demais repetiriam a mesma busca); lista vazia
+// (nenhum item com embedding nos filtros) não é observada.
+func (r *SearchRepository) WithSemanticObserver(observer SemanticObserver) *SearchRepository {
+	r.observer = observer
 	return r
 }
 
@@ -314,25 +343,46 @@ func hybridFTSCTE(where string) string {
 		)`, hybridFTSRank, where)
 }
 
-// hybridSemanticCTE devolve uma CTE com os até 50 vizinhos mais próximos do
-// vetor vectorParam (ex.: "$3") cuja distância de cosseno não passa de
-// maxDistParam (ex.: "$4", de maxCosineDistance): o piso de similaridade da
-// lista (DEV-601).
+// hybridSemanticCTE devolve duas CTEs: name_knn, com os até 50 vizinhos mais
+// próximos do vetor vectorParam (ex.: "$3") e a distância de cosseno de cada
+// um, e name, com os vizinhos cuja distância não passa de maxDistParam (ex.:
+// "$4", de maxCosineDistance): o piso de similaridade da lista (DEV-601). Como
+// os vizinhos vêm em ordem de distância, cortar depois do LIMIT dá o mesmo
+// conjunto que cortar antes; name_knn guarda a menor distância mesmo quando o
+// piso esvazia a lista, para a observação de calibração.
 func hybridSemanticCTE(name, vectorParam, maxDistParam, where string) string {
 	return fmt.Sprintf(`
-		%[1]s AS (
+		%[1]s_knn AS (
 			SELECT
 				ci.id,
-				1.0 - (ci.embedding <=> %[2]s::vector) AS score,
-				ROW_NUMBER() OVER (ORDER BY ci.embedding <=> %[2]s::vector) AS rn
+				ci.embedding <=> %[2]s::vector AS dist
 			FROM catalog_items ci
 			WHERE ci.embedding IS NOT NULL
-			  AND (ci.embedding <=> %[2]s::vector) <= %[3]s::float8
 			  AND %[4]s
 			ORDER BY ci.embedding <=> %[2]s::vector
 			LIMIT 50
+		),
+		%[1]s AS (
+			SELECT
+				k.id,
+				1.0 - k.dist AS score,
+				ROW_NUMBER() OVER (ORDER BY k.dist) AS rn
+			FROM %[1]s_knn k
+			WHERE k.dist <= %[3]s::float8
 		)`, name, vectorParam, maxDistParam, where)
 }
+
+// hybridStatsSQL e hydeStatsSQL são as colunas de calibração das buscas
+// híbridas: a menor distância de cosseno de sem_knn e de hyde_knn (NULL com a
+// lista vazia ou, na híbrida sem HyDE, sempre) e se a lista FTS tem algum item.
+const (
+	hybridStatsSQL = `(SELECT MIN(dist) FROM sem_knn)::float8 AS sem_best_dist,
+			NULL::float8 AS hyde_best_dist,
+			EXISTS (SELECT 1 FROM fts) AS fts_match`
+	hydeStatsSQL = `(SELECT MIN(dist) FROM sem_knn)::float8 AS sem_best_dist,
+			(SELECT MIN(dist) FROM hyde_knn)::float8 AS hyde_best_dist,
+			EXISTS (SELECT 1 FROM fts) AS fts_match`
+)
 
 // hybridSearchCTEs monta as CTEs de SearchHybrid: fts + sem fundidas por RRF.
 // Args: $1=expandedQuery, $2=rawQuery(trigram), $3=vector, $4=distância máxima
@@ -375,8 +425,9 @@ func hydeSearchCTEs(where string) string {
 
 // hybridPageSQL devolve a página da lista RRF montada por ctes. COUNT(*) OVER ()
 // é calculado antes do LIMIT/OFFSET: é o tamanho da lista inteira, que vira o
-// total da resposta.
-func hybridPageSQL(ctes, limitClause string) string {
+// total da resposta. stats são as colunas de calibração (hybridStatsSQL ou
+// hydeStatsSQL), iguais em toda linha.
+func hybridPageSQL(ctes, stats, limitClause string) string {
 	return ctes + fmt.Sprintf(`
 		SELECT
 			ci.id, ci.external_id, ci.source, ci.type,
@@ -388,19 +439,41 @@ func hybridPageSQL(ctes, limitClause string) string {
 			ci.created_at, ci.updated_at,
 			r.rrf_score AS rank,
 			r.headline,
-			COUNT(*) OVER () AS rrf_total
+			COUNT(*) OVER () AS rrf_total,
+			%s
 		FROM rrf r
 		JOIN catalog_items ci ON ci.id = r.id
 		%s
 		%s
-	`, hybridOrderByRRF, limitClause)
+	`, stats, hybridOrderByRRF, limitClause)
 }
 
-// hybridCountSQL conta a lista RRF montada por ctes.
-func hybridCountSQL(ctes string) string {
+// hybridCountSQL conta a lista RRF montada por ctes, com as colunas de
+// calibração stats.
+func hybridCountSQL(ctes, stats string) string {
 	return ctes + `
-		SELECT COUNT(*) FROM rrf
+		SELECT COUNT(*), ` + stats + ` FROM rrf
 	`
+}
+
+// hybridStats são as colunas de calibração lidas de uma busca híbrida.
+type hybridStats struct {
+	semBestDist  *float64
+	hydeBestDist *float64
+	ftsMatch     bool
+}
+
+// observe entrega ao observer a melhor similaridade de cada lista não vazia.
+func (r *SearchRepository) observe(st hybridStats) {
+	if r.observer == nil {
+		return
+	}
+	if st.semBestDist != nil {
+		r.observer(SemanticObservation{List: SemanticListQuery, FTSMatch: st.ftsMatch, BestSimilarity: 1 - *st.semBestDist})
+	}
+	if st.hydeBestDist != nil {
+		r.observer(SemanticObservation{List: SemanticListHyDE, FTSMatch: st.ftsMatch, BestSimilarity: 1 - *st.hydeBestDist})
+	}
 }
 
 // searchHybridPage executa a página da busca híbrida e devolve os resultados e o
@@ -408,18 +481,25 @@ func hybridCountSQL(ctes string) string {
 // contagem do FTS: essa pode passar do tamanho da lista (no máximo 50 por
 // fonte) ou ser zero com itens semânticos na página. args termina com limit e
 // offset. Uma página além do fim não traz linha com o total, então a lista é
-// contada à parte.
-func (r *SearchRepository) searchHybridPage(ctx context.Context, ctes, limitClause string, args []interface{}, offset int) ([]*SearchResult, int, error) {
-	results, total, err := r.queryResults(ctx, hybridPageSQL(ctes, limitClause), args, true)
+// contada à parte; a primeira página vazia também, quando há observer, para ler
+// as colunas de calibração (o piso pode ter esvaziado a lista).
+func (r *SearchRepository) searchHybridPage(ctx context.Context, ctes, stats, limitClause string, args []interface{}, offset int) ([]*SearchResult, int, error) {
+	var st hybridStats
+	results, total, err := r.queryResults(ctx, hybridPageSQL(ctes, stats, limitClause), args, &st)
 	if err != nil {
 		return nil, 0, err
 	}
-	if len(results) > 0 || offset == 0 {
-		return results, total, nil
+	if len(results) == 0 && (offset > 0 || r.observer != nil) {
+		countArgs := args[:len(args)-2] // sem limit e offset
+		var count int64
+		if err := r.db.QueryRow(ctx, hybridCountSQL(ctes, stats), countArgs...).
+			Scan(&count, &st.semBestDist, &st.hydeBestDist, &st.ftsMatch); err != nil {
+			return nil, 0, fmt.Errorf("hybrid search count: %w", err)
+		}
+		total = int(count)
 	}
-	countArgs := args[:len(args)-2] // sem limit e offset
-	if err := r.db.QueryRow(ctx, hybridCountSQL(ctes), countArgs...).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("hybrid search count: %w", err)
+	if offset == 0 {
+		r.observe(st)
 	}
 	return results, total, nil
 }
@@ -442,7 +522,7 @@ func (r *SearchRepository) SearchHybrid(ctx context.Context, req *models.SearchR
 
 	limitClause := fmt.Sprintf("LIMIT $%d OFFSET $%d", nextIdx, nextIdx+1)
 
-	return r.searchHybridPage(ctx, hybridSearchCTEs(baseWhere), limitClause, mainArgs, offset)
+	return r.searchHybridPage(ctx, hybridSearchCTEs(baseWhere), hybridStatsSQL, limitClause, mainArgs, offset)
 }
 
 // SearchHybridWithHyDE executa busca com 3 listas no RRF: FTS + query_vec + hyde_vec.
@@ -463,18 +543,19 @@ func (r *SearchRepository) SearchHybridWithHyDE(ctx context.Context, req *models
 
 	limitClause := fmt.Sprintf("LIMIT $%d OFFSET $%d", nextIdx, nextIdx+1)
 
-	return r.searchHybridPage(ctx, hydeSearchCTEs(baseWhere), limitClause, mainArgs, offset)
+	return r.searchHybridPage(ctx, hydeSearchCTEs(baseWhere), hydeStatsSQL, limitClause, mainArgs, offset)
 }
 
 func (r *SearchRepository) scanResults(ctx context.Context, sql string, args []interface{}) ([]*SearchResult, error) {
-	results, _, err := r.queryResults(ctx, sql, args, false)
+	results, _, err := r.queryResults(ctx, sql, args, nil)
 	return results, err
 }
 
-// queryResults executa sql e lê os resultados. Com withTotal, cada linha traz
-// depois do headline uma coluna com o total da lista (COUNT(*) OVER ()), que é
-// devolvida; sem linhas, o total é zero.
-func (r *SearchRepository) queryResults(ctx context.Context, sql string, args []interface{}, withTotal bool) ([]*SearchResult, int, error) {
+// queryResults executa sql e lê os resultados. Com stats (busca híbrida), cada
+// linha traz depois do headline uma coluna com o total da lista (COUNT(*) OVER
+// ()), que é devolvida, e as colunas de calibração, lidas em stats; sem linhas,
+// o total é zero e stats fica como está.
+func (r *SearchRepository) queryResults(ctx context.Context, sql string, args []interface{}, stats *hybridStats) ([]*SearchResult, int, error) {
 	rows, err := r.db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("search query: %w", err)
@@ -500,13 +581,13 @@ func (r *SearchRepository) queryResults(ctx context.Context, sql string, args []
 			&item.CreatedAt, &item.UpdatedAt,
 			&rank, &headline,
 		}
-		if withTotal {
-			dest = append(dest, &rowTotal)
+		if stats != nil {
+			dest = append(dest, &rowTotal, &stats.semBestDist, &stats.hydeBestDist, &stats.ftsMatch)
 		}
 		if err := rows.Scan(dest...); err != nil {
 			return nil, 0, fmt.Errorf("search scan: %w", err)
 		}
-		if withTotal {
+		if stats != nil {
 			total = int(rowTotal)
 		}
 		item.Source = models.ItemSource(source)

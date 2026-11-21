@@ -99,6 +99,7 @@ curl -s localhost:9092/metrics | grep '^catalogo_'
 | `catalogo_http_client_circuit_state` | API (`rmi`), API e worker (`appgoapi`) | `client` | 0 fechado, 1 meio-aberto, 2 aberto |
 | `catalogo_http_client_retries_total` | idem | `client` | novas tentativas dos clientes HTTP |
 | `catalogo_search_duration_seconds` | API | `has_query`, `type_filter` | latência da busca |
+| `catalogo_search_semantic_best_similarity` | API | `list` (`query`, `hyde`), `fts_match` (`true`, `false`) | melhor similaridade de cosseno de cada lista semântica da busca híbrida, medida antes do piso, uma vez por busca que chega ao banco (1ª página); base da calibração de `SEARCH_SEMANTIC_MIN_SIMILARITY` e `SEARCH_HYDE_MIN_SIMILARITY` (`fts_match="false"` = busca sem termo reconhecido) |
 | `catalogo_recommendations_duration_seconds` | API | `personalized` | latência da recomendação |
 
 O tráfego HTTP visto pelo Istio (taxa, 5xx, latência) fica no Prometheus do `istio-system` (`istio_requests_total`, `istio_request_duration_milliseconds`), o mesmo que o KEDA e a análise do canary consultam:
@@ -311,6 +312,7 @@ Os valores vêm do Secret `catalogo-secrets` (sincronizado do Infisical pelo ope
 | `CITIZEN_PROFILE_STALE_THRESHOLD`, `CITIZEN_PROFILE_SYNC_INTERVAL` | `1h`, `24h` |
 | `EMBEDDING_BACKFILL_INTERVAL` | `5m` |
 | `CACHE_SEARCH_TTL`, `CACHE_SEARCH_VECTORS_TTL` | `60s`, `1h` |
+| `SEARCH_SEMANTIC_MIN_SIMILARITY`, `SEARCH_HYDE_MIN_SIMILARITY` | `0`, `0` (piso de similaridade de cosseno das listas semânticas do embedding da query e do HyDE, em [0, 1); `0` desliga; valor inválido impede o startup) |
 | `CACHE_RECOMMENDATION_AUTHENTICATED_TTL`, `CACHE_RECOMMENDATION_CLUSTER_TTL` | `5m`, `15m` |
 | `SERVER_PORT`, `SERVER_REQUEST_TIMEOUT`, `METRICS_PORT`, `WORKER_METRICS_PORT` | `8080`, `30` (segundos), `9092` e `9091` (`0` desliga; `METRICS_PORT` igual a `SERVER_PORT` impede o startup) |
 | `APP_ENV`, `LOG_LEVEL` | `development`, `info` |

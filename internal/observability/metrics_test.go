@@ -121,3 +121,25 @@ func TestMetricsServer(t *testing.T) {
 		t.Errorf("/health no servidor de métricas: esperado 404, obtido %d", w.Code)
 	}
 }
+
+// A melhor similaridade de cada lista semântica sai em /metrics por lista e
+// fts_match, nos baldes da faixa do piso (DEV-601).
+func TestSearchSemanticBestSimilarity(t *testing.T) {
+	ObserveSearchSemanticBestSimilarity("hyde", false, 0.61)
+
+	w := request(NewMetricsServer("").Handler, "/metrics", "")
+	body, err := io.ReadAll(w.Body)
+	if err != nil {
+		t.Fatalf("corpo: %v", err)
+	}
+	for _, want := range []string{
+		`catalogo_search_semantic_best_similarity_count{fts_match="false",list="hyde"} 1`,
+		`catalogo_search_semantic_best_similarity_bucket{fts_match="false",list="hyde",le="0.6"} 0`,
+		`catalogo_search_semantic_best_similarity_bucket{fts_match="false",list="hyde",le="0.625"} 1`,
+		`catalogo_search_semantic_best_similarity_bucket{fts_match="false",list="hyde",le="1"} 1`,
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("série %q ausente em /metrics:\n%s", want, body)
+		}
+	}
+}
