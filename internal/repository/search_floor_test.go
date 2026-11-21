@@ -59,7 +59,7 @@ func TestSemanticCTEs_FilterByOwnMaxDistance(t *testing.T) {
 	}
 }
 
-// semanticFixture grava três itens de um órgão próprio com vetores em relação a
+// semanticFixture grava três itens de um órgão próprio com vetores comparados a
 // (1,0): perto = similaridade 1, meio ≈ 0,707, longe = 0 (e similaridade 1
 // com (0,1)). Devolve o órgão, que isola os itens nos filtros da busca.
 func semanticFixture(t *testing.T) (*pgxpool.Pool, string) {
