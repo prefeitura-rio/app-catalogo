@@ -113,12 +113,18 @@ type stubSyncRepo struct {
 	orphanErr     error
 	events        []*models.SyncEvent
 	eventUpdates  []models.SyncEventStatus
+	recordErr     error
+	updateIDs     []int64
+	updateCtxErrs []error
 }
 
 func (r *stubSyncRepo) RecordSyncEvent(ctx context.Context, event *models.SyncEvent) (int64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, event)
+	if r.recordErr != nil {
+		return 0, r.recordErr
+	}
 	return int64(len(r.events)), nil
 }
 
@@ -126,6 +132,8 @@ func (r *stubSyncRepo) UpdateSyncEvent(ctx context.Context, id int64, status mod
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.eventUpdates = append(r.eventUpdates, status)
+	r.updateIDs = append(r.updateIDs, id)
+	r.updateCtxErrs = append(r.updateCtxErrs, ctx.Err())
 	return nil
 }
 
@@ -1434,5 +1442,84 @@ func TestBuildCartaDescription_SkipsDuplicateSummary(t *testing.T) {
 	}
 	if !strings.Contains(desc, "Passo a passo") || !strings.Contains(desc, "Documentos: RG") {
 		t.Fatalf("expected howto/docs in description: %q", desc)
+	}
+}
+
+// --- evento de sync (sync_events) --------------------------------------------
+
+func singleServiceClient() *stubCartaClient {
+	return &stubCartaClient{
+		themes:    []clients.CartaTheme{{Slug: "tributos", Name: "Tributos"}},
+		subthemes: map[string][]clients.CartaSubtheme{"tributos": {{Slug: "iptu", Name: "IPTU"}}},
+		services: map[string][]clients.CartaServiceListItem{
+			"iptu": {sampleListItem("svc-a", "2026-08-20T00:00:00.000Z")},
+		},
+		details: map[string]*clients.CartaServiceDetail{
+			"svc-a": sampleDetail("svc-a", "Serviço A"),
+		},
+	}
+}
+
+// sync_events.metadata é JSONB NOT NULL: o evento do SalesForce precisa levar um
+// metadata não nulo, senão o INSERT falha e a fonte some de /admin/sync/status.
+func TestFullSync_RecordsSalesForceEventWithMetadata(t *testing.T) {
+	repo := &stubSyncRepo{orphanCount: 0}
+	svc := newTestSync(singleServiceClient(), repo)
+
+	if err := svc.FullSync(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(repo.events) != 1 {
+		t.Fatalf("RecordSyncEvent calls=%d want 1", len(repo.events))
+	}
+	ev := repo.events[0]
+	if ev.Source != models.SourceSalesForce || ev.EventType != models.SyncTypeFullSync || ev.Status != models.SyncStatusStarted {
+		t.Fatalf("evento inesperado: source=%q type=%q status=%q", ev.Source, ev.EventType, ev.Status)
+	}
+	if ev.Metadata == nil || !json.Valid(ev.Metadata) {
+		t.Fatalf("metadata deve ser JSON não nulo, got %q", string(ev.Metadata))
+	}
+	if len(repo.updateIDs) != 1 || repo.updateIDs[0] != 1 {
+		t.Fatalf("UpdateSyncEvent deve atualizar o id registrado (1), got %v", repo.updateIDs)
+	}
+	if repo.eventUpdates[0] != models.SyncStatusCompleted {
+		t.Fatalf("status=%v want completed", repo.eventUpdates)
+	}
+}
+
+// Sem evento registrado não há linha a atualizar: nada de UpdateSyncEvent no id 0,
+// e a falha do registro não derruba a sync.
+func TestFullSync_RecordEventErrorSkipsUpdate(t *testing.T) {
+	repo := &stubSyncRepo{recordErr: errors.New("insert sync_events falhou")}
+	svc := newTestSync(singleServiceClient(), repo)
+
+	if err := svc.FullSync(context.Background()); err != nil {
+		t.Fatalf("a sync não deve falhar pelo registro do evento: %v", err)
+	}
+	if len(repo.upserted) != 1 {
+		t.Fatalf("upserted=%d want 1", len(repo.upserted))
+	}
+	if len(repo.updateIDs) != 0 {
+		t.Fatalf("UpdateSyncEvent não deve rodar sem evento registrado, got ids %v", repo.updateIDs)
+	}
+}
+
+// Sync interrompida (contexto cancelado) grava o desfecho mesmo assim, para o
+// evento não ficar em "started" para sempre.
+func TestFullSync_CanceledContextStillFinishesEvent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client := &stubCartaClient{listErr: context.Canceled}
+	repo := &stubSyncRepo{}
+	svc := newTestSync(client, repo)
+
+	if err := svc.FullSync(ctx); err == nil {
+		t.Fatal("esperava erro da sync cancelada")
+	}
+	if len(repo.eventUpdates) != 1 || repo.eventUpdates[0] != models.SyncStatusFailed {
+		t.Fatalf("eventUpdates=%v want [failed]", repo.eventUpdates)
+	}
+	if repo.updateCtxErrs[0] != nil {
+		t.Fatalf("UpdateSyncEvent recebeu contexto cancelado (%v): o evento ficaria em started", repo.updateCtxErrs[0])
 	}
 }

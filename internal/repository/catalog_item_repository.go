@@ -440,7 +440,13 @@ func scanCatalogItemFromRows(rows pgRows) (*models.CatalogItem, error) {
 }
 
 // RecordSyncEvent registra um evento de sincronização no banco.
+// sync_events.metadata é JSONB NOT NULL e o pgx v5 envia json.RawMessage nil como
+// NULL: metadata ausente vira o objeto vazio, para o INSERT não falhar.
 func (r *CatalogItemRepository) RecordSyncEvent(ctx context.Context, event *models.SyncEvent) (int64, error) {
+	metadata := event.Metadata
+	if len(metadata) == 0 {
+		metadata = json.RawMessage(`{}`)
+	}
 	var id int64
 	err := r.db.QueryRow(ctx, `
 		INSERT INTO sync_events (source, event_type, status, items_processed, items_failed, error_message, duration_ms, started_at, completed_at, metadata)
@@ -456,7 +462,7 @@ func (r *CatalogItemRepository) RecordSyncEvent(ctx context.Context, event *mode
 		event.DurationMs,
 		event.StartedAt,
 		event.CompletedAt,
-		event.Metadata,
+		metadata,
 	).Scan(&id)
 	return id, err
 }
