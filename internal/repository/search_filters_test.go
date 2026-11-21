@@ -68,6 +68,15 @@ func TestBuildFilterClauses_FiltrosDeCursoEVaga(t *testing.T) {
 	if strings.Contains(sql, "faixa") {
 		t.Errorf("sql inesperado: %q", sql)
 	}
+
+	// gratuito é aceito e não filtra (Decisão — DEV-575): a fonte não informa custo.
+	base, baseArgs, baseNext := buildFilterClauses(&models.SearchRequest{}, 1)
+	for _, g := range []bool{true, false} {
+		sql, args, next := buildFilterClauses(&models.SearchRequest{Filters: models.SearchFilters{Gratuito: boolPtr(g)}}, 1)
+		if sql != base || len(args) != len(baseArgs) || next != baseNext {
+			t.Errorf("gratuito=%v alterou o WHERE: %q %v", g, sql, args)
+		}
+	}
 }
 
 // DEV-575: o SQL dos filtros roda de verdade contra o Postgres e devolve só os

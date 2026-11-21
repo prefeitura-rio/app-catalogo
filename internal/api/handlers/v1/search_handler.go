@@ -40,7 +40,7 @@ func NewSearchHandler(searchSvc *services.SearchService, citizenSvc *services.Ci
 // @Param        modalidade         query  string    false  "Modalidade: presencial, digital, hibrido"
 // @Param        bairro             query  string    false  "Bairro do Rio de Janeiro"
 // @Param        orgao              query  string    false  "Órgão ou secretaria responsável"
-// @Param        gratuito           query  bool      false  "[course] Apenas cursos gratuitos"
+// @Param        gratuito           query  bool      false  "[course] Ainda sem efeito: a fonte (app-go-api) não informa o custo do curso; aceito e ignorado"
 // @Param        turno              query  string    false  "[course] Turno: matutino, vespertino, noturno"
 // @Param        regime_contratacao query  string    false  "[job] Regime: CLT, PJ, temporario"
 // @Param        modelo_trabalho    query  string    false  "[job] Modelo: presencial, remoto, hibrido"

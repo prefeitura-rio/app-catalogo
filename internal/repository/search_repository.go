@@ -99,7 +99,8 @@ func buildFilterClauses(req *models.SearchRequest, startIdx int) (string, []inte
 
 	// Filtros de curso e de vaga leem o source_data gravado pelo sync do
 	// app-go-api e só restringem o tipo deles (SearchFilters: filtros não
-	// aplicáveis ao tipo são ignorados).
+	// aplicáveis ao tipo são ignorados). Gratuito fica de fora: a fonte não
+	// informa o custo do curso, e o contrato documenta que ele não filtra.
 	if turno := models.NormalizeTurno(req.Filters.Turno); turno != "" {
 		clauses = append(clauses, onlyForType(models.TypeCourse,
 			fmt.Sprintf("upper(ci.source_data->>'turno') = $%d", idx)))

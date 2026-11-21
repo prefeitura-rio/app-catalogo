@@ -393,7 +393,7 @@
             }
           },
           {
-            "description": "[course] Apenas cursos gratuitos",
+            "description": "[course] Ainda sem efeito: a fonte (app-go-api) não informa o custo do curso; aceito e ignorado",
             "name": "gratuito",
             "in": "query",
             "schema": {
@@ -1338,7 +1338,7 @@
             }
           },
           {
-            "description": "[course] Apenas cursos gratuitos",
+            "description": "[course] Ainda sem efeito: a fonte (app-go-api) não informa o custo do curso; aceito e ignorado",
             "name": "gratuito",
             "in": "query",
             "schema": {

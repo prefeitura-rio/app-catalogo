@@ -1037,7 +1037,7 @@ components:
       required: false
       schema:
         type: boolean
-      description: "[course] `true` para apenas cursos gratuitos"
+      description: "[course] Ainda sem efeito: a fonte dos cursos (app-go-api) não informa o custo, então o parâmetro é aceito (200) e não filtra. Passa a restringir os cursos quando a fonte expuser a gratuidade."
 
     filterTurno:
       name: turno

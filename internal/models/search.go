@@ -44,7 +44,8 @@ type SearchFilters struct {
 	Bairro     string `json:"bairro"`
 	Orgao      string `json:"orgao"`
 
-	// Cursos
+	// Cursos. Gratuito é aceito e ainda não filtra: o app-go-api não informa
+	// o custo do curso (DEV-575, DEV-715).
 	Gratuito *bool  `json:"gratuito"`
 	Turno    string `json:"turno"`
 
