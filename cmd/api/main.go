@@ -107,7 +107,10 @@ func main() {
 
 	// Repositórios
 	itemRepo := repository.NewCatalogItemRepository(db.Pool)
-	searchRepo := repository.NewSearchRepository(db.Pool)
+	searchRepo := repository.NewSearchRepository(db.Pool).WithSemanticFloors(repository.SemanticFloors{
+		Query: cfg.Search.SemanticMinSimilarity,
+		HyDE:  cfg.Search.HyDEMinSimilarity,
+	})
 	profileRepo := repository.NewCitizenProfileRepository(db.Pool)
 
 	// Clients externos

@@ -11,11 +11,37 @@ import (
 )
 
 type SearchRepository struct {
-	db *pgxpool.Pool
+	db     *pgxpool.Pool
+	floors SemanticFloors
 }
 
 func NewSearchRepository(db *pgxpool.Pool) *SearchRepository {
 	return &SearchRepository{db: db}
+}
+
+// SemanticFloors são as similaridades de cosseno mínimas para um item entrar
+// nas listas semânticas da busca híbrida: Query na do embedding da query, HyDE
+// na do documento hipotético. Abaixo do piso o item não entra no RRF nem no
+// total (DEV-601). Zero desliga o piso da lista.
+type SemanticFloors struct {
+	Query float64
+	HyDE  float64
+}
+
+// WithSemanticFloors define os pisos das listas semânticas e devolve r.
+func (r *SearchRepository) WithSemanticFloors(floors SemanticFloors) *SearchRepository {
+	r.floors = floors
+	return r
+}
+
+// maxCosineDistance converte o piso de similaridade na distância de cosseno
+// máxima do pgvector (<=>, entre 0 e 2). Piso zero ou negativo desliga o corte:
+// a distância máxima vira 2, que todo vetor atende.
+func maxCosineDistance(minSimilarity float64) float64 {
+	if minSimilarity <= 0 {
+		return 2
+	}
+	return 1 - minSimilarity
 }
 
 type SearchResult struct {
@@ -288,9 +314,11 @@ func hybridFTSCTE(where string) string {
 		)`, hybridFTSRank, where)
 }
 
-// hybridSemanticCTE devolve uma CTE com os 50 vizinhos mais próximos do vetor
-// vectorParam (ex.: "$3").
-func hybridSemanticCTE(name, vectorParam, where string) string {
+// hybridSemanticCTE devolve uma CTE com os até 50 vizinhos mais próximos do
+// vetor vectorParam (ex.: "$3") cuja distância de cosseno não passa de
+// maxDistParam (ex.: "$4", de maxCosineDistance): o piso de similaridade da
+// lista (DEV-601).
+func hybridSemanticCTE(name, vectorParam, maxDistParam, where string) string {
 	return fmt.Sprintf(`
 		%[1]s AS (
 			SELECT
@@ -299,17 +327,19 @@ func hybridSemanticCTE(name, vectorParam, where string) string {
 				ROW_NUMBER() OVER (ORDER BY ci.embedding <=> %[2]s::vector) AS rn
 			FROM catalog_items ci
 			WHERE ci.embedding IS NOT NULL
-			  AND %[3]s
+			  AND (ci.embedding <=> %[2]s::vector) <= %[3]s::float8
+			  AND %[4]s
 			ORDER BY ci.embedding <=> %[2]s::vector
 			LIMIT 50
-		)`, name, vectorParam, where)
+		)`, name, vectorParam, maxDistParam, where)
 }
 
 // hybridSearchCTEs monta as CTEs de SearchHybrid: fts + sem fundidas por RRF.
-// Args: $1=expandedQuery, $2=rawQuery(trigram), $3=vector, depois os filtros.
+// Args: $1=expandedQuery, $2=rawQuery(trigram), $3=vector, $4=distância máxima
+// do vector, depois os filtros.
 func hybridSearchCTEs(where string) string {
 	return `
-		WITH` + hybridFTSCTE(where) + `,` + hybridSemanticCTE("sem", "$3", where) + `,
+		WITH` + hybridFTSCTE(where) + `,` + hybridSemanticCTE("sem", "$3", "$4", where) + `,
 		rrf AS (
 			SELECT
 				COALESCE(f.id, s.id)     AS id,
@@ -323,11 +353,12 @@ func hybridSearchCTEs(where string) string {
 
 // hydeSearchCTEs monta as CTEs de SearchHybridWithHyDE: fts + sem + hyde
 // fundidas por RRF. Args: $1=expandedQ, $2=rawQ(trigram), $3=queryVec,
-// $4=hydeVec, depois os filtros.
+// $4=hydeVec, $5=distância máxima do queryVec, $6=distância máxima do hydeVec,
+// depois os filtros.
 func hydeSearchCTEs(where string) string {
 	return `
-		WITH` + hybridFTSCTE(where) + `,` + hybridSemanticCTE("sem", "$3", where) + `,` +
-		hybridSemanticCTE("hyde", "$4", where) + `,
+		WITH` + hybridFTSCTE(where) + `,` + hybridSemanticCTE("sem", "$3", "$5", where) + `,` +
+		hybridSemanticCTE("hyde", "$4", "$6", where) + `,
 		rrf AS (
 			SELECT
 				COALESCE(f.id, s.id, h.id) AS id,
@@ -397,15 +428,15 @@ func (r *SearchRepository) searchHybridPage(ctx context.Context, ctes, limitClau
 // queryEmbedding é o embedding da query (gerado pelo GeminiEmbeddingClient).
 // Pesos RRF: FTS=1.0, semântico=2.0, k=60.
 func (r *SearchRepository) SearchHybrid(ctx context.Context, req *models.SearchRequest, queryEmbedding string) ([]*SearchResult, int, error) {
-	// Args: $1=expandedQuery, $2=rawQuery(trigram), $3=vector, $4...$N=filtros, $N+1=limit, $N+2=offset
-	filterSQL, filterArgs, nextIdx := buildFilterClauses(req, 4) // FTS=$1, trigram=$2, vector=$3
+	// Args: $1=expandedQuery, $2=rawQuery(trigram), $3=vector, $4=distância máxima, $5...$N=filtros, $N+1=limit, $N+2=offset
+	filterSQL, filterArgs, nextIdx := buildFilterClauses(req, 5) // FTS=$1, trigram=$2, vector=$3, piso=$4
 
 	baseWhere := searchEligibleWhere(filterSQL)
 
 	offset := (req.Page - 1) * req.PerPage
 
-	mainArgs := make([]interface{}, 0, 3+len(filterArgs)+2)
-	mainArgs = append(mainArgs, req.Q, req.Q, queryEmbedding)
+	mainArgs := make([]interface{}, 0, 4+len(filterArgs)+2)
+	mainArgs = append(mainArgs, req.Q, req.Q, queryEmbedding, maxCosineDistance(r.floors.Query))
 	mainArgs = append(mainArgs, filterArgs...)
 	mainArgs = append(mainArgs, req.PerPage, offset)
 
@@ -418,14 +449,15 @@ func (r *SearchRepository) SearchHybrid(ctx context.Context, req *models.SearchR
 // hydeEmbedding é o embedding do documento hipotético gerado pelo HyDE.
 // Pesos: FTS=1.0, query_vec=2.0, hyde_vec=1.5
 func (r *SearchRepository) SearchHybridWithHyDE(ctx context.Context, req *models.SearchRequest, queryEmbedding, hydeEmbedding string) ([]*SearchResult, int, error) {
-	// Args: $1=expandedQ, $2=rawQ(trigram), $3=queryVec, $4=hydeVec, $5...$N=filtros, $N+1=limit, $N+2=offset
-	filterSQL, filterArgs, nextIdx := buildFilterClauses(req, 5)
+	// Args: $1=expandedQ, $2=rawQ(trigram), $3=queryVec, $4=hydeVec, $5/$6=distâncias máximas, $7...$N=filtros, $N+1=limit, $N+2=offset
+	filterSQL, filterArgs, nextIdx := buildFilterClauses(req, 7)
 
 	baseWhere := searchEligibleWhere(filterSQL)
 
 	offset := (req.Page - 1) * req.PerPage
-	mainArgs := make([]interface{}, 0, 4+len(filterArgs)+2)
-	mainArgs = append(mainArgs, req.Q, req.Q, queryEmbedding, hydeEmbedding)
+	mainArgs := make([]interface{}, 0, 6+len(filterArgs)+2)
+	mainArgs = append(mainArgs, req.Q, req.Q, queryEmbedding, hydeEmbedding,
+		maxCosineDistance(r.floors.Query), maxCosineDistance(r.floors.HyDE))
 	mainArgs = append(mainArgs, filterArgs...)
 	mainArgs = append(mainArgs, req.PerPage, offset)
 

@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,6 +35,7 @@ type AppConfig struct {
 	Gemini      GeminiSettings
 	Reranker    RerankerSettings
 	Embedding   EmbeddingSettings
+	Search      SearchSettings
 	Worker      WorkerSettings
 }
 
@@ -278,6 +281,48 @@ type EmbeddingSettings struct {
 	BackfillInterval time.Duration
 }
 
+// SearchSettings configura a busca híbrida.
+type SearchSettings struct {
+	// SemanticMinSimilarity e HyDEMinSimilarity são as similaridades de cosseno
+	// mínimas para um item entrar na lista semântica do embedding da query e na
+	// do HyDE (DEV-601). 0 desliga o piso da lista.
+	SemanticMinSimilarity float64
+	HyDEMinSimilarity     float64
+}
+
+// loadSearchSettings lê os pisos de similaridade. Valor que não é número, ou
+// fora de [0, 1), é erro: um piso digitado errado não pode virar zero calado
+// nem esvaziar a busca semântica (piso 1 só aceita o vetor idêntico).
+func loadSearchSettings(v *viper.Viper) (SearchSettings, error) {
+	semantic, err := getSimilarityFloor(v, "SEARCH_SEMANTIC_MIN_SIMILARITY", defaultSemanticMinSimilarity)
+	if err != nil {
+		return SearchSettings{}, err
+	}
+	hyde, err := getSimilarityFloor(v, "SEARCH_HYDE_MIN_SIMILARITY", defaultHyDEMinSimilarity)
+	if err != nil {
+		return SearchSettings{}, err
+	}
+	return SearchSettings{SemanticMinSimilarity: semantic, HyDEMinSimilarity: hyde}, nil
+}
+
+// Pisos padrão das listas semânticas (DEV-601).
+const (
+	defaultSemanticMinSimilarity = 0
+	defaultHyDEMinSimilarity     = 0
+)
+
+func getSimilarityFloor(v *viper.Viper, key string, defaultValue float64) (float64, error) {
+	raw := strings.TrimSpace(getEnv(v, key, ""))
+	if raw == "" {
+		return defaultValue, nil
+	}
+	f, err := strconv.ParseFloat(raw, 64)
+	if err != nil || math.IsNaN(f) || f < 0 || f >= 1 {
+		return 0, fmt.Errorf("%s: %q deve ser um número em [0, 1) (0 desliga o piso)", key, raw)
+	}
+	return f, nil
+}
+
 const minimumCPFHashSecretBytes = 32
 
 func validateCPFHashSecret(secret string) error {
@@ -426,6 +471,11 @@ func Load() (*AppConfig, error) {
 	if err := validateCPFHashSecret(cfg.CPFHashSalt); err != nil {
 		return nil, err
 	}
+	search, err := loadSearchSettings(v)
+	if err != nil {
+		return nil, fmt.Errorf("configuração de busca inválida: %w", err)
+	}
+	cfg.Search = search
 
 	return cfg, nil
 }
