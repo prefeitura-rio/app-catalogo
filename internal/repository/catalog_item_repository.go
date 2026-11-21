@@ -327,20 +327,7 @@ func (r *CatalogItemRepository) GetCandidates(ctx context.Context, types []model
 		typeStrs[i] = string(t)
 	}
 
-	rows, err := r.db.Query(ctx, `
-		SELECT id, external_id, source, type, title, description, short_desc,
-			organization, url, image_url, target_audience, bairros,
-			modalidade, status, tags, source_data,
-			COALESCE(theme_slug, ''), COALESCE(subtheme_slug, ''),
-			valid_from, valid_until, source_updated_at, created_at, updated_at
-		FROM catalog_items
-		WHERE status = 'active'
-		  AND deleted_at IS NULL
-		  AND (cardinality($1::text[]) = 0 OR type = ANY($1::item_type[]))
-		  AND (valid_until IS NULL OR valid_until > NOW())
-		ORDER BY created_at DESC
-		LIMIT $2
-	`, typeStrs, limit)
+	rows, err := r.db.Query(ctx, getCandidatesSQL, typeStrs, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -373,7 +360,38 @@ func (r *CatalogItemRepository) GetByID(ctx context.Context, id uuid.UUID) (*mod
 
 // GetPublicByID returns only an item eligible for public discovery.
 func (r *CatalogItemRepository) GetPublicByID(ctx context.Context, id uuid.UUID) (*models.CatalogItem, error) {
-	row := r.db.QueryRow(ctx, `
+	row := r.db.QueryRow(ctx, getPublicByIDSQL, id)
+	return scanCatalogItem(row)
+}
+
+// inForceSQL é a condição de vigência de um item: já começou (valid_from no
+// passado ou ausente) e ainda não terminou (valid_until no futuro ou ausente).
+// prefix é o alias da tabela com o ponto ("ci.") ou "" sem alias. Toda leitura
+// de descoberta (detalhe público, busca, candidatos de recomendação) a aplica,
+// para que um item não apareça antes do início nem depois do fim da vigência
+// (DEV-609).
+func inForceSQL(prefix string) string {
+	return "(" + prefix + "valid_from IS NULL OR " + prefix + "valid_from <= NOW())" +
+		" AND (" + prefix + "valid_until IS NULL OR " + prefix + "valid_until > NOW())"
+}
+
+var (
+	getCandidatesSQL = `
+		SELECT id, external_id, source, type, title, description, short_desc,
+			organization, url, image_url, target_audience, bairros,
+			modalidade, status, tags, source_data,
+			COALESCE(theme_slug, ''), COALESCE(subtheme_slug, ''),
+			valid_from, valid_until, source_updated_at, created_at, updated_at
+		FROM catalog_items
+		WHERE status = 'active'
+		  AND deleted_at IS NULL
+		  AND (cardinality($1::text[]) = 0 OR type = ANY($1::item_type[]))
+		  AND ` + inForceSQL("") + `
+		ORDER BY created_at DESC
+		LIMIT $2
+	`
+
+	getPublicByIDSQL = `
 		SELECT id, external_id, source, type, title, description, short_desc,
 			organization, url, image_url, target_audience, bairros,
 			modalidade, status, tags, source_data,
@@ -383,10 +401,9 @@ func (r *CatalogItemRepository) GetPublicByID(ctx context.Context, id uuid.UUID)
 		WHERE id = $1
 		  AND status = 'active'
 		  AND deleted_at IS NULL
-		  AND (valid_until IS NULL OR valid_until > NOW())
-	`, id)
-	return scanCatalogItem(row)
-}
+		  AND ` + inForceSQL("") + `
+	`
+)
 
 type rowScanner interface {
 	Scan(dest ...any) error

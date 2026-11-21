@@ -199,6 +199,19 @@ func (s *SearchService) buildResponse(results []*repository.SearchResult, total 
 	}
 }
 
+// searchMetadataAllowedFields lists the source_data keys copied to SearchItem.metadata
+// for an item type. The list is documented in openapi.yaml (SearchItem.metadata).
+func searchMetadataAllowedFields(itemType models.ItemType) []string {
+	allowedFields := []string{"id", "slug"}
+	if itemType == models.TypeService {
+		allowedFields = append(allowedFields,
+			"tema_geral", "tema_especifico", "Tema__c",
+			"themeSlug", "themeName",
+		)
+	}
+	return allowedFields
+}
+
 // sanitizedSearchMetadata allowlists safe keys from source_data for API responses.
 func sanitizedSearchMetadata(itemType models.ItemType, sourceData json.RawMessage) json.RawMessage {
 	if len(sourceData) == 0 {
@@ -209,13 +222,7 @@ func sanitizedSearchMetadata(itemType models.ItemType, sourceData json.RawMessag
 		return nil
 	}
 
-	allowedFields := []string{"id", "slug"}
-	if itemType == models.TypeService {
-		allowedFields = append(allowedFields,
-			"tema_geral", "tema_especifico", "Tema__c",
-			"themeSlug", "themeName",
-		)
-	}
+	allowedFields := searchMetadataAllowedFields(itemType)
 	sanitizedFields := make(map[string]json.RawMessage, len(allowedFields))
 	for _, allowedField := range allowedFields {
 		if fieldValue, exists := sourceFields[allowedField]; exists && len(fieldValue) > 0 && string(fieldValue) != "null" {

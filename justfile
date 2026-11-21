@@ -43,6 +43,11 @@ migrate-create NAME:
 test:
     go test ./... -v -race -coverprofile=coverage.out
 
+# Valida e testa as regras de alerta (requer promtool; está no nix develop)
+alerts-test:
+    promtool check rules internal/observability/alerts.yml
+    cd internal/observability && promtool test rules alerts_test.yml
+
 # Format code
 fmt:
     go fmt ./...

@@ -191,6 +191,41 @@ func TestCartaServicosClient_ListAllThemes_Pagination(t *testing.T) {
 	}
 }
 
+func TestCartaServicosClient_ListAllSubthemes_RejectsEmptyDataWithTotal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"meta": map[string]int{"page": 1, "per_page": 100, "total": 3, "total_pages": 1},
+			"data": []map[string]any{},
+		})
+	}))
+	defer srv.Close()
+
+	c := mustCartaClient(t, srv.URL)
+	_, err := c.ListAllSubthemes(context.Background(), "transparencia-1")
+	if err == nil || !strings.Contains(err.Error(), "data vazia") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestCartaServicosClient_ListAllSubthemes_RejectsPartialTotal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"meta": map[string]int{"page": 1, "per_page": 100, "total": 3, "total_pages": 1},
+			"data": []map[string]any{
+				{"slug": "a", "name": "A"},
+				{"slug": "b", "name": "B"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	c := mustCartaClient(t, srv.URL)
+	_, err := c.ListAllSubthemes(context.Background(), "transparencia-1")
+	if err == nil || !strings.Contains(err.Error(), "esperava 3") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestCartaServicosClient_ListServicesBySubtheme_Happy(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasSuffix(r.URL.Path, "/subthemes/iptu/services") {

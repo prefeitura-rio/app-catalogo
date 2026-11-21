@@ -43,6 +43,39 @@ jobs:
           version: v2.15.0
           args: --timeout=5m
 
+  # Valida as regras de alerta (internal/observability/alerts.yml) e roda os
+  # testes delas (alerts_test.yml) com o promtool da mesma versão do Prometheus
+  # do istio-system, que carrega essas regras. Mesmo comando de `just alerts-test`.
+  alert-rules:
+    name: Alert rules (promtool)
+    runs-on: ubuntu-latest
+    env:
+      PROMETHEUS_VERSION: 3.2.1
+      # sha256 do prometheus-3.2.1.linux-amd64.tar.gz (sha256sums.txt do release v3.2.1)
+      PROMETHEUS_SHA256: a622e3007c9109a7f470e1433cbd29bf392596715cf7eea8b81b37fa9d26b7be
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install promtool
+        run: |
+          set -euo pipefail
+          tarball="prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/${tarball}" \
+            "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${tarball}"
+          echo "${PROMETHEUS_SHA256}  ${RUNNER_TEMP}/${tarball}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${tarball}" -C "${RUNNER_TEMP}" --strip-components=1 \
+            "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: promtool version
+        run: promtool --version
+
+      - name: Check rules
+        run: promtool check rules internal/observability/alerts.yml
+
+      - name: Test rules
+        working-directory: internal/observability
+        run: promtool test rules alerts_test.yml
 
   security-scan:
     name: Security Scanning

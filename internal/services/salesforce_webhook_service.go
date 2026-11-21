@@ -90,6 +90,15 @@ const (
 	webhookResultFailed    = "failed"
 )
 
+// init cria a série de cada resultado com zero. Sem isso, a primeira falha só
+// aparece como série nova, e o increase() do alerta de webhook failed
+// (internal/observability/alerts.yml) não a enxerga.
+func init() {
+	for _, result := range []string{webhookResultEnqueued, webhookResultDuplicate, webhookResultProcessed, webhookResultFailed} {
+		observability.SalesForceWebhookEventsTotal.WithLabelValues(result)
+	}
+}
+
 // SalesForceWebhookService grava os eventos do webhook antes de responder e os
 // processa com novas tentativas até a sincronização do registro dar certo.
 type SalesForceWebhookService struct {

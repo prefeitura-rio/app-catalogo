@@ -64,12 +64,19 @@ type cartaHierarchyRepository interface {
 	UpsertTheme(ctx context.Context, theme *models.CartaTheme) error
 	UpsertSubtheme(ctx context.Context, st *models.CartaSubtheme) error
 	SoftDeleteThemesNotIn(ctx context.Context, keep []string) (int64, error)
-	SoftDeleteSubthemesNotIn(ctx context.Context, keep []string) (int64, error)
+	SoftDeleteSubthemesNotInTheme(ctx context.Context, themeSlug string, keep []string) (int64, error)
+	PropagateHierarchyLabels(ctx context.Context, labels []models.CartaHierarchyLabel) (int64, error)
 	RefreshHierarchyCounts(ctx context.Context) error
 	UpsertSlugAlias(ctx context.Context, oldSlug, canonicalSlug string) error
 	UpsertSlugAliases(ctx context.Context, canonicalSlug string, oldSlugs []string) error
 	DeleteSlugAlias(ctx context.Context, oldSlug string) error
 	ReplaceHomeFeatured(ctx context.Context, items []models.CartaHomeFeatured) error
+}
+
+// themeSubthemeKeep associa os subtemas listados de um tema para soft-delete escopado.
+type themeSubthemeKeep struct {
+	themeSlug string
+	keep      []string
 }
 
 // SalesForceSyncService sincroniza a Carta de Serviços (API CloudHub) para catalog_items.
@@ -198,10 +205,20 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 
 	s.syncHomeFeatured(ctx)
 
-	listed, err := s.listAndPersistHierarchy(ctx, isFull)
+	listed, labels, err := s.listAndPersistHierarchy(ctx, isFull)
 	if err != nil {
 		s.finishEvent(ctx, eventID, startedAt, models.SyncStatusFailed, 0, 0, err.Error())
 		return err
+	}
+
+	// Propaga renomes/mudanças de tema e subtema para catalog_items mesmo quando
+	// nenhum serviço precisa de re-fetch de detalhe (LastModified inalterado).
+	if s.hierarchy != nil {
+		if n, propErr := s.hierarchy.PropagateHierarchyLabels(ctx, labels); propErr != nil {
+			log.Warn().Err(propErr).Msg("salesforce: falha ao propagar rótulos de hierarquia")
+		} else if n > 0 {
+			log.Info().Int64("updated", n).Msg("salesforce: rótulos de tema/subtema propagados")
+		}
 	}
 
 	toFetch := filterServicesNeedingDetail(listed, since)
@@ -366,19 +383,26 @@ func normalizeHomeFeatured(raw []models.CartaHomeFeatured) []models.CartaHomeFea
 	return items
 }
 
-func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isFull bool) ([]clients.CartaServiceListItem, error) {
+type subthemeMeta struct {
+	themeSlug    string
+	themeName    string
+	subthemeSlug string
+	subthemeName string
+}
+
+func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isFull bool) ([]clients.CartaServiceListItem, []models.CartaHierarchyLabel, error) {
 	themes, err := s.client.ListAllThemes(ctx, false)
 	if err != nil {
-		return nil, fmt.Errorf("listar temas: %w", err)
+		return nil, nil, fmt.Errorf("listar temas: %w", err)
 	}
 
 	var (
-		subMu        sync.Mutex
-		subSlugs     []string
-		themeKeep    []string
-		subthemeKeep []string
-		themeSeen    = make(map[string]struct{})
-		subthemeSeen = make(map[string]struct{})
+		subMu         sync.Mutex
+		subMeta       []subthemeMeta
+		themeKeep     []string
+		subthemeKeeps []themeSubthemeKeep
+		themeSeen     = make(map[string]struct{})
+		subthemeSeen  = make(map[string]struct{})
 	)
 
 	var themeGroup errgroup.Group
@@ -405,8 +429,17 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 			if err != nil {
 				return fmt.Errorf("listar subtemas de %q: %w", theme.Slug, err)
 			}
+			// CloudHub às vezes responde 200 com data vazia sob carga; não soft-delete
+			// nem seguir com hierarquia incompleta quando o próprio tema declara subtemas.
+			if theme.SubthemesCount > 0 && len(subthemes) == 0 {
+				return fmt.Errorf(
+					"listar subtemas de %q: CloudHub reporta subthemesCount=%d mas a listagem veio vazia",
+					theme.Slug, theme.SubthemesCount,
+				)
+			}
 
 			localSubs := make([]string, 0, len(subthemes))
+			localMeta := make([]subthemeMeta, 0, len(subthemes))
 			for _, st := range subthemes {
 				if st.Slug == "" {
 					continue
@@ -422,6 +455,12 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 					}
 				}
 				localSubs = append(localSubs, st.Slug)
+				localMeta = append(localMeta, subthemeMeta{
+					themeSlug:    theme.Slug,
+					themeName:    theme.Name,
+					subthemeSlug: st.Slug,
+					subthemeName: st.Name,
+				})
 			}
 
 			subMu.Lock()
@@ -429,11 +468,14 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 				themeSeen[theme.Slug] = struct{}{}
 				themeKeep = append(themeKeep, theme.Slug)
 			}
-			for _, slug := range localSubs {
-				if _, ok := subthemeSeen[slug]; !ok {
-					subthemeSeen[slug] = struct{}{}
-					subthemeKeep = append(subthemeKeep, slug)
-					subSlugs = append(subSlugs, slug)
+			subthemeKeeps = append(subthemeKeeps, themeSubthemeKeep{
+				themeSlug: theme.Slug,
+				keep:      append([]string(nil), localSubs...),
+			})
+			for _, meta := range localMeta {
+				if _, ok := subthemeSeen[meta.subthemeSlug]; !ok {
+					subthemeSeen[meta.subthemeSlug] = struct{}{}
+					subMeta = append(subMeta, meta)
 				}
 			}
 			subMu.Unlock()
@@ -446,49 +488,66 @@ func (s *SalesForceSyncService) listAndPersistHierarchy(ctx context.Context, isF
 		if _, err := s.hierarchy.SoftDeleteThemesNotIn(ctx, themeKeep); err != nil {
 			log.Warn().Err(err).Msg("salesforce: SoftDelete de temas órfãos falhou")
 		}
-		if _, err := s.hierarchy.SoftDeleteSubthemesNotIn(ctx, subthemeKeep); err != nil {
-			log.Warn().Err(err).Msg("salesforce: SoftDelete de subtemas órfãos falhou")
+		for _, sk := range subthemeKeeps {
+			if _, err := s.hierarchy.SoftDeleteSubthemesNotInTheme(ctx, sk.themeSlug, sk.keep); err != nil {
+				log.Warn().Err(err).Str("theme", sk.themeSlug).
+					Msg("salesforce: SoftDelete de subtemas órfãos do tema falhou")
+			}
 		}
 	}
 
 	if hierarchyErr != nil {
-		return nil, hierarchyErr
+		return nil, nil, hierarchyErr
 	}
 
 	var (
-		svcMu   sync.Mutex
-		seen    = make(map[string]struct{})
-		all     []clients.CartaServiceListItem
-		listErr error
+		svcMu    sync.Mutex
+		seen     = make(map[string]struct{})
+		all      []clients.CartaServiceListItem
+		labels   = make([]models.CartaHierarchyLabel, 0, len(subMeta))
+		listErr  error
+		labelIdx = make(map[string]int, len(subMeta))
 	)
+	for _, meta := range subMeta {
+		labelIdx[meta.subthemeSlug] = len(labels)
+		labels = append(labels, models.CartaHierarchyLabel{
+			ThemeSlug:    meta.themeSlug,
+			ThemeName:    meta.themeName,
+			SubthemeSlug: meta.subthemeSlug,
+			SubthemeName: meta.subthemeName,
+		})
+	}
+
 	var subGroup errgroup.Group
 	subGroup.SetLimit(defaultListConcurrency)
 
-	for _, subSlug := range subSlugs {
-		subSlug := subSlug
+	for _, meta := range subMeta {
+		meta := meta
 		subGroup.Go(func() error {
-			services, err := s.client.ListAllServicesBySubtheme(ctx, subSlug)
+			services, err := s.client.ListAllServicesBySubtheme(ctx, meta.subthemeSlug)
 			if err != nil {
-				return fmt.Errorf("listar serviços de %q: %w", subSlug, err)
+				return fmt.Errorf("listar serviços de %q: %w", meta.subthemeSlug, err)
 			}
 			svcMu.Lock()
+			defer svcMu.Unlock()
+			idx := labelIdx[meta.subthemeSlug]
 			for _, svc := range services {
 				if svc.Slug == "" {
 					continue
 				}
+				labels[idx].ServiceSlugs = append(labels[idx].ServiceSlugs, svc.Slug)
 				if _, ok := seen[svc.Slug]; ok {
 					continue
 				}
 				seen[svc.Slug] = struct{}{}
 				all = append(all, svc)
 			}
-			svcMu.Unlock()
 			return nil
 		})
 	}
 	listErr = subGroup.Wait()
 
-	return all, listErr
+	return all, labels, listErr
 }
 
 func filterServicesNeedingDetail(listed []clients.CartaServiceListItem, since time.Time) []clients.CartaServiceListItem {

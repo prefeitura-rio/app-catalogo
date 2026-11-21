@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
+	"github.com/prefeitura-rio/app-catalogo/internal/observability"
 )
 
 // memWebhookStore reproduz em memória as regras da fila do repositório
@@ -457,5 +460,19 @@ func TestWebhookService_SyncPanicIsRecordedAsFailure(t *testing.T) {
 	}
 	if got := store.get(ev.ID); got.ev.Status != models.WebhookEventCompleted {
 		t.Fatalf("esperava concluído, status=%s", got.ev.Status)
+	}
+}
+
+// TestWebhookEventsMetric_SeriesStartAtZero: cada resultado existe no /metrics
+// desde o startup, para o increase() do alerta enxergar a primeira falha.
+func TestWebhookEventsMetric_SeriesStartAtZero(t *testing.T) {
+	w := httptest.NewRecorder()
+	observability.NewMetricsServer("").Handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body := w.Body.String()
+	for _, result := range []string{webhookResultEnqueued, webhookResultDuplicate, webhookResultProcessed, webhookResultFailed} {
+		want := `catalogo_salesforce_webhook_events_total{result="` + result + `"}`
+		if !strings.Contains(body, want) {
+			t.Errorf("/metrics sem a série %s", want)
+		}
 	}
 }

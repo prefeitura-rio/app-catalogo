@@ -222,6 +222,11 @@ func (m *Manager) TriggerSyncMode(ctx context.Context, sourceName string, mode S
 func (m *Manager) runSource(ctx context.Context, s DataSource) {
 	log.Info().Str("source", s.Name()).Msg("datasource: iniciando")
 
+	// Referência do alerta de sync atrasado (alerts.yml): o intervalo da fonte e,
+	// enquanto nenhuma sync deu certo neste processo, o início do agendamento.
+	observability.SyncIntervalSeconds.WithLabelValues(s.Name()).Set(s.SyncInterval().Seconds())
+	observability.SyncScheduleStartTimestamp.WithLabelValues(s.Name()).SetToCurrentTime()
+
 	// Sync inicial na startup
 	if err := m.syncWithRetry(ctx, s, triggerInitial); err != nil {
 		log.Error().Err(err).Str("source", s.Name()).Msg("datasource: erro na sync inicial")
