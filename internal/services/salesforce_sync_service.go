@@ -191,12 +191,19 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 	isFull := since.IsZero()
 	startedAt := time.Now()
 
-	eventID, _ := s.repo.RecordSyncEvent(ctx, &models.SyncEvent{
+	eventID, recordErr := s.repo.RecordSyncEvent(ctx, &models.SyncEvent{
 		Source:    models.SourceSalesForce,
 		EventType: eventType,
 		Status:    models.SyncStatusStarted,
 		StartedAt: startedAt,
+		// sync_events.metadata é JSONB NOT NULL e o pgx envia RawMessage nil como NULL.
+		Metadata: json.RawMessage(`{}`),
 	})
+	ev := syncEventRef{id: eventID, recorded: recordErr == nil}
+	if recordErr != nil {
+		log.Warn().Err(recordErr).Str("event_type", string(eventType)).
+			Msg("salesforce: falha ao registrar evento de sync")
+	}
 
 	log.Info().
 		Bool("full", isFull).
@@ -207,7 +214,7 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 
 	listed, labels, err := s.listAndPersistHierarchy(ctx, isFull)
 	if err != nil {
-		s.finishEvent(ctx, eventID, startedAt, models.SyncStatusFailed, 0, 0, err.Error())
+		s.finishEvent(ctx, ev, startedAt, models.SyncStatusFailed, 0, 0, err.Error())
 		return err
 	}
 
@@ -229,7 +236,7 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 
 	details, redirects, fetchFailed, fetchErr := s.fetchDetails(ctx, toFetch)
 	if fetchErr != nil && len(details) == 0 {
-		s.finishEvent(ctx, eventID, startedAt, models.SyncStatusFailed, 0, fetchFailed, fetchErr.Error())
+		s.finishEvent(ctx, ev, startedAt, models.SyncStatusFailed, 0, fetchFailed, fetchErr.Error())
 		return fetchErr
 	}
 
@@ -250,7 +257,7 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 	}
 	failed := fetchFailed + mappingFailed + upsertFailed
 	if upsertErr != nil {
-		s.finishEvent(ctx, eventID, startedAt, models.SyncStatusFailed, processed, failed, upsertErr.Error())
+		s.finishEvent(ctx, ev, startedAt, models.SyncStatusFailed, processed, failed, upsertErr.Error())
 		return upsertErr
 	}
 
@@ -307,7 +314,7 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 			Msg("salesforce: cursor não avançado devido a falhas — próximo sync re-tentará itens afetados")
 	}
 
-	s.finishEvent(ctx, eventID, startedAt, finalStatus, processed, failed, errMsg)
+	s.finishEvent(ctx, ev, startedAt, finalStatus, processed, failed, errMsg)
 
 	log.Info().
 		Int("processed", processed).
@@ -318,15 +325,34 @@ func (s *SalesForceSyncService) runSync(ctx context.Context, since time.Time, ev
 	return retErr
 }
 
+// syncEventUpdateTimeout limita a gravação do desfecho do evento de sync, que roda
+// mesmo com o contexto da sync já cancelado (para o evento não ficar em "started").
+const syncEventUpdateTimeout = 5 * time.Second
+
+// syncEventRef é o evento de sync_events aberto por runSync. recorded é falso
+// quando o INSERT falhou: aí não há linha a atualizar.
+type syncEventRef struct {
+	id       int64
+	recorded bool
+}
+
 func (s *SalesForceSyncService) finishEvent(
 	ctx context.Context,
-	eventID int64,
+	ev syncEventRef,
 	startedAt time.Time,
 	status models.SyncEventStatus,
 	processed, failed int,
 	errMsg string,
 ) {
-	_ = s.repo.UpdateSyncEvent(ctx, eventID, status, processed, failed, errMsg, int(time.Since(startedAt).Milliseconds()))
+	if !ev.recorded {
+		return
+	}
+	updateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), syncEventUpdateTimeout)
+	defer cancel()
+	durationMs := int(time.Since(startedAt).Milliseconds())
+	if err := s.repo.UpdateSyncEvent(updateCtx, ev.id, status, processed, failed, errMsg, durationMs); err != nil {
+		log.Warn().Err(err).Int64("event_id", ev.id).Msg("salesforce: falha ao atualizar evento de sync")
+	}
 }
 
 // syncHomeFeatured atualiza o snapshot editorial da home. Falhas não derrubam o sync.
