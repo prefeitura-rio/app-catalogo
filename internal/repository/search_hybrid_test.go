@@ -46,7 +46,7 @@ func TestHybridFTSCTE_OrdersByRankWithTieBreakerBeforeLimit(t *testing.T) {
 // O total da busca híbrida é o tamanho da lista RRF, calculado antes do
 // LIMIT/OFFSET, e a ordem final segue desempatada por ci.id (DEV-142).
 func TestHybridPageSQL_CountsWholeRRFList(t *testing.T) {
-	sql := hybridPageSQL(hybridSearchCTEs("TRUE"), "LIMIT $4 OFFSET $5")
+	sql := hybridPageSQL(hybridSearchCTEs("TRUE"), hybridStatsSQL, "LIMIT $4 OFFSET $5")
 	if !strings.Contains(sql, "COUNT(*) OVER () AS rrf_total") {
 		t.Errorf("página híbrida sem o total da lista RRF:\n%s", sql)
 	}
@@ -55,7 +55,7 @@ func TestHybridPageSQL_CountsWholeRRFList(t *testing.T) {
 	if orderIdx < 0 || limitIdx < orderIdx {
 		t.Errorf("página híbrida precisa de %q antes do LIMIT/OFFSET:\n%s", hybridOrderByRRF, sql)
 	}
-	if count := hybridCountSQL(hybridSearchCTEs("TRUE")); !strings.Contains(count, "SELECT COUNT(*) FROM rrf") {
+	if count := hybridCountSQL(hybridSearchCTEs("TRUE"), hybridStatsSQL); !strings.Contains(count, "SELECT COUNT(*), "+hybridStatsSQL+" FROM rrf") {
 		t.Errorf("contagem da lista RRF ausente:\n%s", count)
 	}
 }

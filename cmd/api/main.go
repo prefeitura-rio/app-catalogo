@@ -107,7 +107,14 @@ func main() {
 
 	// Repositórios
 	itemRepo := repository.NewCatalogItemRepository(db.Pool)
-	searchRepo := repository.NewSearchRepository(db.Pool)
+	searchRepo := repository.NewSearchRepository(db.Pool).
+		WithSemanticFloors(repository.SemanticFloors{
+			Query: cfg.Search.SemanticMinSimilarity,
+			HyDE:  cfg.Search.HyDEMinSimilarity,
+		}).
+		WithSemanticObserver(func(o repository.SemanticObservation) {
+			observability.ObserveSearchSemanticBestSimilarity(o.List, o.FTSMatch, o.BestSimilarity)
+		})
 	profileRepo := repository.NewCitizenProfileRepository(db.Pool)
 
 	// Clients externos

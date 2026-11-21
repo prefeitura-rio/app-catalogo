@@ -19,6 +19,21 @@ var (
 		Buckets:   []float64{.025, .05, .1, .25, .5, 1, 2.5},
 	}, []string{"has_query", "type_filter"})
 
+	// SearchSemanticBestSimilarity é a base da calibração dos pisos de
+	// similaridade das listas semânticas (SEARCH_SEMANTIC_MIN_SIMILARITY e
+	// SEARCH_HYDE_MIN_SIMILARITY, DEV-601): a distribuição da melhor similaridade
+	// de cada lista, separada entre buscas que casam o FTS e buscas sem termo
+	// reconhecido. Os baldes se concentram na faixa útil do piso (0,40 a 1).
+	SearchSemanticBestSimilarity = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "catalogo",
+		Name:      "search_semantic_best_similarity",
+		Help:      "Melhor similaridade de cosseno de cada lista semântica da busca híbrida, medida antes do piso, uma vez por busca executada no banco (1ª página; cache não conta), por lista (query|hyde) e fts_match (true|false)",
+		Buckets: []float64{
+			.4, .425, .45, .475, .5, .525, .55, .575, .6, .625, .65, .675, .7,
+			.725, .75, .775, .8, .825, .85, .875, .9, .925, .95, .975, 1,
+		},
+	}, []string{"list", "fts_match"})
+
 	RecommendationsDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: "catalogo",
 		Name:      "recommendations_duration_seconds",
@@ -105,6 +120,7 @@ var (
 // elas as métricas citadas em alerts.yml.
 var collectors = []prometheus.Collector{
 	SearchDuration,
+	SearchSemanticBestSimilarity,
 	RecommendationsDuration,
 	SyncDuration,
 	SyncRunsTotal,
@@ -122,6 +138,12 @@ var collectors = []prometheus.Collector{
 
 func init() {
 	prometheus.MustRegister(collectors...)
+}
+
+// ObserveSearchSemanticBestSimilarity registra a melhor similaridade de uma
+// lista semântica (list = query|hyde) numa busca híbrida.
+func ObserveSearchSemanticBestSimilarity(list string, ftsMatch bool, similarity float64) {
+	SearchSemanticBestSimilarity.WithLabelValues(list, strconv.FormatBool(ftsMatch)).Observe(similarity)
 }
 
 // NewMetricsServer devolve um servidor HTTP que expõe só GET /metrics, numa

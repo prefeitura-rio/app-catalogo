@@ -131,15 +131,20 @@ paths:
 
         - **FTS**: itens que casam `websearch_to_tsquery('portuguese', unaccent(q))`,
           ordenados por `ts_rank_cd` + 0,3 × similaridade de trigrama do título — peso 1,0;
-        - **embedding da query**: os 50 itens mais próximos por distância de cosseno — peso 2,0;
+        - **embedding da query**: dos 50 itens mais próximos por distância de cosseno, os
+          que têm similaridade de cosseno ≥ o piso da lista — peso 2,0;
         - **HyDE** (embedding de um documento hipotético gerado por LLM a partir da query):
-          os 50 itens mais próximos — peso 1,5.
+          dos 50 itens mais próximos, os que têm similaridade ≥ o piso da lista — peso 1,5.
 
         Score de cada item = Σ peso / (60 + posição na lista), somado sobre as listas em
-        que ele aparece. As listas semânticas **não têm piso de similaridade**: trazem
+        que ele aparece. **Piso de similaridade:** cada lista semântica tem o seu
+        (configuração do serviço, um para o embedding da query e outro para o HyDE);
+        item abaixo do piso não entra no RRF nem no `total`. Com o piso desligado (valor
+        0, o padrão enquanto os valores são calibrados), as listas semânticas trazem
         sempre os vizinhos mais próximos, então uma query sem nenhum termo reconhecido
         (zero linhas no FTS) ainda devolve itens — até o tamanho da união das listas —
-        com score baixo e sem relação garantida com o texto buscado.
+        com score baixo e sem relação garantida com o texto buscado; com o piso ligado,
+        ela devolve só os itens com similaridade acima dele, ou nenhum.
 
         **Quedas.** Sem HyDE disponível, o RRF usa só FTS + embedding da query. Sem
         embedding (encoder não configurado ou indisponível), a busca é só FTS, ordenada
@@ -1343,6 +1348,7 @@ components:
             Total de itens que a paginação alcança. Na busca híbrida é o tamanho da lista
             RRF (união das listas FTS, embedding da query e HyDE, no máximo 50 itens cada),
             não uma contagem de correspondências relevantes: inclui os vizinhos semânticos
+            acima do piso de similaridade de cada lista (todos, com o piso desligado)
             mesmo quando nenhum item casa o FTS. Na busca só FTS é o número de itens que
             casam o FTS; sem `q`, o número de itens ativos que atendem os filtros.
         page:
