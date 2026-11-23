@@ -19,6 +19,7 @@ import (
 	"github.com/prefeitura-rio/app-catalogo/internal/db"
 	"github.com/prefeitura-rio/app-catalogo/internal/observability"
 	"github.com/prefeitura-rio/app-catalogo/internal/repository"
+	"github.com/prefeitura-rio/app-catalogo/internal/safego"
 	"github.com/prefeitura-rio/app-catalogo/internal/services"
 )
 
@@ -105,24 +106,7 @@ func main() {
 			log.Warn().Err(err).Msg("worker: Gemini indisponível — backfill de embeddings desativado")
 		} else {
 			embeddingSvc := services.NewEmbeddingService(itemRepo, geminiClient)
-			go func() {
-				ticker := time.NewTicker(cfg.Embedding.BackfillInterval)
-				defer ticker.Stop()
-				log.Info().Dur("interval", cfg.Embedding.BackfillInterval).Msg("worker: iniciando backfill de embeddings")
-				n := embeddingSvc.BackfillPass(ctx)
-				log.Info().Int("processed", n).Msg("worker: backfill inicial concluído")
-				for {
-					select {
-					case <-ticker.C:
-						n := embeddingSvc.BackfillPass(ctx)
-						if n > 0 {
-							log.Info().Int("processed", n).Msg("worker: backfill de embeddings")
-						}
-					case <-ctx.Done():
-						return
-					}
-				}
-			}()
+			go runEmbeddingBackfill(ctx, cfg.Embedding.BackfillInterval, embeddingSvc.BackfillPass)
 		}
 	} else {
 		log.Warn().Msg("worker: GOOGLE_API_KEY não configurado — backfill de embeddings desativado")
@@ -163,4 +147,38 @@ func main() {
 		cancelShutdown()
 	}
 	log.Info().Msg("worker: encerrado")
+}
+
+// backfillGoroutine é o nome do backfill de embeddings em
+// catalogo_goroutine_panics_total.
+const backfillGoroutine = "embedding_backfill"
+
+// runEmbeddingBackfill roda uma passagem de backfill na hora e outra a cada
+// interval, até ctx ser cancelado.
+func runEmbeddingBackfill(ctx context.Context, interval time.Duration, pass func(context.Context) int) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	log.Info().Dur("interval", interval).Msg("worker: iniciando backfill de embeddings")
+	if n, ok := backfillPass(ctx, pass); ok {
+		log.Info().Int("processed", n).Msg("worker: backfill inicial concluído")
+	}
+	for {
+		select {
+		case <-ticker.C:
+			if n, ok := backfillPass(ctx, pass); ok && n > 0 {
+				log.Info().Int("processed", n).Msg("worker: backfill de embeddings")
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// backfillPass roda uma passagem. Ela processa a resposta do Gemini: um panic
+// é recuperado (logado com a pilha e contado em catalogo_goroutine_panics_total)
+// e devolve ok = false, sem derrubar o worker; a próxima passagem segue no
+// próximo tick.
+func backfillPass(ctx context.Context, pass func(context.Context) int) (n int, ok bool) {
+	defer safego.Recover(backfillGoroutine, nil)
+	return pass(ctx), true
 }

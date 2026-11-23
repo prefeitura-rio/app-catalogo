@@ -228,7 +228,7 @@ func (m *Manager) runSource(ctx context.Context, s DataSource) {
 	observability.SyncScheduleStartTimestamp.WithLabelValues(s.Name()).SetToCurrentTime()
 
 	// Sync inicial na startup
-	if err := m.syncWithRetry(ctx, s, triggerInitial); err != nil {
+	if err := m.scheduledSync(ctx, s, triggerInitial); err != nil {
 		log.Error().Err(err).Str("source", s.Name()).Msg("datasource: erro na sync inicial")
 	}
 
@@ -241,11 +241,24 @@ func (m *Manager) runSource(ctx context.Context, s DataSource) {
 			log.Info().Str("source", s.Name()).Msg("datasource: encerrado")
 			return
 		case <-ticker.C:
-			if err := m.syncWithRetry(ctx, s, triggerPeriodic); err != nil {
+			if err := m.scheduledSync(ctx, s, triggerPeriodic); err != nil {
 				log.Error().Err(err).Str("source", s.Name()).Msg("datasource: erro no sync periódico")
 			}
 		}
 	}
+}
+
+// scheduledSync é a sync agendada (inicial ou periódica) de runSource. Sync e
+// FullSync processam a resposta de serviço externo: um panic nelas vira a falha
+// desta execução (logada com a pilha e contada em catalogo_goroutine_panics_total
+// e em sync_runs_total) em vez de derrubar o worker com todas as fontes, e a
+// fonte segue agendada para o próximo ciclo.
+func (m *Manager) scheduledSync(ctx context.Context, s DataSource, trigger string) (err error) {
+	defer safego.Recover("datasource_"+trigger+"_sync", func(panicErr error) {
+		observability.SyncRunsTotal.WithLabelValues(s.Name(), trigger, "failure").Inc()
+		err = panicErr
+	})
+	return m.syncWithRetry(ctx, s, trigger)
 }
 
 // syncWithRetry executa s.Sync com novas tentativas (espera que dobra a cada falha) e
