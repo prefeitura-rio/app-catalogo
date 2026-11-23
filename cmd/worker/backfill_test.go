@@ -48,7 +48,7 @@ func TestRunEmbeddingBackfill_PanicKeepsLoopRunning(t *testing.T) {
 
 	// 1ª passagem (inicial) e 2ª (1º tick) com panic; o laço segue nos ticks seguintes.
 	if got := calls.Load(); got < 3 {
-		t.Fatalf("esperava o backfill seguir depois dos panics (>= 3 passagens), got %d", got)
+		t.Fatalf("esperava o backfill seguir depois dos panics (>= 3 execuções), got %d", got)
 	}
 	if got := backfillPanics(t) - before; got != 2 {
 		t.Errorf("goroutine_panics_total{goroutine=%s}: esperava +2, got %+v", backfillGoroutine, got)
