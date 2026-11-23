@@ -17,6 +17,7 @@ import (
 
 	"github.com/prefeitura-rio/app-catalogo/internal/models"
 	"github.com/prefeitura-rio/app-catalogo/internal/observability"
+	"github.com/prefeitura-rio/app-catalogo/internal/safego"
 )
 
 type stubSource struct {
@@ -469,5 +470,105 @@ func TestManager_TriggerSync_DoesNotPublishScheduleGauges(t *testing.T) {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("/metrics não deveria conter %q sem agendamento", unwanted)
 		}
+	}
+}
+
+// panicSource entra em panic nas primeiras panics chamadas de Sync (simula uma
+// resposta externa malformada) e depois funciona.
+type panicSource struct {
+	name      string
+	interval  time.Duration
+	panics    int32
+	callCount atomic.Int32
+}
+
+func (s *panicSource) Name() string                { return s.name }
+func (s *panicSource) Source() models.ItemSource   { return models.ItemSource(s.name) }
+func (s *panicSource) SyncInterval() time.Duration { return s.interval }
+func (s *panicSource) Sync(_ context.Context) error {
+	if n := s.callCount.Add(1); n <= s.panics {
+		panic(fmt.Sprintf("resposta externa malformada %d", n))
+	}
+	return nil
+}
+
+// Sem o recover na sync agendada, o panic sobe pela goroutine de runSource e
+// derruba o binário de teste inteiro, como derrubaria o worker.
+func TestManager_Start_InitialSyncPanicDoesNotCrashWorker(t *testing.T) {
+	bad := &panicSource{name: "panic-initial", interval: time.Hour, panics: 100}
+	good := &stubSource{name: "panic-initial-other"}
+	m := NewManager(WithRetryPolicy(fastRetry))
+	m.Register(bad)
+	m.Register(good)
+
+	panicsBefore := metricValue(t, observability.GoroutinePanicsTotal.WithLabelValues("datasource_initial_sync"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	m.Start(ctx)
+
+	if got := bad.callCount.Load(); got != 1 {
+		t.Errorf("fonte com panic: esperava 1 chamada (panic não é repetido no mesmo ciclo), got %d", got)
+	}
+	if got := good.callCount.Load(); got != 1 {
+		t.Errorf("a outra fonte deveria sincronizar normalmente, got %d chamadas", got)
+	}
+	if got := metricValue(t, observability.GoroutinePanicsTotal.WithLabelValues("datasource_initial_sync")) - panicsBefore; got != 1 {
+		t.Errorf("goroutine_panics_total{goroutine=datasource_initial_sync}: esperava +1, got %+v", got)
+	}
+	if got := metricValue(t, observability.SyncRunsTotal.WithLabelValues(bad.name, triggerInitial, "failure")); got != 1 {
+		t.Errorf("sync_runs_total failure: esperava 1, got %v", got)
+	}
+	if got := metricValue(t, observability.SyncRunsTotal.WithLabelValues(good.name, triggerInitial, "success")); got != 1 {
+		t.Errorf("sync_runs_total success da outra fonte: esperava 1, got %v", got)
+	}
+}
+
+// Um panic numa sync periódica não tira a fonte do agendamento: o próximo
+// ciclo roda e, com a origem corrigida, a sync volta a dar certo.
+func TestManager_Start_PeriodicSyncPanicKeepsSourceScheduled(t *testing.T) {
+	src := &panicSource{name: "panic-periodic", interval: 20 * time.Millisecond, panics: 2}
+	m := NewManager(WithRetryPolicy(fastRetry))
+	m.Register(src)
+
+	panicsBefore := metricValue(t, observability.GoroutinePanicsTotal.WithLabelValues("datasource_periodic_sync"))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	m.Start(ctx)
+
+	// 1ª chamada: sync inicial (panic); 2ª: 1º tick (panic); depois, sucesso.
+	if got := src.callCount.Load(); got < 3 {
+		t.Fatalf("esperava a fonte seguir agendada depois dos panics (>= 3 chamadas), got %d", got)
+	}
+	if got := metricValue(t, observability.GoroutinePanicsTotal.WithLabelValues("datasource_periodic_sync")) - panicsBefore; got != 1 {
+		t.Errorf("goroutine_panics_total{goroutine=datasource_periodic_sync}: esperava +1, got %+v", got)
+	}
+	if got := metricValue(t, observability.SyncRunsTotal.WithLabelValues(src.name, triggerInitial, "failure")); got != 1 {
+		t.Errorf("sync_runs_total initial failure: esperava 1, got %v", got)
+	}
+	if got := metricValue(t, observability.SyncRunsTotal.WithLabelValues(src.name, triggerPeriodic, "failure")); got != 1 {
+		t.Errorf("sync_runs_total periodic failure: esperava 1, got %v", got)
+	}
+	if got := metricValue(t, observability.SyncRunsTotal.WithLabelValues(src.name, triggerPeriodic, "success")); got < 1 {
+		t.Errorf("sync_runs_total periodic success: esperava >= 1 depois do panic, got %v", got)
+	}
+}
+
+func TestManager_ScheduledSync_PanicReturnsPanicError(t *testing.T) {
+	src := &panicSource{name: "panic-error", interval: time.Hour, panics: 1}
+	m := NewManager(WithRetryPolicy(fastRetry))
+
+	err := m.scheduledSync(context.Background(), src, triggerPeriodic)
+	var pe *safego.PanicError
+	if !errors.As(err, &pe) {
+		t.Fatalf("esperava *safego.PanicError, got %T: %v", err, err)
+	}
+	if pe.Goroutine != "datasource_periodic_sync" {
+		t.Errorf("goroutine do panic: esperava datasource_periodic_sync, got %q", pe.Goroutine)
+	}
+
+	if err := m.scheduledSync(context.Background(), src, triggerPeriodic); err != nil {
+		t.Fatalf("sem panic, a sync agendada deveria dar certo: %v", err)
 	}
 }
