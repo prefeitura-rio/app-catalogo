@@ -55,7 +55,7 @@ type ResilienceConfig struct {
 	OpenTimeout time.Duration
 	// MaxElapsed limita o tempo total da chamada, somando tentativas e esperas
 	// (0 = sem limite além do contexto do chamador). Estourar o limite conta
-	// como falha do serviço.
+	// como falha do serviço; estourar o prazo do chamador, não.
 	MaxElapsed time.Duration
 }
 
@@ -264,8 +264,10 @@ func (r *resilientCaller) backoff(attempt int) time.Duration {
 // transitórias são repetidas e contam para abrir o circuito; um erro não
 // transitório (4xx, resposta inválida) volta na hora e conta como serviço
 // disponível. Com o circuito aberto, retorna um erro que envolve ErrCircuitOpen
-// sem chamar op. O prazo do chamador (ou MaxElapsed) estourado durante uma
-// tentativa conta como falha do serviço; o cancelamento pelo chamador, não.
+// sem chamar op. MaxElapsed estourado durante uma tentativa conta como falha do
+// serviço. O prazo do chamador estourado ou o cancelamento pelo chamador, não:
+// são o orçamento daquela requisição, não a saúde do serviço, e o circuito é
+// compartilhado por todas as requisições do processo.
 func (r *resilientCaller) do(ctx context.Context, op func(context.Context) error) error {
 	callCtx := ctx
 	if r.config.MaxElapsed > 0 {
@@ -287,7 +289,7 @@ func (r *resilientCaller) do(ctx context.Context, op func(context.Context) error
 		case err == nil:
 			r.breaker.onSuccess()
 			return nil
-		case errors.Is(ctx.Err(), context.Canceled):
+		case ctx.Err() != nil:
 			r.breaker.onAbandon()
 			return err
 		case callCtx.Err() != nil:

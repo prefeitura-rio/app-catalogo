@@ -253,3 +253,45 @@ func TestRMIClient_LentoRespeitaMaxElapsed(t *testing.T) {
 		t.Fatalf("esperava 1 chamada dentro do prazo, got %d", calls.Load())
 	}
 }
+
+// RMI saudável, só mais lento que o orçamento que sobrou de cada requisição:
+// o circuito compartilhado não pode abrir (DEV-790).
+func TestRMIClient_PrazoDoChamadorNaoAbreCircuito(t *testing.T) {
+	t.Parallel()
+
+	cfg := fastResilience(5)
+	cfg.MaxElapsed = 10 * time.Second
+	client, calls := newTestRMIClient(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-time.After(120 * time.Millisecond):
+			writeCitizen(w)
+		case <-r.Context().Done():
+		}
+	}, cfg)
+
+	for i := 0; i < cfg.FailureThreshold; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+		_, err := client.GetCitizen(ctx, syntheticCPF)
+		cancel()
+		if err == nil {
+			t.Fatalf("chamada %d: esperava erro pelo prazo do chamador", i)
+		}
+		if errors.Is(err, ErrCircuitOpen) {
+			t.Fatalf("chamada %d: circuito aberto pelo prazo do chamador: %v", i, err)
+		}
+	}
+	if client.CircuitState() != CircuitClosed {
+		t.Fatalf("prazo do chamador não pode abrir o circuito do RMI, got %s", client.CircuitState())
+	}
+
+	citizen, err := client.GetCitizen(context.Background(), syntheticCPF)
+	if err != nil {
+		t.Fatalf("chamada com prazo folgado deveria chegar ao RMI: %v", err)
+	}
+	if citizen == nil {
+		t.Fatal("esperava o cidadão do RMI")
+	}
+	if got := calls.Load(); got != int32(cfg.FailureThreshold)+1 {
+		t.Fatalf("esperava %d chamadas ao RMI, got %d", cfg.FailureThreshold+1, got)
+	}
+}

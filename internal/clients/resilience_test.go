@@ -380,11 +380,14 @@ func TestResilientCaller_MaxElapsedLimitaTempoTotalEContaFalha(t *testing.T) {
 	}
 }
 
-func TestResilientCaller_PrazoDoChamadorContaComoFalha(t *testing.T) {
+func TestResilientCaller_MaxElapsedContaFalhaMesmoComPrazoMaiorDoChamador(t *testing.T) {
 	t.Parallel()
 
-	caller := newResilientCaller(uniqueClientName(t), fastResilience(1))
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	cfg := fastResilience(1)
+	cfg.MaxElapsed = 50 * time.Millisecond
+	caller := newResilientCaller(uniqueClientName(t), cfg)
+	// O chamador ainda tem bastante prazo: quem estoura é o limite do cliente.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
 	defer cancel()
 
 	err := caller.do(ctx, func(attemptCtx context.Context) error {
@@ -395,7 +398,86 @@ func TestResilientCaller_PrazoDoChamadorContaComoFalha(t *testing.T) {
 		t.Fatalf("esperava DeadlineExceeded, got %v", err)
 	}
 	if caller.breaker.State() != CircuitOpen {
-		t.Fatalf("serviço que não respondeu no prazo deve contar como falha, got %s", caller.breaker.State())
+		t.Fatalf("serviço que não respondeu no MaxElapsed deve contar como falha, got %s", caller.breaker.State())
+	}
+}
+
+// O prazo do chamador é o orçamento daquela requisição, não a saúde do
+// serviço: estourá-lo não pode abrir o circuito compartilhado (DEV-790).
+func TestResilientCaller_PrazoDoChamadorNaoContaComoFalha(t *testing.T) {
+	t.Parallel()
+
+	cfg := fastResilience(5)
+	cfg.MaxElapsed = 10 * time.Second
+	caller := newResilientCaller(uniqueClientName(t), cfg)
+
+	// Serviço saudável que responde bem em 120 ms; cada chamador só tem 80 ms.
+	var calls atomic.Int32
+	healthySlow := func(attemptCtx context.Context) error {
+		calls.Add(1)
+		select {
+		case <-time.After(120 * time.Millisecond):
+			return nil
+		case <-attemptCtx.Done():
+			return markTransient(attemptCtx.Err())
+		}
+	}
+	for i := 0; i < cfg.FailureThreshold; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+		err := caller.do(ctx, healthySlow)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("chamada %d: esperava DeadlineExceeded do chamador, got %v", i, err)
+		}
+	}
+	if calls.Load() != int32(cfg.FailureThreshold) {
+		t.Fatalf("prazo do chamador esgotado não deve gerar nova tentativa, got %d chamadas", calls.Load())
+	}
+	if caller.breaker.State() != CircuitClosed {
+		t.Fatalf("prazo do chamador não pode abrir o circuito, got %s", caller.breaker.State())
+	}
+
+	// Um chamador com prazo folgado segue chegando ao serviço.
+	if err := caller.do(context.Background(), healthySlow); err != nil {
+		t.Fatalf("chamada com prazo folgado deveria passar, got %v", err)
+	}
+}
+
+func TestCircuitBreaker_PrazoDoChamadorNaChamadaDeTesteLiberaSemJulgar(t *testing.T) {
+	t.Parallel()
+
+	cfg := fastResilience(1)
+	cfg.MaxAttempts = 1
+	caller := newResilientCaller(uniqueClientName(t), cfg)
+	now := time.Now()
+	caller.breaker.now = func() time.Time { return now }
+
+	_ = caller.do(context.Background(), func(context.Context) error { return errTransientTest })
+	if caller.breaker.State() != CircuitOpen {
+		t.Fatalf("esperava aberto, got %s", caller.breaker.State())
+	}
+	now = now.Add(cfg.OpenTimeout)
+
+	// A chamada de teste é de um chamador cujo prazo acaba antes da resposta.
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := caller.do(ctx, func(attemptCtx context.Context) error {
+		<-attemptCtx.Done()
+		return markTransient(attemptCtx.Err())
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("esperava DeadlineExceeded, got %v", err)
+	}
+	if caller.breaker.State() != CircuitHalfOpen {
+		t.Fatalf("prazo do chamador não deve reabrir o circuito, got %s", caller.breaker.State())
+	}
+
+	// A vaga da chamada de teste foi liberada: a próxima chamada passa e fecha.
+	if err := caller.do(context.Background(), func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("nova chamada de teste deveria passar, got %v", err)
+	}
+	if caller.breaker.State() != CircuitClosed {
+		t.Fatalf("sucesso no meio-aberto deve fechar, got %s", caller.breaker.State())
 	}
 }
 
