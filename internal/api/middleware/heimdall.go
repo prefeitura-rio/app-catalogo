@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	heimdallRequestTimeout        = 3 * time.Second
-	maximumHeimdallResponseBytes  = 1 << 20 // 1 MiB
-	heimdallUsersMePath           = "/api/v1/users/me"
+	heimdallRequestTimeout       = 3 * time.Second
+	maximumHeimdallResponseBytes = 1 << 20 // 1 MiB
+	heimdallUsersMePath          = "/api/v1/users/me"
 )
 
 // heimdallUserInfo espelha GET {HEIMDALL_BASE_URL}/api/v1/users/me.
