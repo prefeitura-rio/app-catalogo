@@ -15,8 +15,10 @@ info:
     O claim `preferred_username` no JWT contém o CPF do cidadão (apenas dígitos).
 
     Rotas marcadas com `bearerAuth` requerem esse header.
-    Rotas marcadas com `adminAuth` requerem adicionalmente a role `admin` ou `go:admin`
-    no claim `resource_access.superapp.roles`.
+    Rotas marcadas com `adminAuth` requerem adicionalmente papel admin resolvido
+    pelo Heimdall (`go:admin`, `admin` ou `superadmin` em `/api/v1/users/me`).
+    Sem `HEIMDALL_BASE_URL`, fallback local: `admin` ou `go:admin` em
+    `resource_access.superapp.roles` do JWT.
 
     ## Rate Limiting
 
@@ -943,8 +945,9 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: |
-        Mesmo JWT do `bearerAuth`, mas o claim `resource_access.superapp.roles`
-        deve conter `"admin"` ou `"go:admin"`.
+        Mesmo JWT do `bearerAuth`, com papel admin via Heimdall
+        (`go:admin`/`admin`/`superadmin`). Sem Heimdall, fallback no claim
+        `resource_access.superapp.roles` (`admin` ou `go:admin`).
 
   # ---------------------------------------------------------------------------
   # Parameters

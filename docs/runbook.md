@@ -41,6 +41,7 @@ Este documento não traz segredos. Valores sensíveis vivem no Infisical (Secret
 | PostgreSQL 16 (Cloud SQL, banco `catalogo`) | tudo | `/ready` responde 503, o pod sai do Service; busca e recomendação falham (5xx) |
 | Redis (Valkey `redis` no namespace `catalogo`) | cache de busca, vetores e recomendação | a API segue sem cache (log `redis indisponível — cache desativado` no startup); mais carga no banco |
 | Keycloak (realm de `KEYCLOAK_REALM`) | JWKS para verificar o JWT; `client_credentials` para chamar app-rmi e app-go-api | rotas `/api/v1/*` respondem 401; recomendação personalizada e sync do app-go-api falham |
+| Heimdall (`HEIMDALL_BASE_URL`, timeout 3 s) | papéis admin em `/api/v1/admin/*` | todo usuário autenticado fica `USER`: admins recebem 403 nas rotas de gestão |
 | SalesForce / Carta de Serviços (API CloudHub, `SALESFORCE_INSTANCE_URL`) | sync da Carta (delta a cada 15 min) e o detalhe de cada serviço do webhook | a Carta fica desatualizada; eventos do webhook ficam pendentes com nova tentativa |
 | app-go-api (`APP_GO_API_BASE_URL`) | cursos, vagas e MEI (sync completo a cada 30 min) | itens desses tipos ficam desatualizados; nada é apagado |
 | app-rmi (`RMI_BASE_URL`) | perfil do cidadão, no caminho síncrono de `GET /api/v1/recommendations` | o circuit breaker abre e a recomendação cai na genérica (sem personalização) |
@@ -153,6 +154,7 @@ Elas ainda não estão carregadas em nenhum Prometheus: levar o arquivo ao Prome
 | Pods em `CrashLoopBackOff` logo no startup | configuração inválida: `CPF_HASH_SALT` com menos de 32 bytes, `TRUSTED_PROXIES` com item que não é IP/CIDR, `SALESFORCE_INSTANCE_URL` inválida, banco inacessível | `kubectl -n catalogo logs <pod> --previous`: a primeira linha diz qual variável; corrigir no Infisical (ou no manifest, para as variáveis em `env`) |
 | Taxa de 5xx da API alta (`istio_requests_total`) | erro do banco, timeout de requisição (`SERVER_REQUEST_TIMEOUT`, 30 s) ou regressão de código | logs `"level":"error"` e traces no SigNoz; se começou com um deploy, [rollback](#rollback) |
 | Muitos 401 em `/api/v1/*` | token inválido ou expirado, `azp` fora de `AUTH_JWT_AUTHORIZED_PARTIES`, token sem CPF válido em `preferred_username` (rotas não admin), ou verificador sem emissor/JWKS | conferir no log de startup se o JWKS está ativado; conferir `AUTH_JWT_*`/`KEYCLOAK_*` e se o Keycloak responde |
+| Admin recebe 403 em `/api/v1/admin/*` | Heimdall sem a role (`go:admin`/`admin`/`superadmin`), `HEIMDALL_BASE_URL` vazio/errado, ou Heimdall fora (fail-safe deixa USER) | log `heimdall: falha ao resolver roles`; conferir Heimdall e o papel do usuário lá — roles no JWT não contam com Heimdall ligado |
 | Muitos 429 | rate limit na borda (Cloud Armor / Istio) | conferir as regras da borda e o tráfego por IP; este serviço não aplica limite em memória |
 | `catalogo_sync_runs_total{result="failure"}` subindo, ou `time() - catalogo_sync_last_success_timestamp_seconds` acima de 2× o intervalo da fonte | a fonte falhou nas 4 tentativas | logs do worker com o `source`; checar a dependência (SalesForce, app-go-api, Keycloak); depois de corrigir, [sync manual](#sync-manual) |
 | `catalogo_sync_retries_total` subindo, sem falha final | falhas transitórias absorvidas pelas novas tentativas | só acompanhar; vira incidente se virar `failure` |
@@ -203,7 +205,7 @@ O GitHub só reexecuta runs de até 30 dias. Alternativa equivalente, e a única
 
 ### Sync manual
 
-`POST /api/v1/admin/sync/trigger` dispara uma sync em segundo plano e responde 202 na hora. Exige um JWT válido com papel admin (role `admin` ou `go:admin` em `resource_access.superapp.roles`).
+`POST /api/v1/admin/sync/trigger` dispara uma sync em segundo plano e responde 202 na hora. Exige um JWT válido e papel admin resolvido pelo Heimdall (`HEIMDALL_BASE_URL`, roles `go:admin`/`admin`/`superadmin`). Sem Heimdall configurado, o fallback local lê `admin`/`go:admin` em `resource_access.superapp.roles` do JWT (só desenvolvimento).
 
 | Parâmetro | Valores | Efeito |
 |-----------|---------|--------|
@@ -298,6 +300,7 @@ Os valores vêm do Secret `catalogo-secrets` (sincronizado do Infisical pelo ope
 | `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET` | emissor padrão do JWT e `client_credentials` para app-rmi e app-go-api |
 | `AUTH_JWT_ISSUER`, `AUTH_JWKS_URL` | verificação do JWT (padrão derivado do Keycloak); sem eles, todo `/api/v1/*` responde 401 |
 | `AUTH_JWT_AUTHORIZED_PARTIES` | clients (`azp`) aceitos, padrão `superapp`; lista vazia = nenhum token aceito |
+| `HEIMDALL_BASE_URL` | resolução de papéis admin (`/api/v1/users/me`); vazio = roles no JWT (só desenvolvimento local) |
 | `TRUSTED_PROXIES` | proxies cujo `X-Forwarded-For` define o IP do cliente no log de acesso; os manifests acrescentam o IP do load balancer de cada ambiente; item inválido impede o startup |
 | `CORS_ALLOWED_ORIGINS` | origens do navegador aceitas (no `env` dos manifests) |
 

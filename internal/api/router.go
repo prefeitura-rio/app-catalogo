@@ -20,16 +20,17 @@ import (
 )
 
 type RouterDeps struct {
-	SFSyncSvc     *services.SalesForceSyncService
-	WebhookSvc    *services.SalesForceWebhookService
-	DSManager     *datasource.Manager
-	SearchSvc     *services.SearchService
-	RecomSvc      *services.RecommendationService
-	CitizenSvc    *services.CitizenProfileService
-	ItemRepo      *repository.CatalogItemRepository
-	CartaRepo     *repository.CartaRepository
-	WebhookSecret string
-	TokenVerifier middleware.TokenVerifier
+	SFSyncSvc       *services.SalesForceSyncService
+	WebhookSvc      *services.SalesForceWebhookService
+	DSManager       *datasource.Manager
+	SearchSvc       *services.SearchService
+	RecomSvc        *services.RecommendationService
+	CitizenSvc      *services.CitizenProfileService
+	ItemRepo        *repository.CatalogItemRepository
+	CartaRepo       *repository.CartaRepository
+	WebhookSecret   string
+	TokenVerifier   middleware.TokenVerifier
+	HeimdallBaseURL string
 }
 
 func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.Engine {
@@ -49,7 +50,7 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 	r.Use(observability.RequestLogger())
 	r.Use(middleware.RequestID())
 	r.Use(middleware.CORS())
-	r.Use(middleware.ExtractUserContext(deps.TokenVerifier))
+	r.Use(middleware.ExtractUserContext(deps.TokenVerifier, deps.HeimdallBaseURL))
 	r.Use(middleware.Timeout(time.Duration(cfg.Server.RequestTimeout) * time.Second))
 
 	healthHandler := handlers.NewHealthHandler(db)

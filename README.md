@@ -50,6 +50,7 @@ O Adminer (UI do banco) em `http://localhost:8083`.
 | `KEYCLOAK_URL` / `KEYCLOAK_REALM` / `KEYCLOAK_CLIENT_ID` / `KEYCLOAK_CLIENT_SECRET` | Auth para chamadas ao app-rmi e app-go-api |
 | `AUTH_JWT_ISSUER` / `AUTH_JWKS_URL` | Emissor e JWKS para verificar o JWT de `X-Auth-Request-Token` (padrão derivado de `KEYCLOAK_URL`/`KEYCLOAK_REALM`; ver [Autenticação](#autenticação)) |
 | `AUTH_JWT_AUTHORIZED_PARTIES` | Clients do Keycloak (claim `azp`) aceitos, separados por vírgula (padrão `superapp`; ver [Autenticação](#autenticação)) |
+| `HEIMDALL_BASE_URL` | URL do Heimdall para resolver papéis admin (vazio = fallback no JWT, só local; ver [Autenticação](#autenticação)) |
 | `TRUSTED_PROXIES` | IPs/CIDRs dos proxies cujo `X-Forwarded-For` define o IP do cliente no log de acesso, separados por vírgula. Padrão: loopback, redes privadas e proxies do LB do Google (`35.191.0.0/16`, `130.211.0.0/22`); os manifests acrescentam o IP do LB de cada ambiente. Lista vazia (`,`) = sempre o IP da conexão |
 | `TRACING_ENABLED` / `TRACING_ENDPOINT` | Liga o envio de traces e o endpoint OTLP gRPC do SigNoz/OTel (opcional) |
 | `METRICS_PORT` | Porta em que a API expõe `GET /metrics`, separada da porta pública (padrão `9092`; `0` desativa; igual a `SERVER_PORT` impede o startup) |
@@ -146,7 +147,8 @@ O JWT do cidadão chega no header `X-Auth-Request-Token`. O header pode vir dire
 - `GET /api/v1/search`, `/api/v1/recommendations` e `/api/v1/catalog/:id` exigem token válido com CPF válido em `preferred_username`; caso contrário, 401.
 - `/api/v1/admin/*` exige token válido (sem ele, 401) com papel `ADMIN` (sem ele, 403); o CPF não é exigido nessas rotas.
 - Sem emissor/JWKS configurados, ou com `AUTH_JWT_AUTHORIZED_PARTIES` sem nenhum client (ex.: `,`), nenhum token é aceito (falha fechada).
-- `preferred_username` contém o CPF do cidadão. O papel `ADMIN` vem das roles `admin` ou `go:admin` em `resource_access.superapp.roles`.
+- `preferred_username` contém o CPF do cidadão.
+- Papel `ADMIN`: com `HEIMDALL_BASE_URL` definido (produção/staging), as roles vêm do Heimdall (`GET /api/v1/users/me` → `go:admin`, `admin` ou `superadmin`). Sem Heimdall, fallback local lê `admin`/`go:admin` em `resource_access.superapp.roles` do JWT (só para desenvolvimento). Roles no JWT são ignoradas quando o Heimdall está configurado; se o Heimdall falhar, o usuário fica `USER` (fail-safe).
 - `aud` não é conferido; a restrição ao client é feita pelo `azp`.
 
 | Variável | Padrão |
@@ -154,6 +156,7 @@ O JWT do cidadão chega no header `X-Auth-Request-Token`. O header pode vir dire
 | `AUTH_JWT_ISSUER` | `KEYCLOAK_URL` + `/realms/` + `KEYCLOAK_REALM` |
 | `AUTH_JWKS_URL` | `<AUTH_JWT_ISSUER>/protocol/openid-connect/certs` |
 | `AUTH_JWT_AUTHORIZED_PARTIES` | `superapp` |
+| `HEIMDALL_BASE_URL` | vazio (roles no JWT); staging/prod: URL do heimdall-admin |
 
 CPF **nunca** é persistido — apenas `cpf_hash` (`SHA-256(CPF + CPF_HASH_SALT)`). O CPF em texto vai apenas para a chamada ao app-rmi, em memória.
 

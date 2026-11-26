@@ -45,11 +45,17 @@ func normalizeCPF(raw string) (string, bool) {
 	return canonical, true
 }
 
-// ExtractUserContext lê o JWT de X-Auth-Request-Token e só cria identidade e
-// papel quando o verifier confere assinatura, emissor, exp, iat e azp. O header pode
+// ExtractUserContext lê o JWT de X-Auth-Request-Token e só cria identidade
+// quando o verifier confere assinatura, emissor, exp, iat e azp. O header pode
 // chegar direto do cliente, então nada nele é confiável sem essa verificação.
+//
+// Papéis: com heimdallBaseURL definido, consulta o Heimdall (GET /api/v1/users/me)
+// — padrão de produção, igual ao app-go-api. Sem Heimdall, cai no fallback local
+// de resource_access.superapp.roles no JWT (só para desenvolvimento). Falha no
+// Heimdall deixa o usuário como USER (fail-safe).
 // Com verifier nil nenhuma requisição é autenticada (falha fechada).
-func ExtractUserContext(verifier TokenVerifier) gin.HandlerFunc {
+func ExtractUserContext(verifier TokenVerifier, heimdallBaseURL string) gin.HandlerFunc {
+	heimdallBaseURL = strings.TrimRight(strings.TrimSpace(heimdallBaseURL), "/")
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("X-Auth-Request-Token")
 		if authHeader == "" || verifier == nil {
@@ -82,20 +88,40 @@ func ExtractUserContext(verifier TokenVerifier) gin.HandlerFunc {
 			c.Set(UserEmailKey, claims.Email)
 		}
 
-		role := "USER"
-		if superappAccess, ok := claims.ResourceAccess["superapp"]; ok {
-			c.Set(UserRolesKey, superappAccess.Roles)
-			for _, r := range superappAccess.Roles {
-				if r == "go:admin" || r == "admin" {
-					role = "ADMIN"
-					break
-				}
-			}
-		}
+		role := resolveUserRole(c, claims, authHeader, heimdallBaseURL)
 		c.Set(UserRoleKey, role)
 
 		c.Next()
 	}
+}
+
+func resolveUserRole(c *gin.Context, claims *jwtClaims, authHeader, heimdallBaseURL string) string {
+	role := "USER"
+	if heimdallBaseURL != "" {
+		roles, err := fetchHeimdallRoles(c.Request.Context(), heimdallBaseURL, authHeader)
+		if err != nil {
+			log.Warn().Err(err).Msg("heimdall: falha ao resolver roles; usuário fica USER")
+			return role
+		}
+		c.Set(UserRolesKey, roles)
+		for _, r := range roles {
+			if isHeimdallAdminRole(r) {
+				return "ADMIN"
+			}
+		}
+		return role
+	}
+
+	// Fallback local (dev): roles no JWT do client superapp.
+	if superappAccess, ok := claims.ResourceAccess["superapp"]; ok {
+		c.Set(UserRolesKey, superappAccess.Roles)
+		for _, r := range superappAccess.Roles {
+			if isJWTAdminRole(r) {
+				return "ADMIN"
+			}
+		}
+	}
+	return role
 }
 
 func GetUserCPF(c *gin.Context) string {
