@@ -12,6 +12,7 @@ jobs:
     environment: staging
     permissions:
       contents: read
+      actions: read
       packages: write
       id-token: write
 
@@ -20,20 +21,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Compara com o último commit implantado com sucesso em staging, não com o
+      # push anterior: um deploy que falhou antes de promover não some no push
+      # seguinte só de docs (ver scripts/deploy-staging-check.sh).
       - name: Check if k8s-only changes
         id: check-k8s-only
-        run: |
-          CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }})
-
-          # Ignora arquivos que não afetam o binário: k8s/, docs/, *.md, .env.example
-          NON_DEPLOYABLE=$(echo "$CHANGED_FILES" | grep -vE "^k8s/|^docs/|\.md$|^\.env\.example$" || true)
-
-          if [ -z "$NON_DEPLOYABLE" ] && [ -n "$CHANGED_FILES" ]; then
-            echo "k8s_only=true" >> $GITHUB_OUTPUT
-            echo "Only non-deployable files changed (k8s, docs, markdown), skipping build"
-          else
-            echo "k8s_only=false" >> $GITHUB_OUTPUT
-          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          DEPLOY_EXCLUDE_RUN_ID: ${{ github.run_id }}
+          DEPLOY_STEP: Promote to active
+        run: ./scripts/deploy-staging-check.sh
 
       - name: Extract metadata
         if: steps.check-k8s-only.outputs.k8s_only != 'true'
