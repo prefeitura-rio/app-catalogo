@@ -9,6 +9,10 @@ jobs:
   deploy-and-test:
     name: Build, Deploy & Promote
     runs-on: ubuntu-latest
+    # O padrão do GitHub é 6 h: um run travado seguraria a fila de deploys de
+    # staging. Um run normal leva ~4 min; os passos com limite próprio (espera
+    # do Argo CD de 10 ou 20 min, promote de 5 min) cabem com folga em 45 min.
+    timeout-minutes: 45
     environment: staging
     permissions:
       contents: read
