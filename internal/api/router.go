@@ -50,7 +50,6 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 	r.Use(observability.RequestLogger())
 	r.Use(middleware.RequestID())
 	r.Use(middleware.CORS())
-	r.Use(middleware.ExtractUserContext(deps.TokenVerifier, deps.HeimdallBaseURL))
 	r.Use(middleware.Timeout(time.Duration(cfg.Server.RequestTimeout) * time.Second))
 
 	healthHandler := handlers.NewHealthHandler(db)
@@ -70,8 +69,10 @@ func SetupRouter(cfg *config.AppConfig, db *pgxpool.Pool, deps RouterDeps) *gin.
 
 	adminHandler := v1.NewAdminHandler(deps.ItemRepo, deps.DSManager)
 
-	// API autenticada
+	// API autenticada. Só ela verifica o JWT e consulta o Heimdall: as rotas
+	// públicas, o health e o webhook não usam identidade nem papel.
 	apiV1 := r.Group("/api/v1")
+	apiV1.Use(middleware.ExtractUserContext(deps.TokenVerifier, deps.HeimdallBaseURL))
 	{
 		apiV1.GET("/search", middleware.RequireAuth(), v1.NewSearchHandler(deps.SearchSvc, deps.CitizenSvc).Search)
 		apiV1.GET("/recommendations", middleware.RequireAuth(), v1.NewRecommendationHandler(deps.RecomSvc, deps.CitizenSvc).Authenticated)
