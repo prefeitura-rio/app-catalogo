@@ -34,7 +34,7 @@ jobs:
         run: ./scripts/deploy-staging-check.sh
 
       - name: Extract metadata
-        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        if: steps.check-k8s-only.outputs.promote == 'true'
         run: |
           echo "IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/app-catalogo" >> $GITHUB_ENV
           echo "COMMIT_HASH=${{ github.sha }}" >> $GITHUB_ENV
@@ -114,37 +114,37 @@ jobs:
           echo "Image digest: $DIGEST"
 
       - name: Authenticate to Google Cloud
-        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        if: steps.check-k8s-only.outputs.promote == 'true'
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
 
       - name: Set up Cloud SDK
-        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        if: steps.check-k8s-only.outputs.promote == 'true'
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ vars.GCP_PROJECT_ID }}
 
       - name: Install gke-gcloud-auth-plugin
-        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        if: steps.check-k8s-only.outputs.promote == 'true'
         run: gcloud components install gke-gcloud-auth-plugin
 
       - name: Install kubectl
-        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        if: steps.check-k8s-only.outputs.promote == 'true'
         uses: azure/setup-kubectl@v3
         with:
           version: latest
 
       - name: Install Argo Rollouts kubectl plugin
-        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        if: steps.check-k8s-only.outputs.promote == 'true'
         run: |
           curl -fLO https://github.com/argoproj/argo-rollouts/releases/latest/download/kubectl-argo-rollouts-linux-amd64
           chmod +x ./kubectl-argo-rollouts-linux-amd64
           sudo mv ./kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
 
       - name: Configure kubectl for GKE
-        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        if: steps.check-k8s-only.outputs.promote == 'true'
         run: gcloud container clusters get-credentials --dns-endpoint application --zone=us-central1 --project="${{ vars.GCP_PROJECT_ID }}"
 
       - name: Update ArgoCD Application image override
@@ -222,8 +222,82 @@ jobs:
           kubectl wait pod -n catalogo -l app=catalogo \
             --for=condition=Ready --timeout=300s || true
 
+      # Build pulado, mas o diff toca k8s/ (scripts/deploy-staging-check.sh):
+      # a imagem fica a mesma (o override do Argo CD não muda), o Argo CD aplica
+      # os manifests deste commit e, se o pod template mudou, o Rollout cria um
+      # ReplicaSet de preview e pausa em BlueGreenPause. Sem promover, ele fica
+      # preso em Paused e o Service ativo segue no ReplicaSet antigo.
+      - name: Wait for ArgoCD sync and blue-green preview (k8s only)
+        if: steps.check-k8s-only.outputs.k8s_only == 'true' && steps.check-k8s-only.outputs.promote == 'true'
+        timeout-minutes: 15
+        run: |
+          echo "Build pulado: esperando o Argo CD aplicar os manifests de $GITHUB_SHA..."
+          kubectl annotate application catalogo -n argocd \
+            argocd.argoproj.io/refresh=hard --overwrite
+
+          for i in {1..60}; do
+            REVISION=$(kubectl get application catalogo -n argocd \
+              -o jsonpath='{.status.sync.revision}' 2>/dev/null || echo "")
+            SYNC_STATUS=$(kubectl get application catalogo -n argocd \
+              -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "")
+
+            echo "Attempt $i/60: ArgoCD Revision=$REVISION, Sync=$SYNC_STATUS"
+
+            # A revisão sincronizada pode ser um push posterior que contém este.
+            if [[ "$SYNC_STATUS" == "Synced" && "$REVISION" =~ ^[0-9a-f]{40}$ ]]; then
+              git cat-file -e "${REVISION}^{commit}" 2>/dev/null || git fetch --quiet origin main || true
+              if git merge-base --is-ancestor "$GITHUB_SHA" "$REVISION" 2>/dev/null; then
+                echo "✅ Argo CD sincronizado em $REVISION"
+                break
+              fi
+            fi
+
+            if [ "$i" -eq 60 ]; then
+              echo "❌ Timeout esperando o Argo CD sincronizar $GITHUB_SHA"
+              exit 1
+            fi
+            sleep 5
+          done
+
+          echo "Esperando o Rollout observar a nova geração..."
+          for i in {1..120}; do
+            GENERATION=$(kubectl get rollout catalogo -n catalogo \
+              -o jsonpath='{.metadata.generation}' 2>/dev/null || echo "")
+            OBSERVED=$(kubectl get rollout catalogo -n catalogo \
+              -o jsonpath='{.status.observedGeneration}' 2>/dev/null || echo "")
+            CURRENT_HASH=$(kubectl get rollout catalogo -n catalogo \
+              -o jsonpath='{.status.currentPodHash}' 2>/dev/null || echo "")
+            STABLE_RS=$(kubectl get rollout catalogo -n catalogo \
+              -o jsonpath='{.status.stableRS}' 2>/dev/null || echo "")
+            PAUSE_REASONS=$(kubectl get rollout catalogo -n catalogo \
+              -o jsonpath='{.status.pauseConditions[*].reason}' 2>/dev/null || echo "")
+
+            echo "Attempt $i/120: generation=$GENERATION observed=$OBSERVED current=$CURRENT_HASH stable=$STABLE_RS pause=$PAUSE_REASONS"
+
+            if [[ -n "$GENERATION" && "$GENERATION" == "$OBSERVED" && -n "$CURRENT_HASH" ]]; then
+              if [[ "$CURRENT_HASH" == "$STABLE_RS" ]]; then
+                echo "✅ Pod template sem mudança: nenhum preview a promover"
+                break
+              fi
+              # BlueGreenPause só entra quando o ReplicaSet de preview está disponível.
+              if [[ " $PAUSE_REASONS " == *" BlueGreenPause "* ]]; then
+                echo "✅ Preview $CURRENT_HASH disponível e pausado em BlueGreenPause"
+                break
+              fi
+            fi
+
+            if [ "$i" -eq 120 ]; then
+              echo "❌ Timeout esperando o preview do Rollout"
+              kubectl argo rollouts get rollout catalogo -n catalogo || true
+              exit 1
+            fi
+            sleep 5
+          done
+
+          kubectl argo rollouts get rollout catalogo -n catalogo
+
       - name: Set up port forward to preview service
-        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        if: steps.check-k8s-only.outputs.promote == 'true'
         run: |
           kubectl port-forward -n catalogo service/catalogo-preview 8080:80 &
           PORT_FORWARD_PID=$!
@@ -244,7 +318,7 @@ jobs:
           done
 
       - name: Health check on preview
-        if: steps.check-k8s-only.outputs.k8s_only != 'true'
+        if: steps.check-k8s-only.outputs.promote == 'true'
         run: |
           echo "Running health check against preview service..."
           RESPONSE=$(curl -sf http://localhost:8080/health)
@@ -261,29 +335,33 @@ jobs:
           echo "✅ Health checks passed"
 
       - name: Clean up port forward
-        if: steps.check-k8s-only.outputs.k8s_only != 'true' && always()
+        if: steps.check-k8s-only.outputs.promote == 'true' && always()
         run: kill $PORT_FORWARD_PID 2>/dev/null || true
 
       - name: Promote to active
-        if: steps.check-k8s-only.outputs.k8s_only != 'true' && success()
+        if: steps.check-k8s-only.outputs.promote == 'true' && success()
         run: |
           echo "✅ Health check passed! Promoting to active..."
           kubectl argo rollouts promote catalogo -n catalogo
           kubectl argo rollouts status catalogo -n catalogo --timeout=5m
 
       - name: Rollback on failure
-        if: steps.check-k8s-only.outputs.k8s_only != 'true' && failure()
+        if: steps.check-k8s-only.outputs.promote == 'true' && failure()
         run: |
           echo "❌ Health check failed! Aborting rollout..."
           kubectl argo rollouts abort catalogo -n catalogo || true
           echo "Rollout aborted. Active service unchanged."
 
       - name: Create deployment summary
-        if: always() && steps.check-k8s-only.outputs.k8s_only != 'true'
+        if: always() && steps.check-k8s-only.outputs.promote == 'true'
         run: |
           echo "## 🚀 Staging Deployment — app-catalogo" >> $GITHUB_STEP_SUMMARY
           echo "**Commit**: \`$SHORT_HASH\` — $COMMIT_MSG" >> $GITHUB_STEP_SUMMARY
-          echo "**Image**: \`$IMAGE_NAME:latest@${DIGEST:0:19}...\` (commit \`$COMMIT_HASH\`)" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.check-k8s-only.outputs.k8s_only }}" = "true" ]; then
+            echo "**Image**: inalterada (só k8s/ mudou: build pulado, manifests aplicados pelo Argo CD)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Image**: \`$IMAGE_NAME:latest@${DIGEST:0:19}...\` (commit \`$COMMIT_HASH\`)" >> $GITHUB_STEP_SUMMARY
+          fi
 
           if [ "${{ job.status }}" = "success" ]; then
             echo "### ✅ Deploy bem-sucedido" >> $GITHUB_STEP_SUMMARY
@@ -296,13 +374,18 @@ jobs:
           fi
 
       - name: Send Discord notification
-        if: always() && steps.check-k8s-only.outputs.k8s_only != 'true'
+        if: always() && steps.check-k8s-only.outputs.promote == 'true'
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           if [ -z "$DISCORD_WEBHOOK" ]; then
             echo "Discord webhook não configurado, pulando"
             exit 0
+          fi
+
+          IMAGE_FIELD="\`$IMAGE_NAME:${COMMIT_HASH:0:12}\`"
+          if [ "${{ steps.check-k8s-only.outputs.k8s_only }}" = "true" ]; then
+            IMAGE_FIELD="inalterada (só k8s/)"
           fi
 
           if [ "${{ job.status }}" = "success" ]; then
@@ -327,7 +410,7 @@ jobs:
                 {"name":"📝 Commit","value":"[${COMMIT_MSG:0:60}]($COMMIT_URL)","inline":false},
                 {"name":"👤 Author","value":"${COMMIT_AUTHOR}","inline":true},
                 {"name":"🔖 Hash","value":"\`${SHORT_HASH}\`","inline":true},
-                {"name":"🐳 Image","value":"\`$IMAGE_NAME:${COMMIT_HASH:0:12}\`","inline":false}
+                {"name":"🐳 Image","value":"${IMAGE_FIELD}","inline":false}
               ],
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)",
               "footer": {"text": "GitHub Actions · app-catalogo"}
