@@ -244,8 +244,8 @@ type SalesForceSettings struct {
 	WebhookSecret  string
 	SyncInterval   time.Duration
 	// FullSyncInterval é o ciclo do full sync agendado no worker (0 desliga).
-	FullSyncInterval  time.Duration
-	SyncEnabled       bool
+	FullSyncInterval time.Duration
+	SyncEnabled      bool
 	// DetailConcurrency limita fetches paralelos de GET /services/{slug}.
 	DetailConcurrency int
 }
