@@ -5,6 +5,16 @@ on:
     branches:
       - main
 
+# Um deploy de staging por vez: todos os runs promovem o mesmo Rollout
+# catalogo, e dois em paralelo podem promover o preview do outro ou abortar o
+# Rollout que o outro está promovendo. Nunca cancela o run em andamento; o
+# GitHub mantém um só pendente (um push novo substitui o pendente), e o
+# commit pulado entra no diff do seguinte porque deploy-staging-check.sh
+# compara com o último deploy bem-sucedido.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
 jobs:
   deploy-and-test:
     name: Build, Deploy & Promote
