@@ -80,7 +80,11 @@ func main() {
 			cfg.SalesForce.BaseServiceURL,
 			cfg.SalesForce.DetailConcurrency,
 		)
-		manager.Register(datasource.NewSalesForceDataSource(sfSyncSvc, cfg.SalesForce.SyncInterval))
+		manager.Register(datasource.NewSalesForceDataSource(
+			sfSyncSvc,
+			cfg.SalesForce.SyncInterval,
+			cfg.SalesForce.FullSyncInterval,
+		))
 	} else {
 		log.Warn().Msg("worker: SalesForce/Carta não configurado ou desabilitado, fonte ignorada")
 	}

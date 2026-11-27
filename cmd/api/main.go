@@ -184,7 +184,11 @@ func main() {
 	// Manager com fontes registradas (espelha o worker, mas sem tickers — só para TriggerSync)
 	dsManager := datasource.NewManager()
 	if cfg.SalesForce.InstanceURL != "" && cfg.SalesForce.SyncEnabled {
-		dsManager.Register(datasource.NewSalesForceDataSource(sfSyncSvc, cfg.SalesForce.SyncInterval))
+		dsManager.Register(datasource.NewSalesForceDataSource(
+			sfSyncSvc,
+			cfg.SalesForce.SyncInterval,
+			cfg.SalesForce.FullSyncInterval,
+		))
 	}
 	if cfg.AppGoAPI.BaseURL != "" && cfg.AppGoAPI.SyncEnabled {
 		appGoAPIClient := clients.NewAppGoAPIClient(cfg.AppGoAPI.BaseURL, tokenManager)

@@ -38,7 +38,7 @@ k8s/
 
 | Fonte | Entidades | Estratégia |
 |-------|-----------|-----------|
-| SalesForce | Carta de Serviços | Polling 15min + webhooks HMAC |
+| SalesForce | Carta de Serviços | Delta 15min + full periódico (`SALESFORCE_FULL_SYNC_INTERVAL`, padrão 24h) + webhooks HMAC |
 | app-go-api | Cursos, Vagas, MEI | Polling HTTP 30min |
 | app-rmi | Perfil do cidadão | Demand-driven + background refresh |
 

@@ -44,6 +44,7 @@ O Adminer (UI do banco) em `http://localhost:8083`.
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | Conexão Redis (ex: `localhost` / `6380`) |
 | `CPF_HASH_SALT` | Salt para SHA-256 do CPF — **obrigatório** |
 | `SALESFORCE_INSTANCE_URL` / `SALESFORCE_SYNC_ENABLED` | URL base da API CloudHub da Carta de Serviços e flag de sync |
+| `SALESFORCE_FULL_SYNC_INTERVAL` | Intervalo do full sync agendado no worker (padrão `24h`; `0` desliga) |
 | `SALESFORCE_WEBHOOK_SECRET` | Segredo HMAC-SHA256 para validar webhooks |
 | `APP_GO_API_BASE_URL` / `APP_GO_API_SYNC_ENABLED` | URL base e flag de sync do app-go-api |
 | `RMI_BASE_URL` | URL base do app-rmi (perfil do cidadão) |
@@ -112,7 +113,7 @@ As métricas Prometheus não ficam na porta pública: a API serve `GET /metrics`
 
 | Fonte | Entidades | Estratégia |
 |-------|-----------|------------|
-| SalesForce | Carta de Serviços | Delta sync por `LastModifiedDate` + webhooks HMAC-SHA256 |
+| SalesForce | Carta de Serviços | Delta sync por `LastModifiedDate` (15 min) + full sync periódico (`SALESFORCE_FULL_SYNC_INTERVAL`, padrão 24 h) + webhooks HMAC-SHA256 |
 | app-go-api | Cursos, Vagas, MEI | Full sync paginado (delta via `updated_since` ainda não ativado) |
 | app-rmi | Perfil do cidadão | Demand-driven: busca síncrona no primeiro acesso; refresh em background quando stale |
 

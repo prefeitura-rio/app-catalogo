@@ -243,7 +243,9 @@ type SalesForceSettings struct {
 	BaseServiceURL string
 	WebhookSecret  string
 	SyncInterval   time.Duration
-	SyncEnabled    bool
+	// FullSyncInterval é o ciclo do full sync agendado no worker (0 desliga).
+	FullSyncInterval  time.Duration
+	SyncEnabled       bool
 	// DetailConcurrency limita fetches paralelos de GET /services/{slug}.
 	DetailConcurrency int
 }
@@ -426,6 +428,7 @@ func Load() (*AppConfig, error) {
 			BaseServiceURL:    getEnv(v, "SALESFORCE_BASE_SERVICE_URL", "https://prefeitura.rio"),
 			WebhookSecret:     getEnv(v, "SALESFORCE_WEBHOOK_SECRET", ""),
 			SyncInterval:      getDuration(v, "SALESFORCE_SYNC_INTERVAL", 15*time.Minute),
+			FullSyncInterval:  getDuration(v, "SALESFORCE_FULL_SYNC_INTERVAL", 24*time.Hour),
 			SyncEnabled:       getBool(v, "SALESFORCE_SYNC_ENABLED", true),
 			DetailConcurrency: getInt(v, "SALESFORCE_DETAIL_CONCURRENCY", 8),
 		},

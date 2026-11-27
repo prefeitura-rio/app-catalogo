@@ -42,7 +42,7 @@ Este documento não traz segredos. Valores sensíveis vivem no Infisical (Secret
 | Redis (Valkey `redis` no namespace `catalogo`) | cache de busca, vetores e recomendação | a API segue sem cache (log `redis indisponível — cache desativado` no startup); mais carga no banco |
 | Keycloak (realm de `KEYCLOAK_REALM`) | JWKS para verificar o JWT; `client_credentials` para chamar app-rmi e app-go-api | rotas `/api/v1/*` respondem 401; recomendação personalizada e sync do app-go-api falham |
 | Heimdall (`HEIMDALL_BASE_URL`, timeout 3 s) | papéis admin em `/api/v1/admin/*` | todo usuário autenticado fica `USER`: admins recebem 403 nas rotas de gestão |
-| SalesForce / Carta de Serviços (API CloudHub, `SALESFORCE_INSTANCE_URL`) | sync da Carta (delta a cada 15 min) e o detalhe de cada serviço do webhook | a Carta fica desatualizada; eventos do webhook ficam pendentes com nova tentativa |
+| SalesForce / Carta de Serviços (API CloudHub, `SALESFORCE_INSTANCE_URL`) | sync da Carta (delta a cada 15 min, full a cada `SALESFORCE_FULL_SYNC_INTERVAL`, padrão 24 h) e o detalhe de cada serviço do webhook | a Carta fica desatualizada; eventos do webhook ficam pendentes com nova tentativa |
 | app-go-api (`APP_GO_API_BASE_URL`) | cursos, vagas e MEI (sync completo a cada 30 min) | itens desses tipos ficam desatualizados; nada é apagado |
 | app-rmi (`RMI_BASE_URL`) | perfil do cidadão, no caminho síncrono de `GET /api/v1/recommendations` | o circuit breaker abre e a recomendação cai na genérica (sem personalização) |
 | Gemini (`GOOGLE_API_KEY`, opcional) | embeddings para busca semântica | a busca fica só FTS; o backfill para |
@@ -88,7 +88,7 @@ curl -s localhost:9092/metrics | grep '^catalogo_'
 
 | Métrica | Processo | Labels | Leitura |
 |---------|----------|--------|---------|
-| `catalogo_sync_runs_total` | worker (agendada), API (manual) | `source`, `trigger` (`initial`, `periodic`, `manual`), `result` (`success`, `failure`) | execução de sync contada depois das novas tentativas |
+| `catalogo_sync_runs_total` | worker (agendada), API (manual) | `source`, `trigger` (`initial`, `periodic`, `periodic_full`, `manual`), `result` (`success`, `failure`) | execução de sync contada depois das novas tentativas |
 | `catalogo_sync_retries_total` | idem | `source` | novas tentativas depois de falha (até 4 tentativas em ~3,5 min) |
 | `catalogo_sync_duration_seconds` | idem | `source`, `type` (= trigger) | duração de cada tentativa |
 | `catalogo_sync_last_success_timestamp_seconds` | idem | `source` | horário Unix do último sucesso; só existe depois do primeiro sucesso do processo |
@@ -309,7 +309,7 @@ Os valores vêm do Secret `catalogo-secrets` (sincronizado do Infisical pelo ope
 | Variável | Padrão |
 |----------|--------|
 | `SALESFORCE_INSTANCE_URL`, `SALESFORCE_BASE_SERVICE_URL` | vazio, `https://prefeitura.rio` |
-| `SALESFORCE_SYNC_INTERVAL`, `SALESFORCE_DETAIL_CONCURRENCY` | `15m`, `8` |
+| `SALESFORCE_SYNC_INTERVAL`, `SALESFORCE_FULL_SYNC_INTERVAL`, `SALESFORCE_DETAIL_CONCURRENCY` | `15m`, `24h` (0 desliga o full agendado), `8` |
 | `APP_GO_API_BASE_URL`, `APP_GO_API_SYNC_INTERVAL` | vazio, `30m` |
 | `RMI_BASE_URL` | vazio |
 | `CITIZEN_PROFILE_STALE_THRESHOLD`, `CITIZEN_PROFILE_SYNC_INTERVAL` | `1h`, `24h` |
