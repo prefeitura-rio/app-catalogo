@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,6 +64,12 @@ func newRouterFixtureWithProxies(t *testing.T, trustedProxies []string) routerFi
 // newRouterFixtureWithServer monta o router com as configurações de servidor dadas.
 func newRouterFixtureWithServer(t *testing.T, server config.ServerSettings) routerFixture {
 	t.Helper()
+	return newRouterFixtureWithHeimdall(t, server, "")
+}
+
+// newRouterFixtureWithHeimdall monta o router com HEIMDALL_BASE_URL = heimdallBaseURL.
+func newRouterFixtureWithHeimdall(t *testing.T, server config.ServerSettings, heimdallBaseURL string) routerFixture {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatalf("rsa: %v", err)
@@ -92,10 +99,11 @@ func newRouterFixtureWithServer(t *testing.T, server config.ServerSettings) rout
 	}
 	pool := unreachablePool(t)
 	r := SetupRouter(cfg, pool, RouterDeps{
-		DSManager:     datasource.NewManager(),
-		ItemRepo:      repository.NewCatalogItemRepository(pool),
-		CartaRepo:     repository.NewCartaRepository(pool),
-		TokenVerifier: verifier,
+		DSManager:       datasource.NewManager(),
+		ItemRepo:        repository.NewCatalogItemRepository(pool),
+		CartaRepo:       repository.NewCartaRepository(pool),
+		TokenVerifier:   verifier,
+		HeimdallBaseURL: heimdallBaseURL,
 	})
 	return routerFixture{router: r, key: key}
 }
@@ -238,6 +246,34 @@ func TestSetupRouter_PublicRoutes(t *testing.T) {
 	}
 	if w := f.do(http.MethodGet, "/rota-inexistente", ""); w.Code != http.StatusNotFound {
 		t.Fatalf("rota inexistente: esperado 404, obtido %d", w.Code)
+	}
+}
+
+// Só /api/v1 consulta o Heimdall: rotas públicas, health e webhook não pagam a
+// chamada, mesmo quando o cliente manda um token.
+func TestSetupRouter_HeimdallOnlyOnAuthenticatedAPI(t *testing.T) {
+	var calls atomic.Int32
+	heimdall := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_, _ = w.Write([]byte(`{"roles":["go:admin"]}`))
+	}))
+	t.Cleanup(heimdall.Close)
+
+	f := newRouterFixtureWithHeimdall(t, config.ServerSettings{RequestTimeout: 5}, heimdall.URL)
+	token := f.token(t, "user")
+
+	for _, path := range []string{"/api/public/catalog/nao-uuid", "/api/public/search?q=iptu", "/health"} {
+		f.do(http.MethodGet, path, token)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("rotas públicas e health não devem chamar o Heimdall: %d chamada(s)", got)
+	}
+
+	if w := f.do(http.MethodGet, "/api/v1/admin/sync/status", token); w.Code != http.StatusInternalServerError {
+		t.Fatalf("admin via Heimdall: esperado 500 do handler (banco fora), obtido %d", w.Code)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("/api/v1 deve consultar o Heimdall uma vez: %d chamada(s)", got)
 	}
 }
 
