@@ -44,3 +44,10 @@ type FullSyncer interface {
 	// FullSync reprocessa todos os itens da fonte, ignorando o cursor incremental.
 	FullSync(ctx context.Context) error
 }
+
+// PeriodicFullSyncer é FullSyncer com intervalo próprio de full sync agendado
+// no worker. FullSyncInterval <= 0 desliga o ticker (só delta e sync manual).
+type PeriodicFullSyncer interface {
+	FullSyncer
+	FullSyncInterval() time.Duration
+}

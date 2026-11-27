@@ -178,6 +178,61 @@ func TestManager_TriggerSync_DeltaKeepsSync(t *testing.T) {
 	}
 }
 
+// periodicFullStubSource combina FullSyncer com intervalo curto de full sync.
+type periodicFullStubSource struct {
+	fullStubSource
+	fullInterval time.Duration
+}
+
+func (s *periodicFullStubSource) FullSyncInterval() time.Duration { return s.fullInterval }
+
+func TestManager_Start_PeriodicFullSync(t *testing.T) {
+	m := NewManager()
+	src := &periodicFullStubSource{
+		fullStubSource: fullStubSource{stubSource: stubSource{name: "salesforce"}},
+		fullInterval:   40 * time.Millisecond,
+	}
+	m.Register(src)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Start(ctx)
+
+	waitCalled(&src.callCount) // sync inicial (delta)
+	deadline := time.Now().Add(2 * time.Second)
+	for src.fullCount.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+
+	if src.fullCount.Load() < 1 {
+		t.Fatalf("esperava ao menos 1 FullSync periódico, got %d", src.fullCount.Load())
+	}
+	if src.callCount.Load() < 1 {
+		t.Fatalf("esperava sync inicial delta, got %d", src.callCount.Load())
+	}
+}
+
+func TestManager_Start_FullSyncIntervalZeroSkipsTicker(t *testing.T) {
+	m := NewManager()
+	src := &periodicFullStubSource{
+		fullStubSource: fullStubSource{stubSource: stubSource{name: "salesforce"}},
+		fullInterval:   0,
+	}
+	m.Register(src)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	m.Start(ctx)
+
+	if src.fullCount.Load() != 0 {
+		t.Fatalf("full interval 0 não deveria disparar FullSync, got %d", src.fullCount.Load())
+	}
+	if src.callCount.Load() != 1 {
+		t.Fatalf("sync inicial delta esperada 1, got %d", src.callCount.Load())
+	}
+}
+
 func TestManager_Start_InitialSync(t *testing.T) {
 	m := NewManager()
 	s := &stubSource{name: "test"}

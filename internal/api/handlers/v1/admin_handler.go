@@ -42,7 +42,7 @@ func NewAdminHandler(repo *repository.CatalogItemRepository, manager *datasource
 
 // SyncStatus godoc
 // @Summary      Status das sincronizações
-// @Description  Retorna o último evento de sincronização por fonte de dados. Requer role admin ou go:admin.
+// @Description  Retorna o último evento de sincronização por fonte de dados. Requer papel admin (Heimdall; fallback JWT local).
 // @Tags         admin
 // @Security     BearerAuth
 // @Produce      json
@@ -62,7 +62,7 @@ func (h *AdminHandler) SyncStatus(c *gin.Context) {
 
 // TriggerSync godoc
 // @Summary      Dispara sincronização manual
-// @Description  Dispara sync ad-hoc em background. Retorna imediatamente. Requer role admin ou go:admin. Fonte não registrada na API (typesense, fonte legada desligada, ou desconhecida) responde 400 com available_sources.
+// @Description  Dispara sync ad-hoc em background. Retorna imediatamente. Requer papel admin (Heimdall; fallback JWT local). Fonte não registrada na API (typesense, fonte legada desligada, ou desconhecida) responde 400 com available_sources.
 // @Tags         admin
 // @Security     BearerAuth
 // @Param        source  query  string  false  "Fonte registrada na API: salesforce, app-go-api (cada uma só quando configurada). Vazio = todas."

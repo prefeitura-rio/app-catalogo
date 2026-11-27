@@ -184,7 +184,11 @@ func main() {
 	// Manager com fontes registradas (espelha o worker, mas sem tickers — só para TriggerSync)
 	dsManager := datasource.NewManager()
 	if cfg.SalesForce.InstanceURL != "" && cfg.SalesForce.SyncEnabled {
-		dsManager.Register(datasource.NewSalesForceDataSource(sfSyncSvc, cfg.SalesForce.SyncInterval))
+		dsManager.Register(datasource.NewSalesForceDataSource(
+			sfSyncSvc,
+			cfg.SalesForce.SyncInterval,
+			cfg.SalesForce.FullSyncInterval,
+		))
 	}
 	if cfg.AppGoAPI.BaseURL != "" && cfg.AppGoAPI.SyncEnabled {
 		appGoAPIClient := clients.NewAppGoAPIClient(cfg.AppGoAPI.BaseURL, tokenManager)
@@ -200,18 +204,24 @@ func main() {
 		tokenVerifier = jwksVerifier
 		log.Info().Str("issuer", cfg.Auth.JWTIssuer).Strs("authorized_parties", cfg.Auth.AuthorizedParties).Msg("verificação de JWT via JWKS ativada")
 	}
+	if cfg.Heimdall.BaseURL != "" {
+		log.Info().Str("heimdall", cfg.Heimdall.BaseURL).Msg("resolução de roles via Heimdall ativada")
+	} else {
+		log.Warn().Msg("HEIMDALL_BASE_URL vazio — papéis admin vêm do JWT (só para desenvolvimento local)")
+	}
 
 	router := api.SetupRouter(cfg, db.Pool, api.RouterDeps{
-		SFSyncSvc:     sfSyncSvc,
-		WebhookSvc:    webhookSvc,
-		DSManager:     dsManager,
-		SearchSvc:     searchSvc,
-		RecomSvc:      recomSvc,
-		CitizenSvc:    citizenSvc,
-		ItemRepo:      itemRepo,
-		CartaRepo:     cartaRepo,
-		WebhookSecret: cfg.SalesForce.WebhookSecret,
-		TokenVerifier: tokenVerifier,
+		SFSyncSvc:       sfSyncSvc,
+		WebhookSvc:      webhookSvc,
+		DSManager:       dsManager,
+		SearchSvc:       searchSvc,
+		RecomSvc:        recomSvc,
+		CitizenSvc:      citizenSvc,
+		ItemRepo:        itemRepo,
+		CartaRepo:       cartaRepo,
+		WebhookSecret:   cfg.SalesForce.WebhookSecret,
+		TokenVerifier:   tokenVerifier,
+		HeimdallBaseURL: cfg.Heimdall.BaseURL,
 	})
 
 	// Reprocessador dos eventos do webhook SalesForce que falharam ou ficaram

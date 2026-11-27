@@ -16,9 +16,10 @@ import (
 
 // Origens de uma sincronização, usadas no label trigger das métricas.
 const (
-	triggerInitial  = "initial"
-	triggerPeriodic = "periodic"
-	triggerManual   = "manual"
+	triggerInitial      = "initial"
+	triggerPeriodic     = "periodic"
+	triggerPeriodicFull = "periodic_full"
+	triggerManual       = "manual"
 )
 
 // SyncMode é o modo de uma sincronização manual.
@@ -235,6 +236,19 @@ func (m *Manager) runSource(ctx context.Context, s DataSource) {
 	ticker := time.NewTicker(s.SyncInterval())
 	defer ticker.Stop()
 
+	var fullC <-chan time.Time
+	if pfs, ok := s.(PeriodicFullSyncer); ok {
+		if iv := pfs.FullSyncInterval(); iv > 0 {
+			fullTicker := time.NewTicker(iv)
+			defer fullTicker.Stop()
+			fullC = fullTicker.C
+			log.Info().
+				Str("source", s.Name()).
+				Dur("full_interval", iv).
+				Msg("datasource: full sync periódico ativado")
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -243,6 +257,10 @@ func (m *Manager) runSource(ctx context.Context, s DataSource) {
 		case <-ticker.C:
 			if err := m.scheduledSync(ctx, s, triggerPeriodic); err != nil {
 				log.Error().Err(err).Str("source", s.Name()).Msg("datasource: erro no sync periódico")
+			}
+		case <-fullC:
+			if err := m.scheduledFullSync(ctx, s, triggerPeriodicFull); err != nil {
+				log.Error().Err(err).Str("source", s.Name()).Msg("datasource: erro no full sync periódico")
 			}
 		}
 	}
@@ -259,6 +277,15 @@ func (m *Manager) scheduledSync(ctx context.Context, s DataSource, trigger strin
 		err = panicErr
 	})
 	return m.syncWithRetry(ctx, s, trigger)
+}
+
+// scheduledFullSync é o full sync agendado (PeriodicFullSyncer) de runSource.
+func (m *Manager) scheduledFullSync(ctx context.Context, s DataSource, trigger string) (err error) {
+	defer safego.Recover("datasource_"+trigger+"_sync", func(panicErr error) {
+		observability.SyncRunsTotal.WithLabelValues(s.Name(), trigger, "failure").Inc()
+		err = panicErr
+	})
+	return m.syncWithRetryMode(ctx, s, trigger, SyncModeFull)
 }
 
 // syncWithRetry executa s.Sync com novas tentativas (espera que dobra a cada falha) e

@@ -136,9 +136,13 @@ func forgeNone(t *testing.T, claims jwt.MapClaims) string {
 }
 
 func newTestRouter(verifier TokenVerifier) *gin.Engine {
+	return newTestRouterWithHeimdall(verifier, "")
+}
+
+func newTestRouterWithHeimdall(verifier TokenVerifier, heimdallBaseURL string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(ExtractUserContext(verifier))
+	r.Use(ExtractUserContext(verifier, heimdallBaseURL))
 	r.GET("/auth", RequireAuth(), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"cpf": GetUserCPF(c)})
 	})
