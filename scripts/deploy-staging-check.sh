@@ -104,7 +104,7 @@ fi
 NON_DEPLOYABLE=$(echo "$CHANGED_FILES" | grep -vE '^k8s/|^docs/|\.md$|^\.env\.example$' || true)
 
 if [[ -z "$NON_DEPLOYABLE" ]]; then
-	if echo "$CHANGED_FILES" | grep -qE '^k8s/'; then
+	if grep -qE '^k8s/' <<<"$CHANGED_FILES"; then
 		decide true true "Desde o último deploy de staging (\`${BASE:0:7}\`) só mudaram arquivos que não entram na imagem, entre eles k8s/: build pulado (staging segue na imagem de \`${BASE:0:7}\`), mas o Argo CD aplica os manifests de \`${GITHUB_SHA:0:7}\` e o Rollout é promovido."
 	fi
 	decide true false "Desde o último deploy de staging (\`${BASE:0:7}\`) só mudaram arquivos que não entram na imagem nem em k8s/ (docs, markdown): build e promoção pulados, staging segue em \`${BASE:0:7}\`."

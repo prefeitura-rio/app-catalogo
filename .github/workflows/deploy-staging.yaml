@@ -229,7 +229,7 @@ jobs:
       # preso em Paused e o Service ativo segue no ReplicaSet antigo.
       - name: Wait for ArgoCD sync and blue-green preview (k8s only)
         if: steps.check-k8s-only.outputs.k8s_only == 'true' && steps.check-k8s-only.outputs.promote == 'true'
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: |
           echo "Build pulado: esperando o Argo CD aplicar os manifests de $GITHUB_SHA..."
           kubectl annotate application catalogo -n argocd \
