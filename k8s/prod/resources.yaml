@@ -180,6 +180,10 @@ spec:
             # sidecar/gateway do Istio, proxies do LB do Google e o IP do LB de services.pref.rio.
             - name: TRUSTED_PROXIES
               value: "127.0.0.0/8,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7,35.191.0.0/16,130.211.0.0/22,34.8.34.21/32"
+            # Heimdall de produção pela borda: resolve os papéis admin (GET /api/v1/users/me);
+            # sem ela, RequireAdmin cai no fallback local das roles do JWT.
+            - name: HEIMDALL_BASE_URL
+              value: "https://services.pref.rio/heimdall-admin"
           envFrom:
             - secretRef:
                 name: catalogo-secrets
